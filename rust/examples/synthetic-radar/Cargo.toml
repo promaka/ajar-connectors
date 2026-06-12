@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: Apache-2.0
+[package]
+name = "synthetic-radar"
+description = "Example: stream synthetic mim:aircraft tracks into a local Ajar Core over NATS."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+ajar-connector.workspace = true
+# Transport is the EXAMPLE's choice — the SDK crate stays transport-free. This
+# example uses a tiny inline NATS PUB client (std TCP only, no client crate) so
+# it has zero extra dependencies and can't bit-rot; a production connector would
+# use a maintained client such as `async-nats`.

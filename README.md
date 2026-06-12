@@ -63,6 +63,16 @@ cd rust
 cargo run -p cot-connector --example first_connector
 ```
 
+Or stream synthetic tracks into a local Ajar Core over NATS and watch the whole
+path (`connector → NATS → Core → audit + Postgres`) — see
+[examples/synthetic-radar](rust/examples/synthetic-radar/):
+
+```bash
+cd rust
+cargo run -p synthetic-radar -- --dry-run   # build + seal + print, no infra
+cargo run -p synthetic-radar                # publish to a local NATS / Core
+```
+
 Or build an event directly with the validating builder:
 
 ```rust

@@ -5,6 +5,7 @@ members = [
     "ajar-connector",
     "conformance",
     "examples/cot-connector",
+    "examples/synthetic-radar",
 ]
 
 [workspace.package]
