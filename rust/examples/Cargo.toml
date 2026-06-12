@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Examples workspace — separate from the SDK workspace (../Cargo.toml) so each
+# example can pull idiomatic, transport-specific dependencies (a real NATS
+# client, an async runtime, ...) without those landing in the SDK's dependency
+# tree or clashing with the SDK crate's own deps. Examples path-depend on the
+# SDK via ../ajar-connector.
+[workspace]
+resolver = "2"
+members = [
+    "cot-connector",
+    "synthetic-radar",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.74"
+license = "Apache-2.0"
+repository = "https://github.com/promaka/ajar-connectors"
+authors = ["Ajar connectors contributors"]
+
+[workspace.dependencies]
+ajar-connector = { path = "../ajar-connector" }

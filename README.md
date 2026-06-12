@@ -56,10 +56,11 @@ let profile = ConnectorProfile::new("ad-radar-7", signing_key.verifying_key())
     .rate_limit(200, 20.0);
 ```
 
-Run the full reference end-to-end:
+Run the full reference end-to-end (examples are their own workspace under
+[rust/examples/](rust/examples/)):
 
 ```bash
-cd rust
+cd rust/examples
 cargo run -p cot-connector --example first_connector
 ```
 
@@ -68,7 +69,7 @@ path (`connector → NATS → Core → audit + Postgres`) — see
 [examples/synthetic-radar](rust/examples/synthetic-radar/):
 
 ```bash
-cd rust
+cd rust/examples
 cargo run -p synthetic-radar -- --dry-run   # build + seal + print, no infra
 cargo run -p synthetic-radar                # publish to a local NATS / Core
 ```

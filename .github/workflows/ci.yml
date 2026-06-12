@@ -37,7 +37,9 @@ jobs:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: rust
+          workspaces: |
+            rust
+            rust/examples
       - name: Format
         run: cargo fmt --all -- --check
       - name: Clippy
@@ -46,6 +48,19 @@ jobs:
         run: cargo test --workspace
       - name: Conformance gate
         run: cargo test -p conformance --test golden_vectors
+      # Examples are a separate workspace (own transport deps).
+      - name: Examples — fmt
+        working-directory: rust/examples
+        run: cargo fmt --all -- --check
+      - name: Examples — clippy
+        working-directory: rust/examples
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Examples — test
+        working-directory: rust/examples
+        run: cargo test --workspace
+      - name: Examples — synthetic-radar dry-run (no infra)
+        working-directory: rust/examples
+        run: cargo run -p synthetic-radar -- --dry-run --ticks 2
 
   go:
     name: gofmt + vet + test + conformance

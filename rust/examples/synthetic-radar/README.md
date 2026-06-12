@@ -14,17 +14,23 @@ event with the SDK's `EventBuilder`, **seals** it, and publishes the sealed
 bytes to NATS subject `ajar.ingest.<source>`.
 
 > ⚠️ **Example only.** This carries a **dev-only** signing seed (32 bytes of
-> `0x03`) and talks NATS directly. The `ajar-connector` crate stays minimal and
-> transport-free — the NATS choice lives here. To avoid bit-rotting against a
-> client crate, the example speaks the NATS PUB protocol over TCP itself
-> (`src/nats.rs`); a real connector would use a maintained client like
-> `async-nats`.
+> `0x03`) and picks a transport (NATS). The `ajar-connector` crate stays minimal
+> and transport-free — the NATS client lives here, in the example. It uses the
+> real [`async-nats`](https://crates.io/crates/async-nats) client (the same one
+> Ajar Core uses), so it models the pattern a vendor copies.
+
+The examples are a **separate Cargo workspace** (`rust/examples/`) so their
+transport dependencies (a NATS client + async runtime) resolve independently of
+the SDK crate.
 
 ## Run
 
 ```bash
-# Dry run — build + seal + print, no NATS needed:
+cd rust/examples
+
+# Dry run — build + seal + print, no NATS needed (and CI-friendly):
 cargo run -p synthetic-radar -- --dry-run
+cargo run -p synthetic-radar -- --dry-run --ticks 3   # bounded, exits after 3 ticks
 
 # Against a default local Core (NATS on 127.0.0.1:4222):
 cargo run -p synthetic-radar

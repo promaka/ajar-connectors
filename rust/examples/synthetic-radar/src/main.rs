@@ -4,36 +4,33 @@
 //! running Ajar Core so a developer can watch the full path
 //! `connector -> NATS -> Core -> audit + Postgres`.
 //!
-//! Each tick (~1/sec) it advances a handful of tracks, builds a sealed event
-//! with the SDK, and publishes the sealed bytes to NATS subject
-//! `ajar.ingest.<source>`.
+//! The shape every connector follows is the three steps in the loop below:
+//!
+//! 1. **normalize** a native observation into a canonical [`Event`] (here we
+//!    synthesise it; a real radar connector would parse a vendor frame),
+//! 2. **seal** it (detached Ed25519 signature ++ canonical bytes),
+//! 3. **publish** the sealed bytes to the connector's NATS ingest subject.
 //!
 //! This is a clearly-marked **example**: it carries a dev-only signing seed and
-//! talks NATS. The `ajar-connector` crate itself stays minimal and
-//! transport-free — the choice of NATS lives here. To avoid depending on (and
-//! bit-rotting against) a NATS client crate, the example speaks the NATS PUB
-//! wire protocol directly over TCP in [`nats`]; a production connector would use
-//! a maintained client such as `async-nats`.
+//! it picks a transport (NATS). The `ajar-connector` crate itself stays minimal
+//! and transport-free — the NATS client lives here, in the example.
 //!
 //! ## Run against a default local Core
 //!
 //! ```text
-//! cargo run -p synthetic-radar               # publish to 127.0.0.1:4222
-//! cargo run -p synthetic-radar -- --dry-run  # build+seal+print, no NATS
+//! cd rust/examples
+//! cargo run -p synthetic-radar                 # publish to 127.0.0.1:4222
+//! cargo run -p synthetic-radar -- --dry-run    # build+seal+print, no NATS
+//! cargo run -p synthetic-radar -- --dry-run --ticks 3   # bounded (CI)
 //! ```
 //!
 //! Env overrides: `NATS_URL`, `AJAR_SOURCE_ID`, `AJAR_INGEST_PREFIX`.
 
-mod nats;
-
 use std::env;
 use std::error::Error;
-use std::thread;
 use std::time::Duration;
 
 use ajar_connector::{canonical_bytes, seal, EventBuilder, SigningKey};
-
-use crate::nats::NatsPublisher;
 
 /// Dev-only signing seed: 32 bytes of `0x03`. This matches the default Core's
 /// registered dev connector profile, so the local demo's signatures are
@@ -100,21 +97,34 @@ fn initial_tracks() -> Vec<Track> {
     ]
 }
 
-fn main() -> Result<(), Box<dyn Error>> {
+/// Parses `--ticks N` (run a bounded number of ticks, then exit) if present.
+fn parse_max_ticks(args: &[String]) -> Option<u64> {
+    let i = args.iter().position(|a| a == "--ticks")?;
+    args.get(i + 1).and_then(|n| n.parse().ok())
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn Error>> {
+    let args: Vec<String> = env::args().collect();
+    let dry_run = args.iter().any(|a| a == "--dry-run");
+    let max_ticks = parse_max_ticks(&args);
+
     let source_id = env::var("AJAR_SOURCE_ID").unwrap_or_else(|_| "demo-connector".to_string());
     let prefix = env::var("AJAR_INGEST_PREFIX").unwrap_or_else(|_| "ajar.ingest".to_string());
     let nats_url = env::var("NATS_URL").unwrap_or_else(|_| "127.0.0.1:4222".to_string());
-    let dry_run = env::args().any(|a| a == "--dry-run");
 
+    // `source` must equal the Core's AJAR_SOURCE_ID; the subject is the one the
+    // Core's ingest is listening on.
     let subject = format!("{prefix}.{source_id}");
     let key = SigningKey::from_bytes(&DEV_SEED);
 
-    let mut publisher = if dry_run {
+    // Connect the real NATS client (skipped in --dry-run, which needs no infra).
+    let client = if dry_run {
         eprintln!("[synthetic-radar] --dry-run: building + sealing events, not publishing");
         None
     } else {
         eprintln!("[synthetic-radar] connecting to NATS at {nats_url}");
-        Some(NatsPublisher::connect(&nats_url)?)
+        Some(async_nats::connect(&nats_url).await?)
     };
 
     eprintln!(
@@ -125,12 +135,15 @@ fn main() -> Result<(), Box<dyn Error>> {
     );
 
     let mut tracks = initial_tracks();
+    let mut tick: u64 = 0;
     loop {
         for track in tracks.iter_mut() {
             track.advance();
 
-            // attributes MUST be empty: the seed `mim:aircraft` has no attribute
-            // schema, so any attribute is rejected as UnknownAttribute.
+            // 1. Normalize -> canonical Event. A real connector parses a native
+            //    radar frame here; we synthesise the track. Attributes MUST be
+            //    empty: the seed `mim:aircraft` has no attribute schema, so any
+            //    attribute is rejected as UnknownAttribute.
             let event = EventBuilder::new(&source_id, "mim:aircraft")
                 .new_id() // fresh UUIDv7 per event
                 .now()
@@ -139,11 +152,15 @@ fn main() -> Result<(), Box<dyn Error>> {
                 .policy_tag("air-defence")
                 .build()?;
 
+            // 2. Seal: detached Ed25519 signature ++ canonical bytes.
             let canonical = canonical_bytes(&event);
             let sealed = seal(&canonical, &key);
 
-            if let Some(publisher) = publisher.as_mut() {
-                publisher.publish(&subject, &sealed)?;
+            // 3. Publish the sealed bytes to the ingest subject.
+            if let Some(client) = &client {
+                client
+                    .publish(subject.clone(), bytes::Bytes::from(sealed.clone()))
+                    .await?;
             }
 
             println!(
@@ -155,13 +172,22 @@ fn main() -> Result<(), Box<dyn Error>> {
                 track.alt_m,
                 subject,
                 sealed.len(),
-                if publisher.is_some() {
-                    ""
-                } else {
-                    "  [dry-run]"
-                },
+                if client.is_some() { "" } else { "  [dry-run]" },
             );
         }
-        thread::sleep(Duration::from_secs(1));
+
+        // Ensure messages are on the wire before we idle (and before we exit in
+        // the bounded --ticks case).
+        if let Some(client) = &client {
+            client.flush().await?;
+        }
+
+        tick += 1;
+        if max_ticks.is_some_and(|max| tick >= max) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_secs(1)).await;
     }
+
+    Ok(())
 }
