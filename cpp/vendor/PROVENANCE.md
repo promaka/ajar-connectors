@@ -18,6 +18,17 @@ licence; all are Apache-2.0 compatible.
              `crypto_ed25519_sign` — the latter's output (sig||msg) is not used;
              we prefix the detached 64-byte signature ourselves per the seal spec.
 
+## nanopb/ — protobuf runtime for the embedded (no-heap) build
+
+- Upstream:  https://jpa.kapsi.fi/nanopb/  (github.com/nanopb/nanopb)
+- Version:   0.4.9.1
+- Licence:   zlib (see nanopb/LICENSE.txt)
+- Files:     pb.h, pb_common.{c,h}, pb_encode.{c,h}, pb_decode.{c,h}
+- Why:       fully static, no-malloc protobuf for the radar/effector-controller
+             path. The generated `cpp/embedded/generated/event.pb.{c,h}` are
+             committed (regenerate with scripts/gen-nanopb.sh); a build needs
+             only this runtime, no protobuf library and no generator.
+
 ## sha256/ — SHA-256
 
 - Upstream:  github.com/B-Con/crypto-algorithms

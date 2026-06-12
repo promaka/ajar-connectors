@@ -10,9 +10,10 @@ needle="SPDX-License-Identifier: Apache-2.0"
 missing=0
 
 # Source we author (skip target/ and the vendored contract). Generated files
-# (protoc-gen-go output, marked "Code generated ... DO NOT EDIT") are exempt.
+# are exempt: protoc-gen-go ("Code generated ... DO NOT EDIT") and nanopb
+# ("Automatically generated nanopb ...").
 while IFS= read -r -d '' f; do
-  if head -n 3 "$f" | grep -q "Code generated"; then
+  if head -n 3 "$f" | grep -qE "Code generated|Automatically generated nanopb"; then
     continue
   fi
   if ! head -n 5 "$f" | grep -q "$needle"; then

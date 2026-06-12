@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: Apache-2.0
+# nanopb field sizing for fully static (no-heap) allocation on the embedded
+# path. Sizes are byte buffers including the NUL terminator for strings; they
+# are generous bounds that fit every corpus fixture (incl. multi-byte UTF-8).
+# Tune down per target as needed — they do not affect wire bytes, only buffers.
+
+ajar.event.v1.Event.schema_version  max_size:8
+ajar.event.v1.Event.id              max_size:40
+ajar.event.v1.Event.source_id       max_size:64
+ajar.event.v1.Event.entity_type     max_size:64
+ajar.event.v1.Event.timestamp       max_size:32
+ajar.event.v1.Event.received_at     max_size:32
+ajar.event.v1.Event.payload         max_size:64
+ajar.event.v1.Event.policy_tags     max_size:40 max_count:8
+ajar.event.v1.Event.attributes      max_count:16
+
+ajar.event.v1.Attribute.key         max_size:32
+ajar.event.v1.Attribute.value       max_size:64

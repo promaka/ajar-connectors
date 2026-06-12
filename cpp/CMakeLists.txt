@@ -73,6 +73,23 @@ target_compile_definitions(conformance PRIVATE
 add_executable(cot_roundtrip examples/cot_roundtrip.cpp)
 target_link_libraries(cot_roundtrip PRIVATE cot_connector)
 
+# --- Embedded (nanopb, no-heap) path -----------------------------------------
+# The nanopb runtime + generated static types. Links NO libprotobuf: this is the
+# radar/effector-controller path. event.pb.c is committed (regenerate with
+# scripts/gen-nanopb.sh); a build needs only the vendored runtime.
+add_library(ajar_nanopb STATIC
+  vendor/nanopb/pb_common.c
+  vendor/nanopb/pb_encode.c
+  vendor/nanopb/pb_decode.c
+  embedded/generated/event.pb.c)
+target_include_directories(ajar_nanopb PUBLIC vendor/nanopb embedded/generated)
+
+add_executable(embedded_conformance embedded/conformance_nanopb.cpp)
+target_include_directories(embedded_conformance PRIVATE conformance vendor/sha256 vendor/monocypher)
+target_link_libraries(embedded_conformance PRIVATE ajar_nanopb ajar_crypto)
+target_compile_definitions(embedded_conformance PRIVATE AJAR_CONTRACT_DIR="${CONTRACT_DIR}")
+
 enable_testing()
 add_test(NAME conformance COMMAND conformance)
 add_test(NAME cot_roundtrip COMMAND cot_roundtrip)
+add_test(NAME embedded_conformance COMMAND embedded_conformance)
