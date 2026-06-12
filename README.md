@@ -23,11 +23,15 @@ native bytes ──▶ Connector::normalize ──▶ Event ──▶ canonical_
 |----------|-----|------------------|
 | Rust     | ✅ `rust/ajar-connector` | ✅ reproduces all golden vectors |
 | Go       | ✅ `go/ajarconnector` | ✅ reproduces all golden vectors (same `vectors.json`) |
+| C++      | ✅ `cpp/` (desktop, protoc-C++) | ✅ reproduces all golden vectors (same `vectors.json`) |
 | Python   | ⏳ planned | — |
 
-All three languages assert against the **same** [vendor/contract/vectors.json](vendor/contract/vectors.json).
-The Rust and Go SDKs produce byte-identical canonical bytes for every fixture —
-that cross-language identity is the proof.
+All language SDKs assert against the **same** [vendor/contract/vectors.json](vendor/contract/vectors.json)
+and produce byte-identical canonical bytes for every fixture — that
+cross-language identity is the proof. The C++ SDK vendors its crypto
+(Monocypher Ed25519, no system dependency) for the desktop build, with an
+embedded **nanopb** (no-heap) build of the same gate planned for the
+radar/effector-controller path.
 
 ## Write your first connector in 20 lines
 

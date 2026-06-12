@@ -71,3 +71,19 @@ jobs:
         # -count=1 disables the test cache: it keys on source files, not the
         # external vectors.json, so a re-vendor must never serve a stale pass.
         run: go test ./conformance/ -count=1 -run 'TestGoldenVectorsAreReproduced|TestVerifyingKeyDerivesFromTestSeed' -v
+
+  cpp:
+    name: cmake build + conformance (desktop protoc-C++)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install protobuf + cmake
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake build-essential protobuf-compiler libprotobuf-dev
+      - name: Configure
+        run: cmake -S cpp -B cpp/build -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build cpp/build -j
+      - name: Conformance + round-trip gate
+        run: ctest --test-dir cpp/build --output-on-failure

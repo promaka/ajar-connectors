@@ -19,8 +19,10 @@ while IFS= read -r -d '' f; do
     echo "missing SPDX header: $f" >&2
     missing=1
   fi
-done < <(find rust go scripts -type f \( -name '*.rs' -o -name '*.go' -o -name '*.sh' \) \
-            -not -path '*/target/*' -print0)
+done < <(find rust go cpp scripts -type f \
+            \( -name '*.rs' -o -name '*.go' -o -name '*.sh' \
+               -o -name '*.cpp' -o -name '*.hpp' -o -name '*.c' -o -name '*.h' \) \
+            -not -path '*/target/*' -not -path '*/build/*' -not -path 'cpp/vendor/*' -print0)
 
 if [ "$missing" -ne 0 ]; then
   echo "ERROR: add '// $needle' (or '# ...') to the files above." >&2
