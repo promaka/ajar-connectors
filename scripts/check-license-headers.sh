@@ -9,13 +9,17 @@ cd "$(dirname "$0")/.."
 needle="SPDX-License-Identifier: Apache-2.0"
 missing=0
 
-# Rust + shell sources we author (skip generated/target and vendored contract).
+# Source we author (skip target/ and the vendored contract). Generated files
+# (protoc-gen-go output, marked "Code generated ... DO NOT EDIT") are exempt.
 while IFS= read -r -d '' f; do
+  if head -n 3 "$f" | grep -q "Code generated"; then
+    continue
+  fi
   if ! head -n 5 "$f" | grep -q "$needle"; then
     echo "missing SPDX header: $f" >&2
     missing=1
   fi
-done < <(find rust scripts -type f \( -name '*.rs' -o -name '*.sh' \) \
+done < <(find rust go scripts -type f \( -name '*.rs' -o -name '*.go' -o -name '*.sh' \) \
             -not -path '*/target/*' -print0)
 
 if [ "$missing" -ne 0 ]; then

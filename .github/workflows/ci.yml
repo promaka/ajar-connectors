@@ -46,3 +46,26 @@ jobs:
         run: cargo test --workspace
       - name: Conformance gate
         run: cargo test -p conformance --test golden_vectors
+
+  go:
+    name: gofmt + vet + test + conformance
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: go
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          cache-dependency-path: go/go.sum
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then echo "gofmt needed:"; echo "$unformatted"; exit 1; fi
+      - name: Vet
+        run: go vet ./...
+      - name: Test
+        run: go test ./...
+      - name: Conformance gate
+        run: go test ./conformance/ -run TestGoldenVectorsAreReproduced -v

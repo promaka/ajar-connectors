@@ -22,8 +22,12 @@ native bytes ──▶ Connector::normalize ──▶ Event ──▶ canonical_
 | Language | SDK | Conformance gate |
 |----------|-----|------------------|
 | Rust     | ✅ `rust/ajar-connector` | ✅ reproduces all golden vectors |
-| Go       | ⏳ planned | — |
+| Go       | ✅ `go/ajarconnector` | ✅ reproduces all golden vectors (same `vectors.json`) |
 | Python   | ⏳ planned | — |
+
+All three languages assert against the **same** [vendor/contract/vectors.json](vendor/contract/vectors.json).
+The Rust and Go SDKs produce byte-identical canonical bytes for every fixture —
+that cross-language identity is the proof.
 
 ## Write your first connector in 20 lines
 
@@ -66,6 +70,27 @@ let event = EventBuilder::new("sensor-123", "mim:drone")
     .attribute("speed", "110")
     .attribute("heading", "225") // auto-sorted; duplicate keys rejected
     .build()?;                   // required fields + canonical invariants enforced
+```
+
+### …or in Go
+
+```go
+import "github.com/promaka/ajar-connectors/go/ajarconnector"
+
+event, err := ajarconnector.NewEventBuilder("sensor-123", "mim:drone").
+    NewID().Now().
+    Confidence(0.98).
+    PolicyTag("class:secret").
+    Attribute("speed", "110").
+    Attribute("heading", "225"). // auto-sorted; duplicate keys rejected
+    Build()
+
+canonical, _ := ajarconnector.CanonicalBytes(event)
+sealed := ajarconnector.Seal(canonical, signingKey) // crypto/ed25519
+```
+
+```bash
+cd go && go run ./examples/cot/cmd/first_connector
 ```
 
 ## The contract & the gate
