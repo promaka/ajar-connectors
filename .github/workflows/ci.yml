@@ -68,4 +68,6 @@ jobs:
       - name: Test
         run: go test ./...
       - name: Conformance gate
-        run: go test ./conformance/ -run TestGoldenVectorsAreReproduced -v
+        # -count=1 disables the test cache: it keys on source files, not the
+        # external vectors.json, so a re-vendor must never serve a stale pass.
+        run: go test ./conformance/ -count=1 -run 'TestGoldenVectorsAreReproduced|TestVerifyingKeyDerivesFromTestSeed' -v

@@ -6,4 +6,6 @@ v1
 # `contract-divergence` hashes the vendored files and compares against
 # scripts/contract.sha256; bump both together when re-vendoring from core.
 #
-# Source: github.com/promaka/ajar @ 9560f8f (see PROVENANCE.md)
+# Source: github.com/promaka/ajar @ da5094b (see PROVENANCE.md)
+# (golden vectors hardened: 6 fixtures = 3 namespaced + 3 edge cases;
+#  event.proto unchanged since 9560f8f)

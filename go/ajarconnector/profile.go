@@ -6,6 +6,8 @@ import (
 	"crypto/ed25519"
 	"encoding/hex"
 	"encoding/json"
+	"strconv"
+	"strings"
 )
 
 // ConnectorProfile is a connector's published self-declaration: what it is
@@ -58,12 +60,26 @@ func (p *ConnectorProfile) RateLimit(capacity uint32, refillPerSec float64) *Con
 }
 
 type profileWire struct {
-	SourceID           string   `json:"source_id"`
-	AllowedEntityTypes []string `json:"allowed_entity_types"`
-	MaxPayloadBytes    uint64   `json:"max_payload_bytes"`
-	RateCapacity       uint32   `json:"rate_capacity"`
-	RateRefillPerSec   float64  `json:"rate_refill_per_sec"`
-	VerifyingKeyHex    string   `json:"verifying_key_hex"`
+	SourceID           string    `json:"source_id"`
+	AllowedEntityTypes []string  `json:"allowed_entity_types"`
+	MaxPayloadBytes    uint64    `json:"max_payload_bytes"`
+	RateCapacity       uint32    `json:"rate_capacity"`
+	RateRefillPerSec   jsonFloat `json:"rate_refill_per_sec"`
+	VerifyingKeyHex    string    `json:"verifying_key_hex"`
+}
+
+// jsonFloat renders an integer-valued float with a trailing ".0" (e.g. 20.0,
+// not 20) so the profile JSON is byte-identical to the Rust SDK's serde output.
+// The profile is a debug projection — never hashed — so this is cosmetic
+// cross-language consistency, not a wire requirement.
+type jsonFloat float64
+
+func (f jsonFloat) MarshalJSON() ([]byte, error) {
+	s := strconv.FormatFloat(float64(f), 'g', -1, 64)
+	if !strings.ContainsAny(s, ".eE") {
+		s += ".0"
+	}
+	return []byte(s), nil
 }
 
 func (p *ConnectorProfile) wire() profileWire {
@@ -76,7 +92,7 @@ func (p *ConnectorProfile) wire() profileWire {
 		AllowedEntityTypes: allowed,
 		MaxPayloadBytes:    p.MaxPayloadBytes,
 		RateCapacity:       p.RateCapacity,
-		RateRefillPerSec:   p.RateRefillPerSec,
+		RateRefillPerSec:   jsonFloat(p.RateRefillPerSec),
 		VerifyingKeyHex:    hex.EncodeToString(p.VerifyingKey),
 	}
 }

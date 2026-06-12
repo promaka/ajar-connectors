@@ -2,7 +2,7 @@
   "schemaVersion": "v1",
   "id": "0191e7b0-3c2d-7e3f-8a9b-0c1d2e3f4a5d",
   "sourceId": "ad-radar-7",
-  "entityType": "aircraft",
+  "entityType": "mim:aircraft",
   "timestamp": "2026-06-04T02:00:00Z",
   "receivedAt": "2026-06-04T02:00:03Z",
   "location": { "latitude": 26.4, "longitude": 50.9, "altitudeM": 1200.0 },

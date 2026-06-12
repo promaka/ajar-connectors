@@ -1,0 +1,11 @@
+{
+  "schemaVersion": "v1",
+  "id": "0191e7b0-4c2d-7e3f-8a9b-0c1d2e3f4a5e",
+  "sourceId": "sigint-3",
+  "entityType": "mim:signal",
+  "timestamp": "2026-06-04T03:00:00Z",
+  "receivedAt": "2026-06-04T03:00:01Z",
+  "payload": "",
+  "policyTags": [],
+  "confidence": 0.0
+}

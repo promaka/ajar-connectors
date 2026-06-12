@@ -2,7 +2,7 @@
   "schemaVersion": "v1",
   "id": "0191e7b0-1c2d-7e3f-8a9b-0c1d2e3f4a5b",
   "sourceId": "sensor-123",
-  "entityType": "drone",
+  "entityType": "x:acme:drone",
   "timestamp": "2026-06-04T00:00:00Z",
   "receivedAt": "2026-06-04T00:00:01Z",
   "payload": "e30=",

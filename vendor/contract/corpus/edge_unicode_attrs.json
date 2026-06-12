@@ -1,0 +1,17 @@
+{
+  "schemaVersion": "v1",
+  "id": "0191e7b0-6c2d-7e3f-8a9b-0c1d2e3f4a60",
+  "sourceId": "capteur-aérien-9",
+  "entityType": "x:acme:sensor",
+  "timestamp": "2026-06-04T05:00:00Z",
+  "receivedAt": "2026-06-04T05:00:03Z",
+  "location": { "latitude": -33.8688, "longitude": 151.2093, "altitudeM": -12.5 },
+  "payload": "e30=",
+  "policyTags": ["class:restricted", "rel:AUS"],
+  "confidence": 1.0,
+  "attributes": [
+    { "key": "callsign", "value": "ØRNEN" },
+    { "key": "note", "value": "測試-émoji-🚀" },
+    { "key": "zone", "value": "Ærø" }
+  ]
+}

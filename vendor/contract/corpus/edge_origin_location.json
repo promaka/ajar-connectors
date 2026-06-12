@@ -1,0 +1,12 @@
+{
+  "schemaVersion": "v1",
+  "id": "0191e7b0-5c2d-7e3f-8a9b-0c1d2e3f4a5f",
+  "sourceId": "ais-0",
+  "entityType": "mim:vessel",
+  "timestamp": "2026-06-04T04:00:00Z",
+  "receivedAt": "2026-06-04T04:00:02Z",
+  "location": { "latitude": 0.0, "longitude": 0.0, "altitudeM": 0.0 },
+  "payload": "e30=",
+  "policyTags": ["maritime"],
+  "confidence": 0.5
+}

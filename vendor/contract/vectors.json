@@ -6,16 +6,28 @@
   "signingSeedHex": "4747474747474747474747474747474747474747474747474747474747474747",
   "vectors": {
     "aircraft_with_attrs": {
-      "canonicalSha256": "af6a2e93929f0fdd1c8fe5913c1ae2f7ff119f14acc1cce25bfe3b43312b98a2",
-      "sealedSha256": "b28e6df753aee6b8d287994109a07d85a41c0906459394ed11e035d8a6f5df2b"
+      "canonicalSha256": "eb46a357ab9030331b4f93c8684625bda898e20669771f74abd1db6a7656459a",
+      "sealedSha256": "ca8daced6f7c9b90780f0284844ba821306369f17f781a7d1fded5149918f374"
     },
     "drone_minimal": {
-      "canonicalSha256": "28b79dad1af7b0fba200fbbd64d4a78bc8f92bb31bde303ea1c1e859f82a1d9c",
-      "sealedSha256": "4fa6803649cd885fbd46a06aad105fea940035fe6245486a42c00e7b84269250"
+      "canonicalSha256": "5c2eea0db339ed9c63f46baa6feaa7b63bae1e51844d80e64bf9b5307e8bb1a3",
+      "sealedSha256": "b9899443dcc2cfb830d555f34ff45fbe8b4a1654a308b5b1d9bb38cef5a003c6"
+    },
+    "edge_origin_location": {
+      "canonicalSha256": "b83e494d480042bc85b2d8a114a83abe595ccb32b2028157a5b2a7f4ad56d8bb",
+      "sealedSha256": "f781ecd213ec8f42f9a8d6bd20cfb24de4cb82c9605306eeeff24dd5c0747f46"
+    },
+    "edge_unicode_attrs": {
+      "canonicalSha256": "5db913aaa5344289e1bfcf8fba24d5aa489ffc75b052e01fc98eeac2e11cfb9e",
+      "sealedSha256": "5df0caa5bde4029e5c7011510da6e270e61ac4e5f9eaf1b9397be8a42f0241b8"
+    },
+    "edge_zero_confidence": {
+      "canonicalSha256": "3e2668e052df3df365325b479b5de3e423e116c25392bbb4c564ca244968d07b",
+      "sealedSha256": "4e6423ba11662e3087bf6f026cd7632727e6c34ae218deab8e81b8a40d5d113f"
     },
     "vessel_with_geo": {
-      "canonicalSha256": "449721725a1c763677191640f48c36e049ee9c362261ec3a36f3ee5180292415",
-      "sealedSha256": "9b9877d821e1a99e88ad177835f07faa85dbb7d91f1f3334bff7dab5d57704d4"
+      "canonicalSha256": "b9697f25192c4038c9ab5e081339e73309884dba3e8fa08f2593bc2dc6599082",
+      "sealedSha256": "dbd23da008ca4abd44c3c2264e59d791e6ff8a76399682f590ed578a28c31531"
     }
   },
   "verifyingKeyHex": "e28a8970753332bd72fef413e6b0b2ef1b4aadda7aa2c141f233712a6876b351"
