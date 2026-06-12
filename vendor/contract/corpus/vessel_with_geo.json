@@ -1,0 +1,12 @@
+{
+  "schemaVersion": "v1",
+  "id": "0191e7b0-2c2d-7e3f-8a9b-0c1d2e3f4a5c",
+  "sourceId": "ais-77",
+  "entityType": "vessel",
+  "timestamp": "2026-06-04T01:00:00Z",
+  "receivedAt": "2026-06-04T01:00:02Z",
+  "location": { "latitude": 35.1, "longitude": 33.9, "altitudeM": 0.0 },
+  "payload": "e30=",
+  "policyTags": ["maritime", "coalition-a"],
+  "confidence": 0.81
+}

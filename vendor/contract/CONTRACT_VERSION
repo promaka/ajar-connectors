@@ -1,0 +1,9 @@
+v1
+
+# Vendored Ajar event contract version.
+#
+# This pins the contract the SDK is byte-compatible with. The CI job
+# `contract-divergence` hashes the vendored files and compares against
+# scripts/contract.sha256; bump both together when re-vendoring from core.
+#
+# Source: github.com/promaka/ajar @ 9560f8f (see PROVENANCE.md)

@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: Apache-2.0
+[package]
+name = "cot-connector"
+description = "Reference connector: Cursor-on-Target (CoT) XML <-> canonical Ajar event."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+ajar-connector.workspace = true
+
+[[example]]
+name = "first_connector"
+path = "examples/first_connector.rs"

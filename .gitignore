@@ -1,0 +1,7 @@
+/target
+**/target
+.DS_Store
+
+# Cargo.lock is committed on purpose: byte-compatibility is the product, so we
+# pin the exact dependency graph the golden vectors were verified against.
+

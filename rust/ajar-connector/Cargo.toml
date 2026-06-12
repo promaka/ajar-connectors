@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: Apache-2.0
+[package]
+name = "ajar-connector"
+description = "Vendor-facing SDK for building byte-compatible connectors to the Ajar integration plane."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+readme = "../../README.md"
+keywords = ["ajar", "connector", "protobuf", "ed25519", "defence"]
+categories = ["encoding", "api-bindings"]
+
+[dependencies]
+prost.workspace = true
+ed25519-dalek.workspace = true
+sha2.workspace = true
+hex.workspace = true
+uuid.workspace = true
+time.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[build-dependencies]
+prost-build.workspace = true
+protoc-bin-vendored.workspace = true
+
+[dev-dependencies]
+base64.workspace = true

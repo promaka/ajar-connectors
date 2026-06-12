@@ -1,0 +1,76 @@
+// SPDX-License-Identifier: Apache-2.0
+// The Ajar event contract is licensed Apache-2.0 — freely implementable by any
+// connector — even though it lives within the MPL-2.0 core tree. See LICENSING.md.
+
+syntax = "proto3";
+
+// Canonical Ajar event contract (ADR-0006).
+//
+// This .proto is the SOURCE OF TRUTH for the cross-language event/connector
+// contract. Rust (prost), Go, and Python SDK types are generated from it so all
+// stay byte-compatible. JSON is a debug/human projection only, never canonical.
+// Canonical protobuf bytes are what gets signed for provenance and audit.
+//
+// Schema evolution follows proto3 rules: additive changes only, field numbers
+// are reserved once retired, and `schema_version` is bumped for breaking shapes.
+// Entity/field semantics align to MIP/JC3IEDM where a concept exists (ADR-0012).
+
+package ajar.event.v1;
+
+// A normalized event flowing through the Ajar aggregation plane.
+message Event {
+  // Contract version (e.g. "v1"). Distinct from per-deployment policy version.
+  string schema_version = 1;
+
+  // Globally unique event id (e.g. UUIDv7 for time-ordering).
+  string id = 2;
+
+  // Originating connector/source identity (ties to SPIFFE id, ADR-0008).
+  string source_id = 3;
+
+  // MIP/JC3IEDM-aligned entity type (drone, vessel, signal, facility, ...).
+  string entity_type = 4;
+
+  // When the SOURCE observed the event (sender's clock — UNTRUSTED for
+  // ordering). RFC 3339 / ISO 8601 UTC. See ADR-0016.
+  string timestamp = 5;
+
+  // When AJAR ingested the event (authoritative for ordering). RFC 3339 UTC.
+  // The audit chain and stream order follow this + a monotonic ingest sequence,
+  // never the sender's `timestamp`. See ADR-0016.
+  string received_at = 10;
+
+  // Optional geospatial position. Kept structured (not free-form) so PostGIS
+  // correlation (ADR-0005) can index it.
+  GeoPoint location = 6;
+
+  // Connector-specific structured payload. Opaque to the core; validated by the
+  // connector's declared standard mapping.
+  bytes payload = 7;
+
+  // Policy tags driving access/routing/cuing decisions (ADR-0003).
+  repeated string policy_tags = 8;
+
+  // Detection/correlation confidence in [0.0, 1.0], if applicable.
+  double confidence = 9;
+
+  // Type-specific structured attributes (ADR-0018/0022), validated against the
+  // entity type's signed attribute schema. MUST be sorted by `key` with unique
+  // keys so the canonical encoding stays byte-stable (the boundary rejects any
+  // event whose attributes are unsorted or duplicated). The connector normalises
+  // values into each attribute's declared unit.
+  repeated Attribute attributes = 11;
+}
+
+// One structured attribute (e.g. heading="225"). Values are carried as strings;
+// the ontology checks they satisfy the declared datatype/unit/bounds.
+message Attribute {
+  string key = 1;
+  string value = 2;
+}
+
+message GeoPoint {
+  double latitude = 1;
+  double longitude = 2;
+  double altitude_m = 3; // metres above WGS84 ellipsoid; 0 if unknown
+}

@@ -1,0 +1,121 @@
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+# ajar-connectors
+
+The vendor-facing SDK for building **connectors** to [Ajar](https://github.com/promaka/ajar),
+the sovereign defence integration & governance plane.
+
+A connector turns a vendor or legacy system's native data into Ajar's canonical,
+signed **event** (inbound), and/or renders governed events into a target
+system's format (outbound). This repo is **standalone** and **Apache-2.0** — it
+never depends on the private Ajar core. It earns trust by reproducing the
+*golden byte-vectors* that core accepts: byte-for-byte compatibility is the
+acceptance test, not a promise.
+
+```
+native bytes ──▶ Connector::normalize ──▶ Event ──▶ canonical_bytes ──▶ seal ──▶ Ajar
+ (CoT, CSV,                              (canonical            (deterministic    (sig ++
+  vendor frame)                           protobuf)             protobuf)         bytes)
+```
+
+## Status
+
+| Language | SDK | Conformance gate |
+|----------|-----|------------------|
+| Rust     | ✅ `rust/ajar-connector` | ✅ reproduces all golden vectors |
+| Go       | ⏳ planned | — |
+| Python   | ⏳ planned | — |
+
+## Write your first connector in 20 lines
+
+```rust
+use ajar_connector::{canonical_bytes, seal, ConnectorProfile, Connector, SigningKey};
+use cot_connector::CotConnector;
+
+// 1. Normalize native input (here: a Cursor-on-Target message) to a canonical event.
+let connector = CotConnector::new("ad-radar-7");
+let event = connector.normalize(native_cot_bytes)?;
+
+// 2. Canonicalize and sign with this connector's own Ed25519 key.
+let signing_key = SigningKey::from_bytes(&my_persisted_key_bytes);
+let canonical = canonical_bytes(&event);
+let sealed = seal(&canonical, &signing_key); // 64-byte signature ++ canonical bytes
+
+// 3. Declare the profile Ajar registers for you.
+let profile = ConnectorProfile::new("ad-radar-7", signing_key.verifying_key())
+    .allow_entity_type("mim:aircraft")
+    .rate_limit(200, 20.0);
+```
+
+Run the full reference end-to-end:
+
+```bash
+cd rust
+cargo run -p cot-connector --example first_connector
+```
+
+Or build an event directly with the validating builder:
+
+```rust
+use ajar_connector::EventBuilder;
+
+let event = EventBuilder::new("sensor-123", "mim:drone")
+    .new_id()                    // UUIDv7, time-ordered
+    .now()                       // RFC 3339 observation time
+    .confidence(0.98)
+    .policy_tag("class:secret")
+    .attribute("speed", "110")
+    .attribute("heading", "225") // auto-sorted; duplicate keys rejected
+    .build()?;                   // required fields + canonical invariants enforced
+```
+
+## The contract & the gate
+
+- The wire contract is vendored verbatim from core into
+  [`vendor/contract/`](vendor/contract/) (`event.proto`, golden `vectors.json`,
+  and `corpus/*.json` fixtures). It is the **source of truth**; do not edit it
+  here — re-vendor when the contract version changes.
+- Rust types are **generated** from `event.proto` (via `prost`, with a vendored
+  `protoc` so a plain `cargo build` needs nothing installed).
+- The acceptance test lives in `rust/conformance`: for every fixture it asserts
+  `SHA-256(canonical_bytes) == canonicalSha256` and
+  `SHA-256(sealed) == sealedSha256`. **Green = byte-compatible with Ajar.**
+
+```bash
+cd rust && cargo test -p conformance --test golden_vectors
+```
+
+## Public API (`ajar-connector`)
+
+- Generated `Event` / `GeoPoint` / `Attribute` types.
+- `EventBuilder` — auto-sorts & dedups attributes, enforces required fields and
+  limits, UUIDv7 / RFC 3339 helpers.
+- `canonical_bytes(&Event) -> Vec<u8>` — deterministic protobuf encoding.
+- `seal(&[u8], &SigningKey) -> Vec<u8>` — detached Ed25519 signature ++ canonical.
+- `ConnectorProfile` — declaration + deterministic JSON serializer.
+- `Connector` trait — inbound `normalize(&[u8]) -> Result<Event, _>`.
+- `OutboundProfile` trait — `target/slug/version/modeled_fields/lossy_fields/render`,
+  with round-trip (`canonical → target → canonical`) conformance.
+
+## The seal envelope
+
+```
+sealed = ed25519_sign(signing_key, canonical_bytes) ++ canonical_bytes
+         └──────────── 64-byte detached signature ───────────┘
+```
+
+Each production connector holds its **own** signing key; Ajar registers the
+matching public key in the connector's profile. The seed used by the golden
+vectors (32×`0x47`) is a published **TEST** seed — never sign production events
+with it.
+
+## Not in scope
+
+The SDK does **not** implement policy, audit, ontology enforcement, correlation,
+or the pipeline — that is core's job. It only produces valid signed events,
+declares profiles, and translates in/out. It never sees secrets beyond a
+connector's own signing key.
+
+## Contributing & license
+
+Apache-2.0 (see [LICENSE](LICENSE)). Every source file carries an SPDX header.
+Commits require a [DCO](CONTRIBUTING.md) sign-off (`git commit -s`).

@@ -1,0 +1,22 @@
+{
+  "_about": "Golden byte-compatibility vectors for the Ajar event contract (ADR-0006/0020). Any SDK (Rust/Go/Python) MUST reproduce these SHA-256 hashes from the matching corpus/<name>.json fixture. Regenerate: AJAR_BLESS_VECTORS=1 cargo test -p ajar-ingest --test golden_vectors",
+  "canonicalBytes": "deterministic protobuf encoding of Event",
+  "hash": "SHA-256, lowercase hex",
+  "sealedEnvelope": "ed25519_sign(signingSeed, canonicalBytes) ++ canonicalBytes  (64-byte detached signature prefix)",
+  "signingSeedHex": "4747474747474747474747474747474747474747474747474747474747474747",
+  "vectors": {
+    "aircraft_with_attrs": {
+      "canonicalSha256": "af6a2e93929f0fdd1c8fe5913c1ae2f7ff119f14acc1cce25bfe3b43312b98a2",
+      "sealedSha256": "b28e6df753aee6b8d287994109a07d85a41c0906459394ed11e035d8a6f5df2b"
+    },
+    "drone_minimal": {
+      "canonicalSha256": "28b79dad1af7b0fba200fbbd64d4a78bc8f92bb31bde303ea1c1e859f82a1d9c",
+      "sealedSha256": "4fa6803649cd885fbd46a06aad105fea940035fe6245486a42c00e7b84269250"
+    },
+    "vessel_with_geo": {
+      "canonicalSha256": "449721725a1c763677191640f48c36e049ee9c362261ec3a36f3ee5180292415",
+      "sealedSha256": "9b9877d821e1a99e88ad177835f07faa85dbb7d91f1f3334bff7dab5d57704d4"
+    }
+  },
+  "verifyingKeyHex": "e28a8970753332bd72fef413e6b0b2ef1b4aadda7aa2c141f233712a6876b351"
+}
