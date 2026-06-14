@@ -107,7 +107,9 @@ sealed := ajarconnector.Seal(canonical, signingKey) // crypto/ed25519
 ```
 
 ```bash
-cd go && go run ./examples/cot/cmd/first_connector
+# Examples are their own Go module under go/examples:
+cd go/examples && go run ./cot/cmd/first_connector
+cd go/examples && go run ./synthetic-radar -dry-run   # stream synthetic tracks
 ```
 
 ## The contract & the gate
