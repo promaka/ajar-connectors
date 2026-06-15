@@ -73,6 +73,22 @@ target_compile_definitions(conformance PRIVATE
 add_executable(cot_roundtrip examples/cot_roundtrip.cpp)
 target_link_libraries(cot_roundtrip PRIVATE cot_connector)
 
+# Streaming example — uses the real NATS C client (cnats). Optional: only built
+# when cnats is found, so the SDK + conformance build needs no NATS client. The
+# transport dep is linked into this example only; the SDK stays transport-free.
+find_package(cnats CONFIG QUIET)
+if(cnats_FOUND)
+  # cnats' imported target pulls in OpenSSL + Threads; make those targets exist.
+  find_package(Threads REQUIRED)
+  find_package(OpenSSL REQUIRED)
+  add_executable(synthetic_radar examples/synthetic_radar.cpp)
+  target_link_libraries(synthetic_radar PRIVATE ajar_connector cnats::nats)
+  message(STATUS "cnats found: building synthetic_radar example")
+else()
+  message(STATUS "cnats not found: skipping synthetic_radar example "
+                 "(install nats.c / `brew install cnats` to build it)")
+endif()
+
 # --- Embedded (nanopb, no-heap) path -----------------------------------------
 # The nanopb runtime + generated static types. Links NO libprotobuf: this is the
 # radar/effector-controller path. event.pb.c is committed (regenerate with
@@ -93,3 +109,7 @@ enable_testing()
 add_test(NAME conformance COMMAND conformance)
 add_test(NAME cot_roundtrip COMMAND cot_roundtrip)
 add_test(NAME embedded_conformance COMMAND embedded_conformance)
+if(cnats_FOUND)
+  # Broker-free smoke: builds + seals a couple of ticks and exits.
+  add_test(NAME synthetic_radar_dry_run COMMAND synthetic_radar --dry-run --ticks 2)
+endif()

@@ -107,7 +107,15 @@ jobs:
       - name: Install protobuf + cmake
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake build-essential protobuf-compiler libprotobuf-dev
+          sudo apt-get install -y cmake build-essential protobuf-compiler libprotobuf-dev libssl-dev
+      - name: Install cnats (NATS C client) for the synthetic-radar example
+        run: |
+          git clone --depth 1 --branch v3.13.0 https://github.com/nats-io/nats.c /tmp/nats.c
+          cmake -S /tmp/nats.c -B /tmp/nats.c/build \
+            -DNATS_BUILD_STREAMING=OFF -DNATS_BUILD_EXAMPLES=OFF -DCMAKE_BUILD_TYPE=Release
+          cmake --build /tmp/nats.c/build -j
+          sudo cmake --install /tmp/nats.c/build
+          sudo ldconfig
       - name: Configure
         run: cmake -S cpp -B cpp/build -DCMAKE_BUILD_TYPE=Release
       - name: Build
