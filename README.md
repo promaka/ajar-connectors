@@ -17,6 +17,10 @@ native bytes ──▶ Connector::normalize ──▶ Event ──▶ canonical_
   vendor frame)                           protobuf)             protobuf)         bytes)
 ```
 
+> **Building a connector?** Start with the **[connector onboarding guide](ONBOARDING.md)** —
+> data flow, what to build, key generation, profile declaration, running it, and
+> troubleshooting.
+
 ## Status
 
 | Language | SDK | Conformance gate |
