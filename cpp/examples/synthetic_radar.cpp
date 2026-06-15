@@ -47,22 +47,33 @@ std::array<std::uint8_t, 32> dev_seed() {
   return s;
 }
 
-// A synthetic aircraft moving over a region (around the Gulf, matching the
-// corpus fixtures). heading in radians; speed_deg is degrees per tick.
+// A synthetic platform moving over a region (around the Gulf, matching the
+// corpus fixtures). `entity_type` is a canonical MIM type the seed ontology
+// already knows (air / surface / ground), so a mixed multi-domain picture flows
+// through with no ontology change. heading in radians; speed_deg is deg per tick.
 struct Track {
+  const char* entity_type;  // mim:aircraft | mim:surface-vessel | mim:ground-vehicle
+  const char* affiliation;  // friendly | hostile | neutral | "" (unknown)
   const char* label;
   double lat, lon, alt_m, heading, speed_deg;
+  // Stable per-track id (set once at startup). Reused as the event id every tick
+  // so a C2 (ATAK/iTAK) updates ONE moving marker per track instead of piling up
+  // a new contact each tick. (A production connector would model the track id as
+  // a dedicated attribute; here we reuse the event id for a clean demo picture.)
+  std::string uid;
 
   void advance() {
     lat += std::cos(heading) * speed_deg;
     lon += std::sin(heading) * speed_deg;
-    // Region: lat [25, 28], lon [49, 52].
+    // Bounce inside the region lat [25, 28], lon [49, 52]. A horizontal (lat) wall
+    // reflects the north-south component (heading -> PI - heading); a vertical
+    // (lon) wall reflects the east-west component (heading -> -heading).
     if (lat < 25.0 || lat > 28.0) {
-      heading = -heading;
+      heading = M_PI - heading;
       lat = std::max(25.0, std::min(28.0, lat));
     }
     if (lon < 49.0 || lon > 52.0) {
-      heading = M_PI - heading;
+      heading = -heading;
       lon = std::max(49.0, std::min(52.0, lon));
     }
   }
@@ -110,16 +121,40 @@ int main(int argc, char** argv) {
 
   std::fprintf(stderr,
                "[synthetic-radar] source_id=%s  subject=%s\n"
-               "[synthetic-radar] entity_type=mim:aircraft, no attributes (seed ontology has no "
-               "aircraft attribute schema), Core stamps received_at\n"
+               "[synthetic-radar] multi-domain: mim:aircraft + mim:surface-vessel + "
+               "mim:ground-vehicle, with an `affiliation` attribute (friendly/hostile/"
+               "neutral; omitted = unknown). Core stamps received_at\n"
                "[synthetic-radar] Ctrl-C to stop.\n",
                source_id.c_str(), subject.c_str());
 
+  // A mixed multi-domain picture: air, surface, and ground over the Gulf. All
+  // three types exist in the seed ontology, so this flows through unchanged and
+  // renders as distinct air/sea/ground icons in ATAK/iTAK.
+  // A mixed multi-domain, mixed-affiliation picture. One track is left unknown
+  // (empty affiliation) on purpose — honest: a raw sensor hit may carry no IFF.
   std::vector<Track> tracks = {
-      {"AJX-01", 26.4, 50.9, 11000, 0.3 * M_PI, 0.012},
-      {"AJX-02", 25.6, 51.4, 9500, 1.1 * M_PI, 0.009},
-      {"AJX-03", 27.2, 49.7, 12500, 1.7 * M_PI, 0.015},
+      // Air (alt in metres) — fastest.
+      {"mim:aircraft", "friendly", "AJX-01", 26.4, 50.9, 11000, 0.3 * M_PI, 0.020},
+      {"mim:aircraft", "", "AJX-02", 25.6, 51.4, 9500, 1.1 * M_PI, 0.018},
+      {"mim:aircraft", "hostile", "AJX-03", 27.2, 49.7, 12500, 1.7 * M_PI, 0.024},
+      // Surface vessels (sea level, slower).
+      {"mim:surface-vessel", "friendly", "NAV-01", 26.0, 50.4, 0, 0.6 * M_PI, 0.010},
+      {"mim:surface-vessel", "neutral", "NAV-02", 25.3, 51.0, 0, 1.4 * M_PI, 0.008},
+      {"mim:surface-vessel", "hostile", "NAV-03", 26.8, 51.7, 0, 0.1 * M_PI, 0.011},
+      // Ground vehicles (near-surface, slow).
+      {"mim:ground-vehicle", "friendly", "GND-01", 25.8, 49.6, 10, 0.9 * M_PI, 0.006},
+      {"mim:ground-vehicle", "hostile", "GND-02", 27.0, 50.2, 15, 1.9 * M_PI, 0.007},
   };
+
+  // Assign each track a stable UUIDv7 once, up front (reused every tick below).
+  for (Track& t : tracks) {
+    t.uid = ajar::EventBuilder(source_id, t.entity_type)
+                .new_id()
+                .now()
+                .location(t.lat, t.lon, t.alt_m)
+                .build()
+                .id();
+  }
 
   int rc = 0;
   for (long tick = 0;; ++tick) {
@@ -132,13 +167,18 @@ int main(int argc, char** argv) {
       //    rejected as UnknownAttribute.
       ajar::Event event;
       try {
-        event = ajar::EventBuilder(source_id, "mim:aircraft")
-                    .new_id()  // fresh UUIDv7 per event
-                    .now()
-                    .location(t.lat, t.lon, t.alt_m)
-                    .confidence(0.9)
-                    .policy_tag("air-defence")
-                    .build();
+        ajar::EventBuilder builder(source_id, t.entity_type);
+        builder.id(t.uid)  // STABLE per-track id -> one moving marker per track
+            .now()
+            .location(t.lat, t.lon, t.alt_m)
+            .confidence(0.9)
+            .policy_tag("air-defence");
+        // Affiliation is a governed attribute (seed ontology declares it optional);
+        // it drives the friend/foe colour the C2 renders. Omitted -> unknown.
+        if (t.affiliation && *t.affiliation) {
+          builder.attribute("affiliation", t.affiliation);
+        }
+        event = builder.build();
       } catch (const std::exception& ex) {
         std::fprintf(stderr, "build event: %s\n", ex.what());
         rc = 1;
