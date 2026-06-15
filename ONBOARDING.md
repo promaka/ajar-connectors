@@ -6,6 +6,20 @@ A connector has one job: turn your system's native data into Ajar's canonical,
 **signed** event and publish it. The SDK does the hard parts (canonical
 encoding, signing); you write the small piece that maps *your* data.
 
+> ## ⚡ Quickstart — the whole job is two edits
+>
+> See a real signed event **right now** — no key, no NATS, no feed:
+> ```bash
+> cd rust/examples
+> echo '{"lat":26.4,"lon":50.9,"alt_m":11000,"quality":0.9}' \
+>   | cargo run -p connector-template -- --dry-run
+> ```
+> Then make it yours: copy [`rust/examples/connector-template/`](rust/examples/connector-template/)
+> and edit the two blocks marked **`EDIT 1`** (describe your record) and
+> **`EDIT 2`** (map it to an event) — about 15 lines. Generate a key with
+> `scripts/gen-connector-key.sh`, set three env vars, run. That's the entire
+> integration. The sections below explain the *why* behind each step.
+
 - [1. How data flows](#1-how-data-flows)
 - [2. Where everything runs (deployment & topology)](#2-where-everything-runs-deployment--topology)
 - [3. What you build](#3-what-you-build)
