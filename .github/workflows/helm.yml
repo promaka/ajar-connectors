@@ -1,0 +1,40 @@
+# SPDX-License-Identifier: Apache-2.0
+name: helm
+
+on:
+  push:
+    branches: [main]
+    paths: ["deploy/helm/**", ".github/workflows/helm.yml"]
+  pull_request:
+    paths: ["deploy/helm/**", ".github/workflows/helm.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  chart:
+    name: lint + template the connector chart
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+      - name: Lint
+        run: |
+          helm lint deploy/helm/ajar-connector \
+            --set image.repository=registry.example/connector \
+            --set signingSeed.existingSecret=connector-seed
+      - name: Template (recommended path)
+        run: |
+          helm template demo deploy/helm/ajar-connector \
+            --set image.repository=registry.example/connector \
+            --set connector.sourceId=acme-radar-1 \
+            --set signingSeed.existingSecret=connector-seed > /dev/null
+      - name: Guard rails reject incomplete config
+        run: |
+          if helm template demo deploy/helm/ajar-connector --set signingSeed.existingSecret=x >/dev/null 2>&1; then
+            echo "expected failure: missing image.repository was accepted"; exit 1
+          fi
+          if helm template demo deploy/helm/ajar-connector --set image.repository=x >/dev/null 2>&1; then
+            echo "expected failure: missing signing key was accepted"; exit 1
+          fi
+          echo "guard rails OK"

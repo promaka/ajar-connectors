@@ -1,0 +1,63 @@
+# SPDX-License-Identifier: Apache-2.0
+# Values for the ajar-connector chart. The required ones are `image.repository`
+# and a signing-key Secret (`signingSeed.existingSecret`).
+
+replicaCount: 1
+
+image:
+  repository: ""          # REQUIRED — your built connector image, e.g. registry.you.mil/acme-radar
+  tag: "latest"
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+# Standard config the SDK reads as environment variables.
+connector:
+  sourceId: "demo-connector"        # must equal the AJAR_SOURCE_ID Ajar assigned you
+  ingestPrefix: "ajar.ingest"       # subject is <prefix>.<sourceId>
+  natsUrl: "nats://nats:4222"       # the endpoint Ajar gave you (tls://… / wss://…:443 in prod)
+
+# The connector's Ed25519 signing seed (32 raw bytes), mounted as a file and
+# exposed to the connector via AJAR_SIGNING_SEED. Provide it as a Secret.
+signingSeed:
+  existingSecret: ""                # RECOMMENDED: name of a Secret holding the seed
+  secretKey: "seed"                 # key within that Secret (32 raw bytes)
+  mountPath: "/etc/ajar/seed"       # where it's mounted; AJAR_SIGNING_SEED points here
+  # Dev only — let the chart create the Secret from an inline base64 value.
+  # NEVER use this in production; put the seed in your secret manager instead.
+  create: false
+  valueBase64: ""
+
+# Optional: extra env, volumes, and mounts (e.g. NATS .creds for TLS auth).
+extraEnv: []                        # - name: FOO\n  value: bar
+extraVolumes: []
+extraVolumeMounts: []
+
+serviceAccount:
+  create: true
+  name: ""
+
+# Hardened by default — suitable for a connector that only reads a feed and
+# publishes. Relax per your image's needs.
+podSecurityContext:
+  runAsNonRoot: true
+  seccompProfile:
+    type: RuntimeDefault
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]
+
+resources:
+  limits:
+    cpu: 250m
+    memory: 128Mi
+  requests:
+    cpu: 50m
+    memory: 64Mi
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+podAnnotations: {}
