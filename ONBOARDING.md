@@ -7,14 +7,15 @@ A connector has one job: turn your system's native data into Ajar's canonical,
 encoding, signing); you write the small piece that maps *your* data.
 
 - [1. How data flows](#1-how-data-flows)
-- [2. What you build](#2-what-you-build)
-- [3. Before you start: what Ajar gives you](#3-before-you-start-what-ajar-gives-you)
-- [4. Build it](#4-build-it)
-- [5. Generate your signing key](#5-generate-your-signing-key)
-- [6. Declare your profile](#6-declare-your-profile)
-- [7. Run it](#7-run-it)
-- [8. Verify you're byte-compatible](#8-verify-youre-byte-compatible)
-- [9. Troubleshooting](#9-troubleshooting)
+- [2. Where everything runs (deployment & topology)](#2-where-everything-runs-deployment--topology)
+- [3. What you build](#3-what-you-build)
+- [4. Before you start: what Ajar gives you](#4-before-you-start-what-ajar-gives-you)
+- [5. Build it](#5-build-it)
+- [6. Generate your signing key](#6-generate-your-signing-key)
+- [7. Declare your profile](#7-declare-your-profile)
+- [8. Run it](#8-run-it)
+- [9. Verify you're byte-compatible](#9-verify-youre-byte-compatible)
+- [10. Troubleshooting](#10-troubleshooting)
 
 ---
 
@@ -45,7 +46,102 @@ A **sealed event** on the wire is simply:
   [ 64-byte Ed25519 signature ][ canonical protobuf bytes ]
 ```
 
-## 2. What you build
+## 2. Where everything runs (deployment & topology)
+
+**The one idea:** the connector and Ajar Core **never talk to each other
+directly**. They both connect to a **NATS server** (a message bus) in the
+middle. The connector *publishes* sealed events to it; Core *subscribes* and
+pulls them off.
+
+```
+   connector  ──publish──▶  ┌─────────┐  ──deliver──▶  Ajar Core
+   (vendor)                 │  NATS   │                (operator)
+                            │ broker  │
+                            └─────────┘
+        ▲ each side opens an outbound TCP connection to NATS ▲
+```
+
+Trust lives in the **signature, not the pipe**: the connector signs each event,
+Core verifies it against your registered public key. So events can cross an
+untrusted, lossy, or relayed link and Core still knows they're authentic and
+unmodified. The connector doesn't even need to know *where* Core is — only where
+NATS is.
+
+### Who runs what
+
+| | Builds it | Runs it | Holds |
+|---|---|---|---|
+| **Vendor** | the connector (their code + this SDK) | the connector process, at/near the data source | its **private** signing key |
+| **Operator** | nothing (runs Ajar) | NATS + Ajar Core + Postgres + audit | the connector's **public** key (registered) |
+
+So the vendor's connector runs **at the edge** (with the sensor); the operator
+runs Ajar Core **where governance + storage live** (a C2/hub, or forward in an
+outpost). NATS sits wherever you decide the two should meet.
+
+### Default picture
+
+```
+   EDGE NODE (with the sensor)                         C2 / HUB
+ ┌─────────────────────────────┐                ┌──────────────────────────┐
+ │ sensor → connector          │  sealed events │  NATS  →  Ajar Core       │
+ │          (vendor code + SDK)│ ──────────────▶│           verify→policy→  │
+ │          signs each event   │  tactical/VPN  │           ontology→accept │
+ └─────────────────────────────┘     link       │              ├─ Postgres  │
+                                                 │              └─ audit log │
+                                                 └──────────────────────────┘
+```
+
+### The three common scenarios
+
+The connector code is **identical** in all three — only *where NATS and Core
+run* changes.
+
+**1. Central Core (most common).** Edge connectors publish to one NATS at C2;
+one Core verifies and stores centrally.
+
+```
+ edge A ┐
+ edge B ┼──▶ NATS @ C2 ──▶ Core ──▶ Postgres + audit
+ edge C ┘
+```
+
+**2. Disconnected outpost (works when cut off).** An outpost runs its **own**
+NATS + Core locally (the air-gapped systemd/Podman bundle). Connectors publish
+locally and the outpost accepts/stores locally with no link home; it forwards
+upstream to C2 when a link returns.
+
+```
+ OUTPOST (own NATS + Core, fully local)
+ connector ──▶ NATS ──▶ Core ──▶ local Postgres + audit
+                                   └····· syncs to C2 when a link is available ····▶
+```
+
+**3. Edge gateway.** Many sensors funnel through a small local NATS on the edge
+node, which relays to C2's NATS when connected (a NATS "leaf"); buffers during
+outages.
+
+```
+ sensors ──▶ NATS (edge leaf) ~~relays when up~~▶ NATS @ C2 ──▶ Core
+```
+
+### Where is NATS in the code?
+
+NATS-the-**server** is **not something anyone writes** — it's a third-party
+binary (`nats-server`, from nats.io) that your *deployment* runs as a process or
+container (the systemd + Podman bundle). You won't find its source in either
+repo. What you find is **client** code:
+
+- **In this connector repo (`ajar-connectors`):** only in the *examples* (a NATS
+  client publishing) — the SDK crate itself has **no** NATS dependency and is
+  transport-free.
+- **In the core repo (`promaka/ajar`):** a NATS *client* that **subscribes** to
+  `ajar.ingest.>` and the deployment manifests that launch the `nats-server`
+  container. (Core uses `async-nats` as a client; it does not embed the server.)
+
+So: nobody codes NATS — you **run** a `nats-server`, the connector publishes to
+it, and Core subscribes to it.
+
+## 3. What you build
 
 The whole connector is a loop of three steps. The SDK gives you steps 2–3; you
 write step 1 — "map one of my records into an `Event`":
@@ -92,7 +188,7 @@ data source with yours:
 Swap the synthetic track generator for your feed reader, keep the seal/publish
 loop as-is.
 
-## 3. Before you start: what Ajar gives you
+## 4. Before you start: what Ajar gives you
 
 Ask your Ajar operator for these four things. The first three are a one-time
 setup on their side:
@@ -101,7 +197,7 @@ setup on their side:
 |-------------|-----------|
 | a **`source_id`** | your connector's stable identity, e.g. `acme-radar-1` |
 | **entity type(s) registered** | the `mim:<type>` / `x:<vendor>:<type>` (and any attribute schema) you'll emit must exist in Core's ontology |
-| **your public key registered** | you generate a key (§5) and send the **public** half; Ajar registers it against your `source_id` |
+| **your public key registered** | you generate a key (§6) and send the **public** half; Ajar registers it against your `source_id` |
 | **ingest endpoint + creds** | the NATS server address (and credentials/TLS) to publish to |
 
 > Agree the **data contract first**: which entity type(s) you emit and which
@@ -109,7 +205,7 @@ setup on their side:
 > ontology yet, events using it are rejected — that has to be added on the Ajar
 > side before you go live.
 
-## 4. Build it
+## 5. Build it
 
 Pick a language and add the SDK. (Until packages are published, depend on this
 repo via git.)
@@ -127,10 +223,10 @@ go get github.com/promaka/ajar-connectors/go/ajarconnector
 
 **C++** — use the CMake project under [cpp/](cpp/); link `ajar_connector`.
 
-Then implement your `to_event` mapping (§2) and reuse the seal+publish loop from
+Then implement your `to_event` mapping (§3) and reuse the seal+publish loop from
 the matching example.
 
-## 5. Generate your signing key
+## 6. Generate your signing key
 
 Each connector has its **own** Ed25519 key. Generate it once and keep the
 private half secret (a secrets manager, an HSM, a file with locked-down perms —
@@ -160,7 +256,7 @@ let signing_key = SigningKey::from_bytes(&seed);
 > local demo, `0x47` for the golden vectors). Never sign production events with
 > those.
 
-## 6. Declare your profile
+## 7. Declare your profile
 
 Your **connector profile** is the declaration Ajar registers for you. Build it
 with the SDK and hand the JSON to your operator:
@@ -188,7 +284,7 @@ produces exactly what Ajar needs:
 }
 ```
 
-## 7. Run it
+## 8. Run it
 
 Three stages, each lower-risk than the next:
 
@@ -211,7 +307,7 @@ cargo run -p synthetic-radar
 **c) Production.** Same binary, pointed at the real ingest endpoint with your
 credentials, signing with your real key.
 
-## 8. Verify you're byte-compatible
+## 9. Verify you're byte-compatible
 
 Before going live, run the **conformance gate** in your language. It proves your
 build of the SDK reproduces the exact bytes Ajar accepts — if it's green, your
@@ -228,7 +324,7 @@ cd go && go test ./conformance/ -count=1
 ctest --test-dir cpp/build
 ```
 
-## 9. Troubleshooting
+## 10. Troubleshooting
 
 | Symptom | Likely cause | Fix |
 |---------|--------------|-----|
