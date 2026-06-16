@@ -17,6 +17,11 @@ COPY vendor ./vendor
 RUN cargo build --release --manifest-path rust/examples/Cargo.toml -p synthetic-radar
 
 FROM gcr.io/distroless/cc-debian12:nonroot
+LABEL org.opencontainers.image.title="ajar connector (reference image)" \
+      org.opencontainers.image.description="REFERENCE / EXAMPLE ONLY — builds the synthetic-radar example. Not for production; build your own connector image from your code." \
+      org.opencontainers.image.source="https://github.com/promaka/ajar-connectors" \
+      org.opencontainers.image.licenses="Apache-2.0" \
+      ajar.reference-only="true"
 COPY --from=build /build/rust/examples/target/release/synthetic-radar /usr/local/bin/connector
 USER nonroot
 ENTRYPOINT ["/usr/local/bin/connector"]
