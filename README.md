@@ -163,6 +163,31 @@ or the pipeline — that is core's job. It only produces valid signed events,
 declares profiles, and translates in/out. It never sees secrets beyond a
 connector's own signing key.
 
+## Deploying a connector (Kubernetes)
+
+For clusters at a C2/hub or a forward outpost, a Helm chart packages a connector
+as a Deployment — wiring up the signing key (from a Secret), the standard config
+(`AJAR_SOURCE_ID`, `NATS_URL`, `AJAR_INGEST_PREFIX`), optional mTLS, and an
+optional egress-only-to-NATS NetworkPolicy. A reference image (multi-stage,
+distroless non-root) is at [deploy/docker/Dockerfile](deploy/docker/Dockerfile):
+
+```bash
+docker build -f deploy/docker/Dockerfile -t registry.you.mil/acme-radar:1.0.0 .
+kubectl create secret generic acme-radar-seed --from-file=seed=acme-radar.seed
+helm install acme-radar deploy/helm/connector \
+  --set image.repository=registry.you.mil/acme-radar --set image.tag=1.0.0 \
+  --set connector.sourceId=acme-radar-1 \
+  --set connector.natsUrl=nats://ajar-ajar-nats:4222 \
+  --set signingSeed.existingSecret=acme-radar-seed
+```
+
+It's generic — you bring your connector image; the chart does the wiring, with a
+hardened security posture matching Core. The same binary also runs fine as a
+plain process or systemd unit at the edge. See
+[deploy/helm/connector](deploy/helm/connector/). (The chart deploys a
+*connector*; NATS and Ajar Core are operator-side, paired with the Core chart in
+`promaka/ajar`.)
+
 ## Contributing & license
 
 Apache-2.0 (see [LICENSE](LICENSE)). Every source file carries an SPDX header.

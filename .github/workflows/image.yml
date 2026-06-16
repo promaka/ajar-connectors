@@ -1,0 +1,61 @@
+# SPDX-License-Identifier: Apache-2.0
+# Builds and pushes the REFERENCE connector image with SLSA build provenance +
+# SBOM attestations (mirrors Core's image.yml). The image is reference-only —
+# vendors build their own connector image from their code.
+name: image
+
+on:
+  push:
+    branches: [main]
+    paths: ["deploy/docker/**", "rust/**", "vendor/**", ".github/workflows/image.yml"]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write        # for keyless signing of the attestation
+  attestations: write    # for actions/attest-build-provenance
+
+jobs:
+  build-push:
+    name: build + push + attest (reference image)
+    runs-on: ubuntu-latest
+    env:
+      IMAGE: ghcr.io/${{ github.repository }}/connector-reference
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=ref,event=branch
+            type=sha
+            type=semver,pattern={{version}}
+          labels: |
+            org.opencontainers.image.title=ajar connector (reference image)
+            org.opencontainers.image.description=REFERENCE / EXAMPLE ONLY — not for production
+            ajar.reference-only=true
+      - id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/docker/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          provenance: true
+          sbom: true
+      # Signed, keyless SLSA build-provenance attestation pushed to the registry.
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true

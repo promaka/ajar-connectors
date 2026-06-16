@@ -1,0 +1,101 @@
+{{/* SPDX-License-Identifier: Apache-2.0 */}}
+{{- if not .Values.image.repository }}
+{{- fail "image.repository is required — set it to your built connector image" }}
+{{- end }}
+{{- if and (not .Values.signingSeed.existingSecret) (not .Values.signingSeed.create) }}
+{{- fail "provide a signing key: set signingSeed.existingSecret (recommended) or signingSeed.create=true (dev only)" }}
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "connector.fullname" . }}
+  labels:
+    {{- include "connector.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "connector.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "connector.selectorLabels" . | nindent 8 }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "connector.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: connector
+          image: {{ include "connector.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          env:
+            - name: AJAR_SOURCE_ID
+              value: {{ .Values.connector.sourceId | quote }}
+            - name: AJAR_INGEST_PREFIX
+              value: {{ .Values.connector.ingestPrefix | quote }}
+            - name: NATS_URL
+              value: {{ .Values.connector.natsUrl | quote }}
+            - name: AJAR_SIGNING_SEED
+              value: {{ .Values.signingSeed.mountPath | quote }}
+            {{- if .Values.tls.existingSecret }}
+            - name: AJAR_TLS_CERT
+              value: {{ printf "%s/tls.crt" .Values.tls.mountPath | quote }}
+            - name: AJAR_TLS_KEY
+              value: {{ printf "%s/tls.key" .Values.tls.mountPath | quote }}
+            - name: AJAR_TLS_CA
+              value: {{ printf "%s/ca.crt" .Values.tls.mountPath | quote }}
+            {{- end }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          volumeMounts:
+            - name: signing-seed
+              mountPath: {{ dir .Values.signingSeed.mountPath | quote }}
+              readOnly: true
+            {{- if .Values.tls.existingSecret }}
+            - name: nats-tls
+              mountPath: {{ .Values.tls.mountPath | quote }}
+              readOnly: true
+            {{- end }}
+            {{- with .Values.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        - name: signing-seed
+          secret:
+            secretName: {{ include "connector.seedSecretName" . }}
+            items:
+              - key: {{ .Values.signingSeed.secretKey | quote }}
+                path: {{ base .Values.signingSeed.mountPath | quote }}
+        {{- if .Values.tls.existingSecret }}
+        - name: nats-tls
+          secret:
+            secretName: {{ .Values.tls.existingSecret | quote }}
+        {{- end }}
+        {{- with .Values.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
