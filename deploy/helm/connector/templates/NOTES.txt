@@ -1,0 +1,25 @@
+{{- /* SPDX-License-Identifier: Apache-2.0 */ -}}
+connector "{{ .Release.Name }}" deployed.
+
+  image          : {{ include "connector.image" . }}
+  source_id      : {{ .Values.connector.sourceId }}
+  ingest subject : {{ .Values.connector.ingestPrefix }}.{{ .Values.connector.sourceId }}
+  NATS endpoint  : {{ .Values.connector.natsUrl }}
+  signing seed   : Secret/{{ include "connector.seedSecretName" . }} (key "{{ .Values.signingSeed.secretKey }}") -> {{ .Values.signingSeed.mountPath }}
+{{- if .Values.tls.existingSecret }}
+  NATS mTLS      : Secret/{{ .Values.tls.existingSecret }} -> {{ .Values.tls.mountPath }} (AJAR_TLS_CERT/KEY/CA)
+{{- end }}
+{{- if .Values.networkPolicy.enabled }}
+  egress         : restricted to NATS (port {{ .Values.networkPolicy.natsPort }}) + DNS
+{{- end }}
+
+Check it's running and publishing:
+  kubectl logs -l app.kubernetes.io/instance={{ .Release.Name }} -f
+
+Reminders:
+  * source_id must equal the AJAR_SOURCE_ID Ajar registered for this connector.
+  * The signing Secret must hold the 32-byte seed whose public key Ajar registered.
+{{- if .Values.signingSeed.create }}
+  * signingSeed.create is ON — DEV only. For production use signingSeed.existingSecret
+    backed by your secret manager.
+{{- end }}

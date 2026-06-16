@@ -1,12 +1,13 @@
 # SPDX-License-Identifier: Apache-2.0
-# Values for the ajar-connector chart. The required ones are `image.repository`
-# and a signing-key Secret (`signingSeed.existingSecret`).
+# Values for the connector chart. Required: `image.repository` and a signing-key
+# Secret (`signingSeed.existingSecret`). Pairs with the Core chart conventions.
 
 replicaCount: 1
 
 image:
   repository: ""          # REQUIRED — your built connector image, e.g. registry.you.mil/acme-radar
   tag: "latest"
+  digest: ""              # optional; if set, pinned by digest (recommended for prod)
   pullPolicy: IfNotPresent
 
 imagePullSecrets: []
@@ -15,7 +16,7 @@ imagePullSecrets: []
 connector:
   sourceId: "demo-connector"        # must equal the AJAR_SOURCE_ID Ajar assigned you
   ingestPrefix: "ajar.ingest"       # subject is <prefix>.<sourceId>
-  natsUrl: "nats://nats:4222"       # the endpoint Ajar gave you (tls://… / wss://…:443 in prod)
+  natsUrl: "nats://ajar-ajar-nats:4222"  # in-cluster NATS (or an external tls://… host)
 
 # The connector's Ed25519 signing seed (32 raw bytes), mounted as a file and
 # exposed to the connector via AJAR_SIGNING_SEED. Provide it as a Secret.
@@ -28,8 +29,21 @@ signingSeed:
   create: false
   valueBase64: ""
 
-# Optional: extra env, volumes, and mounts (e.g. NATS .creds for TLS auth).
-extraEnv: []                        # - name: FOO\n  value: bar
+# Optional mTLS to NATS (production). Point at a Secret holding tls.crt / tls.key
+# / ca.crt; the chart mounts them and sets AJAR_TLS_CERT / AJAR_TLS_KEY /
+# AJAR_TLS_CA for the connector to use.
+tls:
+  existingSecret: ""                # e.g. a cert-manager / kubernetes.io/tls Secret
+  mountPath: "/etc/ajar/tls"
+
+# Optional egress lockdown: allow the connector to reach ONLY NATS (+ DNS),
+# mirroring Core's no-egress posture.
+networkPolicy:
+  enabled: false
+  natsPort: 4222
+
+# Optional: extra env, volumes, and mounts.
+extraEnv: []
 extraVolumes: []
 extraVolumeMounts: []
 
@@ -37,10 +51,12 @@ serviceAccount:
   create: true
   name: ""
 
-# Hardened by default — suitable for a connector that only reads a feed and
-# publishes. Relax per your image's needs.
+# Hardened by default — must match Core's posture.
 podSecurityContext:
   runAsNonRoot: true
+  runAsUser: 65532                  # distroless nonroot uid — REQUIRED: distroless
+                                    # uses a non-numeric user, so without an explicit
+                                    # numeric uid the pod fails CreateContainerConfigError
   seccompProfile:
     type: RuntimeDefault
 securityContext:

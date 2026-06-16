@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: Apache-2.0
+apiVersion: v2
+name: connector
+description: >-
+  Deploy an Ajar connector into Kubernetes — the same clean way Core deploys
+  (pairs with the Core chart in promaka/ajar, deploy/helm/ajar). Generic: you
+  supply your built connector image and its config; the chart wires the signing
+  key (from a Secret), the standard SDK environment, optional mTLS, and an
+  optional egress-only-to-NATS NetworkPolicy. It does not deploy NATS or Core.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - ajar
+  - connector
+  - defence
+home: https://github.com/promaka/ajar-connectors
+sources:
+  - https://github.com/promaka/ajar-connectors
+maintainers:
+  - name: Ajar connectors contributors
