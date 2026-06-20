@@ -9,9 +9,11 @@ synthetic-radar ──PUB──▶ NATS ──▶ Core ──▶ accepted ──
    (this example)     ajar.ingest.<source>
 ```
 
-Each tick (~1/sec) it advances a few tracks over the Gulf region, builds the
-event with the SDK's `EventBuilder`, **seals** it, and publishes the sealed
-bytes to NATS subject `ajar.ingest.<source>`.
+Each aircraft follows a **flight path** (a looping waypoint route over the Gulf
+region), and the connector emits a position for every track each sweep — building
+the event with the SDK's `EventBuilder`, **sealing** it, and publishing the
+sealed bytes to NATS subject `ajar.ingest.<source>`. The volume is configurable;
+it streams **thousands of records a minute** (default ~3000/min, 50 aircraft).
 
 > ⚠️ **Example only.** This carries a **dev-only** signing seed (32 bytes of
 > `0x03`) and picks a transport (NATS). The `ajar-connector` crate stays minimal
@@ -34,15 +36,35 @@ cargo run -p synthetic-radar -- --dry-run --ticks 3   # bounded, exits after 3 t
 
 # Against a default local Core (NATS on 127.0.0.1:4222):
 cargo run -p synthetic-radar
+
+# Crank the volume: 100 aircraft at ~12000 records/min:
+AJAR_TRACKS=100 AJAR_RATE_PER_MIN=12000 cargo run -p synthetic-radar
+
+# Negative test: also emit one known-bad track Ajar Core MUST reject:
+cargo run -p synthetic-radar -- --inject-rejected
 ```
 
 Environment overrides:
 
 | Var | Default | Meaning |
 |-----|---------|---------|
-| `NATS_URL` | `127.0.0.1:4222` | NATS server address |
+| `NATS_URL` | `nats://127.0.0.1:4222` | NATS server address |
 | `AJAR_SOURCE_ID` | `demo-connector` | must equal the Core's `AJAR_SOURCE_ID` |
 | `AJAR_INGEST_PREFIX` | `ajar.ingest` | subject prefix (full subject is `<prefix>.<source>`) |
+| `AJAR_TRACKS` | `50` | number of aircraft on flight paths |
+| `AJAR_RATE_PER_MIN` | `3000` | target records per minute (sweep interval is derived) |
+| `AJAR_INJECT_REJECTED` | _(unset)_ | if set (or `--inject-rejected`), also emit one known-bad track Core must reject |
+
+## Negative test: a track Ajar must reject
+
+`--inject-rejected` (or `AJAR_INJECT_REJECTED=1`) adds **one** extra track
+(`RJX-666`) each sweep: a well-formed, validly **signed** `mim:aircraft` that
+carries an **undeclared attribute**. The signature is valid, so this isolates
+Core's *ontology/validation* boundary — Core must reject it as `UnknownAttribute`
+while the 50 good tracks flow through to `accepted`. It's a boundary test: if any
+of these are ever **accepted**, that's the vulnerability. Watch Core's audit /
+reject log for steady `RJX-666` rejections. Off by default so the normal demo
+stays clean.
 
 ## Why these exact choices
 
