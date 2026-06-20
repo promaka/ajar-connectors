@@ -122,3 +122,23 @@ jobs:
         run: cmake --build cpp/build -j
       - name: Conformance + round-trip gate
         run: ctest --test-dir cpp/build --output-on-failure
+
+  python:
+    name: pytest + conformance
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: python
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install deps
+        run: pip install "protobuf>=7.35,<8" "cryptography>=42" pytest
+      - name: Unit tests
+        run: python -m pytest -q
+      - name: Conformance gate
+        run: PYTHONPATH=. python conformance/golden_vectors.py
+      - name: synthetic-radar dry-run (no infra)
+        run: PYTHONPATH=. python examples/synthetic_radar.py --dry-run --ticks 2

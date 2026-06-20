@@ -10,15 +10,20 @@ encoding, signing); you write the small piece that maps *your* data.
 >
 > See a real signed event **right now** — no key, no NATS, no feed:
 > ```bash
-> cd rust/examples
-> echo '{"lat":26.4,"lon":50.9,"alt_m":11000,"quality":0.9}' \
+> # Rust:
+> cd rust/examples && echo '{"lat":26.4,"lon":50.9,"alt_m":11000,"quality":0.9}' \
 >   | cargo run -p connector-template -- --dry-run
+>
+> # …or Python:
+> cd python && echo '{"lat":26.4,"lon":50.9,"alt_m":11000,"quality":0.9}' \
+>   | PYTHONPATH=. python examples/connector_template.py --dry-run
 > ```
-> Then make it yours: copy [`rust/examples/connector-template/`](rust/examples/connector-template/)
-> and edit the two blocks marked **`EDIT 1`** (describe your record) and
-> **`EDIT 2`** (map it to an event) — about 15 lines. Generate a key with
-> `scripts/gen-connector-key.sh`, set three env vars, run. That's the entire
-> integration. The sections below explain the *why* behind each step.
+> Then make it yours: copy the `connector-template` for your language and edit the
+> block(s) marked **`EDIT`** (describe your record + map it to an event) — about
+> 15 lines. Generate a key with `scripts/gen-connector-key.sh`, set three env
+> vars, run. That's the entire integration. The sections below explain the *why*.
+> Templates: [Rust](rust/examples/connector-template/) · [Python](python/examples/connector_template.py)
+> (Go and C++ vendors copy [`go/examples/synthetic-radar`](go/examples/synthetic-radar/) / [`cpp/examples/synthetic_radar.cpp`](cpp/examples/synthetic_radar.cpp)).
 
 - [1. How data flows](#1-how-data-flows)
 - [2. Where everything runs (deployment & topology)](#2-where-everything-runs-deployment--topology)

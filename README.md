@@ -29,15 +29,15 @@ native bytes ──▶ Connector::normalize ──▶ Event ──▶ canonical_
 | Go       | ✅ `go/ajarconnector` | ✅ reproduces all golden vectors (same `vectors.json`) |
 | C++ (desktop) | ✅ `cpp/` (protoc-C++) | ✅ reproduces all golden vectors (same `vectors.json`) |
 | C++ (embedded) | ✅ `cpp/embedded/` (nanopb, no-heap) | ✅ reproduces all golden vectors (same `vectors.json`) |
-| Python   | ⏳ planned | — |
+| Python   | ✅ `python/ajar_connector` | ✅ reproduces all golden vectors (same `vectors.json`) |
 
 All language SDKs assert against the **same** [vendor/contract/vectors.json](vendor/contract/vectors.json)
 and produce byte-identical canonical bytes for every fixture — that
-cross-language identity is the proof. Four independent protobuf encoders (Rust
-prost, Go, libprotobuf, and nanopb) now agree on every hash. The C++ builds
-vendor their crypto (Monocypher Ed25519, no system dependency); the embedded
-nanopb build links no protobuf runtime and allocates nothing on the heap on the
-encode path — the radar/effector-controller path.
+cross-language identity is the proof. **Five independent protobuf encoders** (Rust
+prost, Go, libprotobuf, nanopb, and Python protobuf) now agree on every hash. The
+C++ builds vendor their crypto (Monocypher Ed25519, no system dependency); the
+embedded nanopb build links no protobuf runtime and allocates nothing on the heap
+on the encode path — the radar/effector-controller path.
 
 ## Write your first connector in 20 lines
 
