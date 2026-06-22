@@ -2,11 +2,29 @@
 
 package ajarconnector
 
-import "crypto/ed25519"
+import (
+	"crypto/ed25519"
+	"fmt"
+)
 
 // SealSignatureLen is the length in bytes of the Ed25519 signature prefix on a
 // sealed envelope.
 const SealSignatureLen = ed25519.SignatureSize // 64
+
+// SigningKeyFromSeed derives a connector signing key from a 32-byte seed,
+// returning a clear error if the seed is the wrong length. Prefer this over
+// ed25519.NewKeyFromSeed, which panics with a cryptic message on a bad length.
+// Mirrors the Python/C++ SDKs' from_seed for cross-language parity.
+//
+// The golden-vector seed (32 x 0x47) is a published TEST seed — never sign
+// production events with it; load a real per-connector seed from your secret
+// store.
+func SigningKeyFromSeed(seed []byte) (ed25519.PrivateKey, error) {
+	if len(seed) != ed25519.SeedSize {
+		return nil, fmt.Errorf("signing seed must be %d bytes, got %d", ed25519.SeedSize, len(seed))
+	}
+	return ed25519.NewKeyFromSeed(seed), nil
+}
 
 // Seal signs canonical with key and returns the 64-byte detached signature
 // followed by the canonical bytes:

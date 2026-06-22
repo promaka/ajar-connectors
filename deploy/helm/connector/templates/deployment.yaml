@@ -38,6 +38,24 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           securityContext:
             {{- toYaml .Values.securityContext | nindent 12 }}
+          {{- if .Values.health.enabled }}
+          ports:
+            - name: health
+              containerPort: {{ .Values.health.port }}
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.health.livenessPath }}
+              port: health
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.health.readinessPath }}
+              port: health
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          {{- end }}
           env:
             - name: AJAR_SOURCE_ID
               value: {{ .Values.connector.sourceId | quote }}
@@ -47,6 +65,10 @@ spec:
               value: {{ .Values.connector.natsUrl | quote }}
             - name: AJAR_SIGNING_SEED
               value: {{ .Values.signingSeed.mountPath | quote }}
+            {{- if .Values.health.enabled }}
+            - name: AJAR_HEALTH_ADDR
+              value: {{ printf "0.0.0.0:%d" (int .Values.health.port) | quote }}
+            {{- end }}
             {{- if .Values.tls.existingSecret }}
             - name: AJAR_TLS_CERT
               value: {{ printf "%s/tls.crt" .Values.tls.mountPath | quote }}

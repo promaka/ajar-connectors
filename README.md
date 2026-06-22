@@ -188,6 +188,20 @@ plain process or systemd unit at the edge. See
 *connector*; NATS and Ajar Core are operator-side, paired with the Core chart in
 `promaka/ajar`.)
 
+## Stability & versioning
+
+**Build a connector once, and it keeps working — you are never forced to
+upgrade.** A connector is a binary you build and run; whether it stays accepted
+depends only on the **wire contract**, which is frozen (`event.proto` +
+`schema_version="v1"` + the seal envelope), pinned by
+[`vendor/contract/`](vendor/contract/), and proven by the golden vectors. The SDK
+API (`EventBuilder` / `seal` / …) is just a convenience for *building* those
+bytes — if it ever changes, only a deliberate rebuild is affected, never a running
+binary. **Pin the released tag `v0.1.0`, not a branch.**
+
+The full guarantee — what we will and won't change within `contract-v1` — is in
+[COMPATIBILITY.md](COMPATIBILITY.md). Security issues: [SECURITY.md](SECURITY.md).
+
 ## Contributing & license
 
 Apache-2.0 (see [LICENSE](LICENSE)). Every source file carries an SPDX header.

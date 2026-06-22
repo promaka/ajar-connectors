@@ -36,13 +36,17 @@ add_custom_command(
   DEPENDS ${PROTO}
   COMMENT "Generating C++ from vendored event.proto")
 
+include(GNUInstallDirs)
+
 # Vendored, heap-free crypto shared by desktop and embedded builds.
 add_library(ajar_crypto STATIC
   vendor/monocypher/monocypher.c
   vendor/monocypher/monocypher-ed25519.c
   vendor/sha256/sha256.c)
 target_include_directories(ajar_crypto PUBLIC
-  vendor/monocypher vendor/sha256)
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/vendor/monocypher>
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/vendor/sha256>
+  $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
 
 # The SDK library.
 add_library(ajar_connector STATIC
@@ -52,8 +56,13 @@ add_library(ajar_connector STATIC
   src/profile.cpp
   ${GEN_DIR}/event.pb.cc)
 target_include_directories(ajar_connector PUBLIC
-  include ${GEN_DIR})
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<BUILD_INTERFACE:${GEN_DIR}>
+  $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
 target_link_libraries(ajar_connector PUBLIC ${AJAR_PROTOBUF_LIB} ajar_crypto)
+# Stable alias so in-tree consumers (add_subdirectory) and installed consumers
+# (find_package) use the SAME name: ajar_connector::ajar_connector.
+add_library(ajar_connector::ajar_connector ALIAS ajar_connector)
 
 # Reference connector example.
 add_library(cot_connector STATIC examples/cot_connector.cpp)
@@ -113,3 +122,40 @@ if(cnats_FOUND)
   # Broker-free smoke: builds + seals a couple of ticks and exits.
   add_test(NAME synthetic_radar_dry_run COMMAND synthetic_radar --dry-run --ticks 2)
 endif()
+
+# --- Install + find_package support ------------------------------------------
+# Lets a vendor consume the SDK idiomatically from their own CMake project:
+#   find_package(ajar_connector CONFIG REQUIRED)
+#   target_link_libraries(my_connector PRIVATE ajar_connector::ajar_connector)
+# (See cpp/README.md. In-tree `add_subdirectory()` works without installing.)
+include(CMakePackageConfigHelpers)
+
+install(TARGETS ajar_connector ajar_crypto
+  EXPORT ajar_connectorTargets
+  ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+  INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+
+# Public API header (include/ajar/connector.hpp), the generated protobuf header
+# the API exposes, and the vendored crypto headers — all flattened under the
+# install include dir so the INSTALL_INTERFACE include path resolves them.
+install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+install(FILES ${GEN_DIR}/event.pb.h DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+install(FILES
+    vendor/monocypher/monocypher.h
+    vendor/monocypher/monocypher-ed25519.h
+    vendor/sha256/sha256.h
+  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+
+install(EXPORT ajar_connectorTargets
+  FILE ajar_connectorTargets.cmake
+  NAMESPACE ajar_connector::
+  DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/ajar_connector)
+
+configure_package_config_file(
+  ${CMAKE_CURRENT_SOURCE_DIR}/cmake/ajar_connectorConfig.cmake.in
+  ${CMAKE_CURRENT_BINARY_DIR}/ajar_connectorConfig.cmake
+  INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/ajar_connector)
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/ajar_connectorConfig.cmake
+  DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/ajar_connector)

@@ -40,10 +40,13 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 {{- end -}}
 
-{{/* Image ref: pin by digest when set, else tag. */}}
+{{/* Image ref: pin by digest when set, else by an explicit tag. A floating
+     "latest" (or no tag) is rejected — production must pin a real version. */}}
 {{- define "connector.image" -}}
 {{- if .Values.image.digest -}}
 {{- printf "%s@%s" .Values.image.repository .Values.image.digest -}}
+{{- else if or (not .Values.image.tag) (eq .Values.image.tag "latest") -}}
+{{- fail "image.digest or an explicit image.tag is required (a pinned version, not \"latest\") — set image.digest=sha256:… (recommended) or image.tag=1.0.0" -}}
 {{- else -}}
 {{- printf "%s:%s" .Values.image.repository .Values.image.tag -}}
 {{- end -}}

@@ -31,6 +31,8 @@
 
 use std::env;
 use std::error::Error;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use ajar_connector::{canonical_bytes, seal, EventBuilder, SigningKey};
@@ -38,6 +40,13 @@ use ajar_connector::{canonical_bytes, seal, EventBuilder, SigningKey};
 /// Dev-only signing seed: 32 bytes of `0x03`. Matches the default Core's
 /// registered dev connector profile. Documented TEST seed — never production.
 const DEV_SEED: [u8; 32] = [0x03; 32];
+
+/// Process counters, surfaced at `/metrics` when `AJAR_HEALTH_ADDR` is set.
+#[derive(Default)]
+struct Metrics {
+    published: AtomicU64,
+    publish_errors: AtomicU64,
+}
 
 /// A synthetic aircraft that follows a looping waypoint route — a flight path,
 /// not random motion. Each tick it advances toward the current waypoint along a
@@ -140,12 +149,21 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let subject = format!("{prefix}.{source_id}");
     let key = SigningKey::from_bytes(&DEV_SEED);
 
+    let metrics = Arc::new(Metrics::default());
+    spawn_health(metrics.clone()); // no-op unless AJAR_HEALTH_ADDR is set
+
     let client = if dry_run {
         eprintln!("[synthetic-radar] --dry-run: building + sealing, not publishing");
         None
     } else {
         eprintln!("[synthetic-radar] connecting to NATS at {nats_url}");
-        Some(async_nats::connect(&nats_url).await?)
+        // Tolerate NATS not being up yet (pod ordering); auto-reconnect after a drop.
+        Some(
+            async_nats::ConnectOptions::new()
+                .retry_on_initial_connect()
+                .connect(&nats_url)
+                .await?,
+        )
     };
 
     eprintln!(
@@ -186,11 +204,18 @@ async fn main() -> Result<(), Box<dyn Error>> {
             // 2. seal, 3. publish
             let sealed = seal(&canonical_bytes(&event), &key);
             if let Some(client) = &client {
-                client
+                if let Err(e) = client
                     .publish(subject.clone(), bytes::Bytes::from(sealed))
-                    .await?;
+                    .await
+                {
+                    // Non-fatal: keep streaming; the client reconnects underneath.
+                    eprintln!("[synthetic-radar] publish error (continuing): {e}");
+                    metrics.publish_errors.fetch_add(1, Ordering::Relaxed);
+                    continue;
+                }
             }
             total += 1;
+            metrics.published.fetch_add(1, Ordering::Relaxed);
         }
 
         // Negative test: one known-bad track ("RJX-666"). Well-formed and validly
@@ -208,9 +233,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 .build()?;
             let sealed = seal(&canonical_bytes(&poison), &key);
             if let Some(client) = &client {
-                client
+                if let Err(e) = client
                     .publish(subject.clone(), bytes::Bytes::from(sealed))
-                    .await?;
+                    .await
+                {
+                    eprintln!("[synthetic-radar] publish error (continuing): {e}");
+                    metrics.publish_errors.fetch_add(1, Ordering::Relaxed);
+                }
             }
             poison_total += 1;
         }
@@ -253,4 +282,51 @@ async fn main() -> Result<(), Box<dyn Error>> {
     }
 
     Ok(())
+}
+
+/// Spawns a tiny health/metrics HTTP endpoint when `AJAR_HEALTH_ADDR` is set
+/// (e.g. `0.0.0.0:9090`). `GET /healthz` → liveness; `GET /metrics` → Prometheus
+/// text. Std-only — no extra dependency, no impact unless you opt in.
+fn spawn_health(metrics: Arc<Metrics>) {
+    let addr = match env::var("AJAR_HEALTH_ADDR") {
+        Ok(a) if !a.is_empty() => a,
+        _ => return,
+    };
+    std::thread::spawn(move || {
+        use std::io::{Read, Write};
+        let listener = match std::net::TcpListener::bind(&addr) {
+            Ok(l) => l,
+            Err(e) => {
+                eprintln!("[synthetic-radar] health endpoint disabled: bind {addr}: {e}");
+                return;
+            }
+        };
+        eprintln!("[synthetic-radar] health/metrics on http://{addr}/healthz and /metrics");
+        for stream in listener.incoming().flatten() {
+            let mut stream = stream;
+            let mut buf = [0u8; 1024];
+            let n = stream.read(&mut buf).unwrap_or(0);
+            let req = String::from_utf8_lossy(&buf[..n]);
+            let path = req.split_whitespace().nth(1).unwrap_or("/");
+            let body = if path.starts_with("/metrics") {
+                format!(
+                    "# TYPE ajar_connector_published_total counter\n\
+                     ajar_connector_published_total {}\n\
+                     # TYPE ajar_connector_publish_errors_total counter\n\
+                     ajar_connector_publish_errors_total {}\n",
+                    metrics.published.load(Ordering::Relaxed),
+                    metrics.publish_errors.load(Ordering::Relaxed),
+                )
+            } else {
+                "ok\n".to_string()
+            };
+            let resp = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\
+                 Content-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            let _ = stream.write_all(resp.as_bytes());
+        }
+    });
 }

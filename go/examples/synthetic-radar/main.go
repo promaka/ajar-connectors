@@ -31,13 +31,49 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"net/http"
 	"os"
+	"sync/atomic"
 	"time"
 
 	"github.com/nats-io/nats.go"
 
 	"github.com/promaka/ajar-connectors/go/ajarconnector"
 )
+
+// Process counters, surfaced at /metrics when AJAR_HEALTH_ADDR is set.
+var (
+	publishedTotal     atomic.Uint64
+	publishErrorsTotal atomic.Uint64
+)
+
+// spawnHealth starts a tiny health/metrics HTTP server if AJAR_HEALTH_ADDR is
+// set (e.g. 0.0.0.0:9090). GET /healthz -> liveness; GET /metrics -> Prometheus
+// text. Stdlib only — no impact unless you opt in.
+func spawnHealth() {
+	addr := os.Getenv("AJAR_HEALTH_ADDR")
+	if addr == "" {
+		return
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprintln(w, "ok")
+	})
+	mux.HandleFunc("/metrics", func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprintf(w,
+			"# TYPE ajar_connector_published_total counter\n"+
+				"ajar_connector_published_total %d\n"+
+				"# TYPE ajar_connector_publish_errors_total counter\n"+
+				"ajar_connector_publish_errors_total %d\n",
+			publishedTotal.Load(), publishErrorsTotal.Load())
+	})
+	log.Printf("[synthetic-radar] health/metrics on http://%s/healthz and /metrics", addr)
+	go func() {
+		if err := http.ListenAndServe(addr, mux); err != nil { //nolint:gosec // example endpoint
+			log.Printf("[synthetic-radar] health endpoint disabled: %v", err)
+		}
+	}()
+}
 
 // devSeed is a dev-only signing seed: 32 bytes of 0x03. It matches the default
 // Core's registered dev connector profile, so the local demo's signatures are
@@ -107,6 +143,8 @@ func main() {
 	subject := prefix + "." + sourceID
 	key := ed25519.NewKeyFromSeed(devSeed())
 
+	spawnHealth() // no-op unless AJAR_HEALTH_ADDR is set
+
 	// Connect the real NATS client (skipped in -dry-run, which needs no infra).
 	var nc *nats.Conn
 	if *dryRun {
@@ -114,7 +152,11 @@ func main() {
 	} else {
 		log.Printf("[synthetic-radar] connecting to NATS at %s", natsURL)
 		var err error
-		nc, err = nats.Connect(natsURL)
+		// Tolerate NATS not being up yet (pod ordering) and reconnect after a drop.
+		nc, err = nats.Connect(natsURL,
+			nats.RetryOnFailedConnect(true),
+			nats.MaxReconnects(-1),
+			nats.ReconnectWait(time.Second))
 		if err != nil {
 			log.Fatalf("connect NATS: %v", err)
 		}
@@ -153,12 +195,16 @@ func main() {
 			}
 			sealed := ajarconnector.Seal(canonical, key)
 
-			// 3. Publish the sealed bytes to the ingest subject.
+			// 3. Publish the sealed bytes to the ingest subject. Non-fatal: a
+			//    transport blip is logged and skipped, the connector keeps going.
 			if nc != nil {
 				if err := nc.Publish(subject, sealed); err != nil {
-					log.Fatalf("publish: %v", err)
+					log.Printf("[synthetic-radar] publish error (continuing): %v", err)
+					publishErrorsTotal.Add(1)
+					continue
 				}
 			}
+			publishedTotal.Add(1)
 
 			suffix := ""
 			if nc == nil {

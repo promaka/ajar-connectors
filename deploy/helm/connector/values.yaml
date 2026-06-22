@@ -6,8 +6,10 @@ replicaCount: 1
 
 image:
   repository: ""          # REQUIRED — your built connector image, e.g. registry.you.mil/acme-radar
-  tag: "latest"
-  digest: ""              # optional; if set, pinned by digest (recommended for prod)
+  # REQUIRED — pin a real version. Set EITHER an explicit tag (e.g. "1.0.0") OR a
+  # digest below. A floating "latest" / empty tag is rejected at render time.
+  tag: ""
+  digest: ""              # recommended for prod: pin by digest, e.g. sha256:…
   pullPolicy: IfNotPresent
 
 imagePullSecrets: []
@@ -35,6 +37,17 @@ signingSeed:
 tls:
   existingSecret: ""                # e.g. a cert-manager / kubernetes.io/tls Secret
   mountPath: "/etc/ajar/tls"
+
+# Health/metrics endpoint + Kubernetes probes. When enabled, the chart starts
+# the connector with AJAR_HEALTH_ADDR=0.0.0.0:<port> and adds liveness/readiness
+# probes hitting <livenessPath>. The reference image and the connector templates
+# expose GET /healthz and GET /metrics (Prometheus) on that address. If YOUR
+# connector image does not implement the endpoint, set enabled: false.
+health:
+  enabled: true
+  port: 9090
+  livenessPath: /healthz
+  readinessPath: /healthz
 
 # Optional egress lockdown: allow the connector to reach ONLY NATS (+ DNS),
 # mirroring Core's no-egress posture.

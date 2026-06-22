@@ -209,8 +209,38 @@ loop as-is.
 
 ## 4. Before you start: what Ajar gives you
 
-Ask your Ajar operator for these four things. The first three are a one-time
-setup on their side:
+### How onboarding actually works
+
+There is **no sign-up portal** — and you don't need one. Building the connector
+is entirely self-serve from this repository: clone it, copy a template, edit the
+~15-line mapping, build, and run it in `--dry-run` to see signed events
+immediately. Nothing below blocks you from *building*.
+
+The one thing that isn't self-serve is getting your events **accepted**. Your
+connector signs with a key only you hold; for Ajar Core to verify and store your
+events, the **operator** (whoever runs Ajar Core — typically us) has to register
+your identity on their side first. That's a one-time **handshake**, not an
+account:
+
+> **You send the operator:** your chosen `source_id`, your connector
+> **profile** JSON (§7 — it contains your *public* key and the entity types you
+> intend to emit), and the entity type(s) + any attribute schema you need.
+>
+> **The operator sends back:** confirmation your key + types are registered, plus
+> the **NATS ingest endpoint and credentials** to publish to.
+
+**Who is "the operator"?** Whoever runs Ajar Core for you — the team that pointed
+you at this repo. The contact and the exact entity types are in the **Connector
+Brief** they send you (template: [CONNECTOR_BRIEF.md](CONNECTOR_BRIEF.md)); if you
+don't have one, ask them for it.
+
+Once that handshake is done, the same connector binary you already built and
+tested goes straight to production (§8c).
+
+### The four things you end up with
+
+The handshake leaves you with these four things. The first three are a one-time
+setup on the operator's side:
 
 | You receive | What it is |
 |-------------|-----------|
@@ -227,20 +257,36 @@ setup on their side:
 ## 5. Build it
 
 Pick a language and add the SDK. (Until packages are published, depend on this
-repo via git.)
+repo via git.) **Pin the released tag `v0.1.0`, not a branch** — that's what makes
+your build reproducible and means you're never forced to upgrade (see
+[COMPATIBILITY.md](COMPATIBILITY.md)).
 
 **Rust** — in your `Cargo.toml`:
 ```toml
 [dependencies]
-ajar-connector = { git = "https://github.com/promaka/ajar-connectors", branch = "main" }
+ajar-connector = { git = "https://github.com/promaka/ajar-connectors", tag = "v0.1.0" }
 ```
 
 **Go**:
 ```bash
-go get github.com/promaka/ajar-connectors/go/ajarconnector
+go get github.com/promaka/ajar-connectors/go/ajarconnector@v0.1.0
 ```
 
-**C++** — use the CMake project under [cpp/](cpp/); link `ajar_connector`.
+**Python** — install from the repo (until it's published to PyPI):
+```bash
+# straight from GitHub, pinned to the tag:
+pip install "git+https://github.com/promaka/ajar-connectors.git@v0.1.0#subdirectory=python"
+# …or, if you've cloned the repo, an editable install:
+cd python && pip install -e .
+```
+
+**C++** — build the CMake project, then link `ajar_connector` into your own
+build. See [cpp/README.md](cpp/README.md) for the full integration guide
+(including `find_package`); the quick build is:
+```bash
+cmake -S cpp -B cpp/build -DCMAKE_BUILD_TYPE=Release
+cmake --build cpp/build -j
+```
 
 Then implement your `to_event` mapping (§3) and reuse the seal+publish loop from
 the matching example.
@@ -326,6 +372,21 @@ cargo run -p synthetic-radar
 **c) Production.** Same binary, pointed at the real ingest endpoint with your
 credentials, signing with your real key.
 
+### Production behaviour (built into the templates)
+
+The reference templates are written to survive real feeds and a flaky link — you
+don't need to add this:
+
+- **Bad input is skipped, not fatal.** A malformed or un-mappable record is
+  logged and skipped; one bad record can't take the connector down.
+- **Publish errors are non-fatal.** A NATS blip is logged and the connector keeps
+  going; the client retries the initial connection and auto-reconnects after a
+  drop.
+- **Health + metrics.** Set `AJAR_HEALTH_ADDR=0.0.0.0:9090` to expose
+  `GET /healthz` (liveness) and `GET /metrics` (Prometheus counters: published /
+  skipped / publish_errors). The Helm chart wires this and adds k8s
+  liveness/readiness probes by default (`health.enabled=true`).
+
 ## 9. Verify you're byte-compatible
 
 Before going live, run the **conformance gate** in your language. It proves your
@@ -338,6 +399,9 @@ cd rust && cargo test -p conformance --test golden_vectors
 
 # Go
 cd go && go test ./conformance/ -count=1
+
+# Python
+cd python && PYTHONPATH=. python conformance/golden_vectors.py
 
 # C++
 ctest --test-dir cpp/build

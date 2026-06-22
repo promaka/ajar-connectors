@@ -13,15 +13,26 @@ Then run for real (key from scripts/gen-connector-key.sh):
 
     AJAR_SIGNING_SEED=connector.seed AJAR_SOURCE_ID=acme-radar-1 \\
     NATS_URL=nats://nats.you.mil:4222  python examples/connector_template.py
+
+Production behaviour (built in, no edits needed):
+- A malformed or un-mappable record is logged and skipped, never fatal.
+- A NATS publish error is logged and the connector keeps going.
+- Set AJAR_HEALTH_ADDR=0.0.0.0:9090 to expose GET /healthz (liveness) and
+  GET /metrics (Prometheus counters: published / skipped / publish_errors).
 """
 
 import asyncio
 import json
 import os
 import sys
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from ajar_connector import EventBuilder, SigningKey, canonical_bytes, seal
 from ajar_connector.event_pb2 import Event
+
+# Process counters, surfaced at /metrics.
+_METRICS = {"published": 0, "skipped": 0, "publish_errors": 0}
 
 
 # ┌───────────────────────────────────────────────────────────────────────────┐
@@ -46,6 +57,43 @@ def to_event(source_id: str, r: dict) -> Event:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+def _spawn_health() -> None:
+    """Start a tiny health/metrics HTTP server if AJAR_HEALTH_ADDR is set
+    (e.g. 0.0.0.0:9090). GET /healthz -> liveness; GET /metrics -> Prometheus
+    text. Stdlib only — no impact unless you opt in."""
+    addr = os.environ.get("AJAR_HEALTH_ADDR")
+    if not addr:
+        return
+    host, _, port = addr.rpartition(":")
+
+    class _Handler(BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802
+            if self.path.startswith("/metrics"):
+                body = (
+                    "# TYPE ajar_connector_published_total counter\n"
+                    f"ajar_connector_published_total {_METRICS['published']}\n"
+                    "# TYPE ajar_connector_skipped_total counter\n"
+                    f"ajar_connector_skipped_total {_METRICS['skipped']}\n"
+                    "# TYPE ajar_connector_publish_errors_total counter\n"
+                    f"ajar_connector_publish_errors_total {_METRICS['publish_errors']}\n"
+                )
+            else:
+                body = "ok\n"
+            data = body.encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def log_message(self, *_args):  # silence per-request logging
+            pass
+
+    server = HTTPServer((host or "0.0.0.0", int(port)), _Handler)
+    print(f"[connector] health/metrics on http://{addr}/healthz and /metrics", file=sys.stderr)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+
+
 def _load_seed(dry_run: bool) -> bytes:
     path = os.environ.get("AJAR_SIGNING_SEED")
     if path:
@@ -67,6 +115,8 @@ async def main() -> None:
     subject = f"{prefix}.{source_id}"
     key = SigningKey.from_seed(_load_seed(dry_run))
 
+    _spawn_health()  # no-op unless AJAR_HEALTH_ADDR is set
+
     nc = None
     if dry_run:
         print("[connector] --dry-run: building + sealing, not publishing", file=sys.stderr)
@@ -83,12 +133,24 @@ async def main() -> None:
         line = line.strip()
         if not line:
             continue
-        record = json.loads(line)  # parse one record
-        event = to_event(source_id, record)  # EDIT maps it
+        # Resilient: a bad record is logged and skipped, never fatal.
+        try:
+            record = json.loads(line)  # parse one record
+            event = to_event(source_id, record)  # EDIT maps it
+        except Exception as e:  # noqa: BLE001 — one bad input must not kill the loop
+            print(f"[connector] skip: bad record: {e}", file=sys.stderr)
+            _METRICS["skipped"] += 1
+            continue
         canonical = canonical_bytes(event)
         sealed = seal(canonical, key)  # sign it
         if nc is not None:
-            await nc.publish(subject, sealed)  # publish it
+            try:
+                await nc.publish(subject, sealed)  # publish it
+            except Exception as e:  # noqa: BLE001 — keep running on a transport blip
+                print(f"[connector] publish error (continuing): {e}", file=sys.stderr)
+                _METRICS["publish_errors"] += 1
+                continue
+        _METRICS["published"] += 1
         tag = "" if nc is not None else "  [dry-run]"
         print(f"{event.id} -> {subject} ({len(sealed)} sealed bytes){tag}")
 

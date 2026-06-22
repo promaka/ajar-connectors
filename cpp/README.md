@@ -1,0 +1,119 @@
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+# ajar-connector (C++)
+
+The C++ build of the Ajar connector SDK. Same contract, same canonical bytes,
+same golden vectors as the Rust/Go/Python SDKs — proven by the conformance gate
+([conformance/golden_vectors.cpp](conformance/golden_vectors.cpp)). Crypto is
+vendored (Monocypher Ed25519), so there is **no system crypto dependency**.
+
+The public API is one header: [`include/ajar/connector.hpp`](include/ajar/connector.hpp)
+— `EventBuilder`, `canonical_bytes`, `seal`, `SigningKey`, `ConnectorProfile`.
+
+## Prerequisites
+
+- CMake ≥ 3.20 and a C++17 compiler.
+- Protocol Buffers (compiler + runtime). The desktop build generates C++ types
+  from the vendored `event.proto` at configure time.
+
+```bash
+# Debian/Ubuntu
+sudo apt-get install -y cmake build-essential protobuf-compiler libprotobuf-dev
+# macOS
+brew install cmake protobuf
+```
+
+(The embedded path uses vendored nanopb and needs no libprotobuf — see below.)
+
+## Build & test
+
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j
+ctest --test-dir build --output-on-failure   # runs the conformance + round-trip gates
+```
+
+A green `ctest` is your proof of byte-compatibility: the build reproduces every
+hash in [`../vendor/contract/vectors.json`](../vendor/contract/vectors.json).
+
+## Use it in your own connector
+
+### Option A — `find_package` (recommended for separate projects)
+
+Install the SDK once, then consume it idiomatically:
+
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/opt/ajar
+cmake --build build -j
+cmake --install build
+```
+
+In your project's `CMakeLists.txt`:
+
+```cmake
+find_package(ajar_connector CONFIG REQUIRED)   # add /opt/ajar to CMAKE_PREFIX_PATH
+add_executable(my_connector main.cpp)
+target_link_libraries(my_connector PRIVATE ajar_connector::ajar_connector)
+```
+
+### Option B — `add_subdirectory` (vendoring this repo into yours)
+
+No install step; point at the `cpp/` directory:
+
+```cmake
+add_subdirectory(third_party/ajar-connectors/cpp)
+target_link_libraries(my_connector PRIVATE ajar_connector::ajar_connector)
+```
+
+Both options expose the **same** target name, `ajar_connector::ajar_connector`.
+
+## Minimal connector
+
+```cpp
+#include "ajar/connector.hpp"
+#include <array>
+
+int main() {
+  // STEP 1 — map your record into a canonical Event (the only Ajar-specific code).
+  ajar::Event event = ajar::EventBuilder("acme-radar-1", "mim:aircraft")
+                          .new_id()                  // UUIDv7
+                          .now()                     // RFC 3339 observation time
+                          .location(26.4, 50.9, 11000.0)
+                          .confidence(0.9)
+                          .build();                  // throws ajar::BuildError on bad input
+
+  // STEP 2+3 — canonical encode and seal with your key.
+  std::string canonical = ajar::canonical_bytes(event);
+  std::array<std::uint8_t, 32> seed = load_seed();   // 32 bytes from your secret store
+  ajar::SigningKey key = ajar::SigningKey::from_seed(seed);
+  std::vector<std::uint8_t> sealed = ajar::seal(canonical, key);  // 64-byte sig ++ canonical
+
+  // STEP 4 — publish `sealed` to ajar.ingest.<source_id> (see the streaming example).
+}
+```
+
+See [examples/first_connector.cpp](examples/first_connector.cpp) for a complete
+end-to-end build, and [examples/synthetic_radar.cpp](examples/synthetic_radar.cpp)
+for a streaming connector that publishes to NATS (built only when the optional
+`cnats` client is found).
+
+## Embedded / no-heap target
+
+For radar or effector controllers without libprotobuf, the `embedded/` path uses
+vendored **nanopb** and links no system protobuf. It ships its own conformance
+gate (`embedded_conformance`) that reproduces the same golden vectors. Build it
+with the same CMake invocation above; regenerate the nanopb types with
+`scripts/gen-nanopb.sh` if the contract changes.
+
+## Where things live
+
+| | |
+|---|---|
+| Public API | [include/ajar/connector.hpp](include/ajar/connector.hpp) |
+| Implementation | [src/](src/) |
+| Vendored crypto / nanopb (with provenance) | [vendor/](vendor/), [vendor/PROVENANCE.md](vendor/PROVENANCE.md) |
+| Conformance gate | [conformance/golden_vectors.cpp](conformance/golden_vectors.cpp) |
+| Examples | [examples/](examples/) |
+
+For the cross-language picture and the full vendor onboarding flow, see
+[../ONBOARDING.md](../ONBOARDING.md) and [../HOW_IT_WORKS.md](../HOW_IT_WORKS.md).
+</content>
