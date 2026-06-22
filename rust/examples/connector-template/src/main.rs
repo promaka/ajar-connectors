@@ -90,14 +90,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         None
     } else {
         eprintln!("[connector] connecting to NATS at {nats_url}");
-        // retry_on_initial_connect: tolerate NATS not being up yet (pod ordering),
-        // and async-nats auto-reconnects after a later drop.
-        Some(
-            async_nats::ConnectOptions::new()
-                .retry_on_initial_connect()
-                .connect(&nats_url)
-                .await?,
-        )
+        Some(nats_connect(&nats_url).await?)
     };
     eprintln!("[connector] source_id={source_id}  subject={subject}");
 
@@ -149,6 +142,30 @@ async fn main() -> Result<(), Box<dyn Error>> {
         );
     }
     Ok(())
+}
+
+/// Connects to NATS, enabling **mTLS** when `AJAR_TLS_CA` / `AJAR_TLS_CERT` /
+/// `AJAR_TLS_KEY` are all set — the production path: the operator issues these
+/// (client-cert CN = your `source_id`) and the Helm chart mounts them under
+/// `/etc/ajar/tls`. With them unset, connects plaintext for local dev.
+/// `retry_on_initial_connect` tolerates NATS not being up yet and auto-reconnects.
+async fn nats_connect(url: &str) -> Result<async_nats::Client, async_nats::ConnectError> {
+    let mut opts = async_nats::ConnectOptions::new().retry_on_initial_connect();
+    match (
+        env::var("AJAR_TLS_CA"),
+        env::var("AJAR_TLS_CERT"),
+        env::var("AJAR_TLS_KEY"),
+    ) {
+        (Ok(ca), Ok(cert), Ok(key)) if !ca.is_empty() && !cert.is_empty() && !key.is_empty() => {
+            eprintln!("[connector] mTLS enabled (client cert = source identity)");
+            opts = opts
+                .require_tls(true)
+                .add_root_certificates(ca.into())
+                .add_client_certificate(cert.into(), key.into());
+        }
+        _ => eprintln!("[connector] no AJAR_TLS_* set — connecting without TLS (dev only)"),
+    }
+    opts.connect(url).await
 }
 
 /// Loads your 32-byte Ed25519 seed from the file named by `AJAR_SIGNING_SEED`.

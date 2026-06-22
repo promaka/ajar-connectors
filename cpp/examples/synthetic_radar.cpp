@@ -112,7 +112,25 @@ int main(int argc, char** argv) {
     std::fprintf(stderr, "[synthetic-radar] --dry-run: building + sealing events, not publishing\n");
   } else {
     std::fprintf(stderr, "[synthetic-radar] connecting to NATS at %s\n", nats_url.c_str());
-    natsStatus st = natsConnection_ConnectTo(&conn, nats_url.c_str());
+    natsOptions* opts = nullptr;
+    natsOptions_Create(&opts);
+    natsOptions_SetURL(opts, nats_url.c_str());
+    // mTLS when AJAR_TLS_CA/CERT/KEY are all set (production; client-cert
+    // CN = source_id, mounted by the Helm chart under /etc/ajar/tls). Unset ->
+    // plaintext for local dev.
+    const char* ca = std::getenv("AJAR_TLS_CA");
+    const char* cert = std::getenv("AJAR_TLS_CERT");
+    const char* keyf = std::getenv("AJAR_TLS_KEY");
+    if (ca && *ca && cert && *cert && keyf && *keyf) {
+      std::fprintf(stderr, "[synthetic-radar] mTLS enabled (client cert = source identity)\n");
+      natsOptions_SetSecure(opts, true);
+      natsOptions_LoadCATrustedCertificates(opts, ca);
+      natsOptions_LoadCertificatesChain(opts, cert, keyf);
+    } else {
+      std::fprintf(stderr, "[synthetic-radar] no AJAR_TLS_* set — connecting without TLS (dev only)\n");
+    }
+    natsStatus st = natsConnection_Connect(&conn, opts);
+    natsOptions_Destroy(opts);
     if (st != NATS_OK) {
       std::fprintf(stderr, "connect NATS: %s\n", natsStatus_GetText(st));
       return 1;

@@ -20,7 +20,8 @@ the signing and encoding; **you write one mapping function.**
 | **source_id** | `<your-source-id, e.g. acme-radar-1>` |
 | **entity type(s)** you may emit | `<e.g. mim:aircraft>` |
 | **attributes** (if any) for those types | `<e.g. none, or: heading (deg), speed (kn)>` |
-| **NATS endpoint** to publish to | `<e.g. tls://nats.ourgrid.example:4222>` |
+| **NATS endpoint** to publish to | `<e.g. tls://nats.ourgrid.example:443>` |
+| **mTLS materials** (we issue these) | `<CA PEM + your client cert (CN=source_id) + key>` |
 | **contact** for questions / your public key | `<e.g. connectors@our-org.example>` |
 | **SDK version to pin** | `v0.1.0` |
 
@@ -44,8 +45,14 @@ the signing and encoding; **you write one mapping function.**
    echo '<one sample record as JSON>' | <run the template> --dry-run
    ```
    You should see a sealed event printed.
-5. **Go live:** run the same binary pointed at the NATS endpoint above with your
-   real seed. Done — and you never need to upgrade ([why](COMPATIBILITY.md)).
+5. **Go live:** run the same binary pointed at the NATS endpoint above, with your
+   real seed and the mTLS env vars we issue:
+   ```bash
+   AJAR_TLS_CA=ca.pem AJAR_TLS_CERT=client.pem AJAR_TLS_KEY=client.key \
+   AJAR_SIGNING_SEED=<your>.seed AJAR_SOURCE_ID=<your-source-id> \
+   NATS_URL=<tls endpoint above>  <run your connector>
+   ```
+   Done — and you never need to upgrade ([why](COMPATIBILITY.md)).
 
 ## The rules that matter (the SDK enforces them for you)
 

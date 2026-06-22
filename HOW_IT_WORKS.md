@@ -431,8 +431,11 @@ a reference Docker image and a Helm chart ([deploy/](deploy/)).
   not the value. The connector reads 32 bytes from that file. The seed never
   appears in env, logs, or shell history. (The Helm template *fails to render* if
   no image or key is configured — fail-fast, not fail-open.)
-- **Transport** — optional mTLS to NATS via a mounted cert Secret; an optional
-  egress-only NetworkPolicy restricts the pod to NATS + DNS.
+- **Transport** — mTLS to NATS: the templates read `AJAR_TLS_CA` /
+  `AJAR_TLS_CERT` / `AJAR_TLS_KEY` (client-cert CN = `source_id`) and present a
+  client certificate; unset → plaintext for local dev. The chart mounts these
+  from a Secret at `/etc/ajar/tls`. An optional egress-only NetworkPolicy
+  restricts the pod to NATS + DNS.
 - **Resilience + health** — the templates skip bad records and survive NATS blips
   (non-fatal publish, auto-reconnect) rather than crashing. Set
   `AJAR_HEALTH_ADDR` to expose `GET /healthz` and `GET /metrics`; the chart wires

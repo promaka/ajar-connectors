@@ -157,13 +157,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         None
     } else {
         eprintln!("[synthetic-radar] connecting to NATS at {nats_url}");
-        // Tolerate NATS not being up yet (pod ordering); auto-reconnect after a drop.
-        Some(
-            async_nats::ConnectOptions::new()
-                .retry_on_initial_connect()
-                .connect(&nats_url)
-                .await?,
-        )
+        Some(nats_connect(&nats_url).await?)
     };
 
     eprintln!(
@@ -282,6 +276,28 @@ async fn main() -> Result<(), Box<dyn Error>> {
     }
 
     Ok(())
+}
+
+/// Connects to NATS, enabling **mTLS** when `AJAR_TLS_CA` / `AJAR_TLS_CERT` /
+/// `AJAR_TLS_KEY` are all set (production; client-cert CN = `source_id`, mounted
+/// by the Helm chart under `/etc/ajar/tls`). Unset → plaintext for local dev.
+async fn nats_connect(url: &str) -> Result<async_nats::Client, async_nats::ConnectError> {
+    let mut opts = async_nats::ConnectOptions::new().retry_on_initial_connect();
+    match (
+        env::var("AJAR_TLS_CA"),
+        env::var("AJAR_TLS_CERT"),
+        env::var("AJAR_TLS_KEY"),
+    ) {
+        (Ok(ca), Ok(cert), Ok(key)) if !ca.is_empty() && !cert.is_empty() && !key.is_empty() => {
+            eprintln!("[synthetic-radar] mTLS enabled (client cert = source identity)");
+            opts = opts
+                .require_tls(true)
+                .add_root_certificates(ca.into())
+                .add_client_certificate(cert.into(), key.into());
+        }
+        _ => eprintln!("[synthetic-radar] no AJAR_TLS_* set — connecting without TLS (dev only)"),
+    }
+    opts.connect(url).await
 }
 
 /// Spawns a tiny health/metrics HTTP endpoint when `AJAR_HEALTH_ADDR` is set

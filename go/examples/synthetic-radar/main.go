@@ -153,10 +153,21 @@ func main() {
 		log.Printf("[synthetic-radar] connecting to NATS at %s", natsURL)
 		var err error
 		// Tolerate NATS not being up yet (pod ordering) and reconnect after a drop.
-		nc, err = nats.Connect(natsURL,
+		opts := []nats.Option{
 			nats.RetryOnFailedConnect(true),
 			nats.MaxReconnects(-1),
-			nats.ReconnectWait(time.Second))
+			nats.ReconnectWait(time.Second),
+		}
+		// mTLS when AJAR_TLS_CA/CERT/KEY are all set (production; client-cert
+		// CN = source_id, mounted by the Helm chart under /etc/ajar/tls). Unset
+		// -> plaintext for local dev.
+		if ca, cert, key := os.Getenv("AJAR_TLS_CA"), os.Getenv("AJAR_TLS_CERT"), os.Getenv("AJAR_TLS_KEY"); ca != "" && cert != "" && key != "" {
+			log.Println("[synthetic-radar] mTLS enabled (client cert = source identity)")
+			opts = append(opts, nats.ClientCert(cert, key), nats.RootCAs(ca))
+		} else {
+			log.Println("[synthetic-radar] no AJAR_TLS_* set — connecting without TLS (dev only)")
+		}
+		nc, err = nats.Connect(natsURL, opts...)
 		if err != nil {
 			log.Fatalf("connect NATS: %v", err)
 		}

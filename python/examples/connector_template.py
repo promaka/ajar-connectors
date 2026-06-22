@@ -94,6 +94,24 @@ def _spawn_health() -> None:
     threading.Thread(target=server.serve_forever, daemon=True).start()
 
 
+def _nats_tls_opts() -> dict:
+    """mTLS when AJAR_TLS_CA / AJAR_TLS_CERT / AJAR_TLS_KEY are all set (the
+    production path — client-cert CN = source_id, mounted by the Helm chart under
+    /etc/ajar/tls). Unset -> plaintext for local dev."""
+    ca = os.environ.get("AJAR_TLS_CA")
+    cert = os.environ.get("AJAR_TLS_CERT")
+    key = os.environ.get("AJAR_TLS_KEY")
+    if ca and cert and key:
+        import ssl
+
+        ctx = ssl.create_default_context(purpose=ssl.Purpose.SERVER_AUTH, cafile=ca)
+        ctx.load_cert_chain(certfile=cert, keyfile=key)
+        print("[connector] mTLS enabled (client cert = source identity)", file=sys.stderr)
+        return {"tls": ctx}
+    print("[connector] no AJAR_TLS_* set — connecting without TLS (dev only)", file=sys.stderr)
+    return {}
+
+
 def _load_seed(dry_run: bool) -> bytes:
     path = os.environ.get("AJAR_SIGNING_SEED")
     if path:
@@ -124,7 +142,7 @@ async def main() -> None:
         import nats  # transport dep — only needed for a real run
 
         print(f"[connector] connecting to NATS at {nats_url}", file=sys.stderr)
-        nc = await nats.connect(nats_url)
+        nc = await nats.connect(nats_url, **_nats_tls_opts())
     print(f"[connector] source_id={source_id}  subject={subject}", file=sys.stderr)
 
     # Your feed: by default, newline-delimited JSON on stdin. Swap this loop for

@@ -386,6 +386,16 @@ don't need to add this:
   `GET /healthz` (liveness) and `GET /metrics` (Prometheus counters: published /
   skipped / publish_errors). The Helm chart wires this and adds k8s
   liveness/readiness probes by default (`health.enabled=true`).
+- **mTLS to NATS.** A production NATS authenticates connectors with a client
+  certificate. Set all three and the connector presents it; leave them unset for
+  local plaintext dev:
+  - `AJAR_TLS_CA` — the CA (PEM) that signs the NATS server cert,
+  - `AJAR_TLS_CERT` — your client certificate (its CN is your `source_id`),
+  - `AJAR_TLS_KEY` — your client private key.
+
+  Your operator issues the cert/key alongside your `source_id`; use a `tls://`
+  endpoint. The Helm chart mounts these from a Secret at `/etc/ajar/tls` and sets
+  the env vars for you (`tls.existingSecret`).
 
 ## 9. Verify you're byte-compatible
 
