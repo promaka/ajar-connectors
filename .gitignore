@@ -9,6 +9,20 @@ cpp/build
 *.egg-info
 .pytest_cache
 
+# Secrets — never commit a connector's signing material or any key/cert.
+# gen-connector-key.sh writes <name>.key and <name>.seed into the working dir.
+*.key
+*.seed
+*.pem
+*.p12
+*.pfx
+*.crt
+*.cer
+*.der
+.env
+.env.*
+*.creds
+
 # Cargo.lock is committed on purpose: byte-compatibility is the product, so we
 # pin the exact dependency graph the golden vectors were verified against.
 

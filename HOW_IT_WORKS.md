@@ -44,7 +44,7 @@ key** (your identity). That's the entire trust surface.
 |-------|-------------|---------------|---------|
 | **Your system** | you (vendor) | your data | emits native records |
 | **Your connector** | you (vendor), at the edge | the **private** signing key | map → sign → publish |
-| **NATS** | whoever you agree on | nothing secret | dumb, fast message bus |
+| **NATS** | whoever you agree on | nothing secret | a simple, fast message bus |
 | **Ajar Core** | the operator (at C2/hub) | your **public** key | verify → govern → store |
 
 The connector is the *only* piece you build. The SDK in this repo gives you the
