@@ -17,9 +17,12 @@ ajar-connector.workspace = true
 # models the pattern a vendor copies, not raw protocol plumbing.
 #
 # default-features = false: a plain core-NATS publisher needs none of jetstream/
-# service/kv/object-store/tls/nkeys. Disabling them also drops async-nats's
+# service/kv/object-store/nkeys. Disabling them also drops async-nats's
 # optional `time` dep, which (with parsing) otherwise hits an E0119 coherence
 # clash with its own blanket From impl on this toolchain.
-async-nats = { version = "0.49", default-features = false }
+# `ring`: re-add ONLY the rustls crypto provider — REQUIRED for TLS/mTLS to NATS
+# (it ships in the defaults we dropped; without it, a TLS connect panics with
+# "Could not automatically determine the process-level CryptoProvider").
+async-nats = { version = "0.49", default-features = false, features = ["ring"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
 bytes = "1"

@@ -113,6 +113,9 @@ func (t *track) advance() {
 	}
 }
 
+// EDIT (data source): replace these synthetic tracks + the advance() loop in
+// main() with reads from YOUR feed (socket / file / API / serial), one record
+// per iteration.
 func initialTracks() []*track {
 	const pi = math.Pi
 	return []*track{
@@ -184,10 +187,10 @@ func main() {
 		for _, t := range tracks {
 			t.advance()
 
-			// 1. Normalize -> canonical Event. A real connector parses a native
-			//    radar frame here; we synthesise the track. Attributes MUST be
-			//    empty: the seed mim:aircraft has no attribute schema, so any
-			//    attribute is rejected as UnknownAttribute.
+			// EDIT (the mapping): the only Ajar-specific code you write — map one
+			// of YOUR records into an Event. Use the entity_type(s) your operator
+			// registered; add .Attribute(k, v) ONLY for attributes that type's
+			// ontology schema declares (else Core rejects it as UnknownAttribute).
 			event, err := ajarconnector.NewEventBuilder(sourceID, "mim:aircraft").
 				NewID(). // fresh UUIDv7 per event
 				Now().

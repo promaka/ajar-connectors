@@ -150,6 +150,10 @@ int main(int argc, char** argv) {
   // renders as distinct air/sea/ground icons in ATAK/iTAK.
   // A mixed multi-domain, mixed-affiliation picture. One track is left unknown
   // (empty affiliation) on purpose — honest: a raw sensor hit may carry no IFF.
+  // ===== EDIT (data source) =====================================================
+  // Replace this synthetic track list + the t.advance() loop below with reads from
+  // YOUR feed (a socket / file / API / serial port), one record per iteration.
+  // ==============================================================================
   std::vector<Track> tracks = {
       // Air (alt in metres) — fastest.
       {"mim:aircraft", "friendly", "AJX-01", 26.4, 50.9, 11000, 0.3 * M_PI, 0.020},
@@ -179,10 +183,12 @@ int main(int argc, char** argv) {
     for (Track& t : tracks) {
       t.advance();
 
-      // 1. Normalize -> canonical Event. A real connector parses a native radar
-      //    frame here; we synthesise the track. Attributes MUST be empty: the
-      //    seed mim:aircraft has no attribute schema, so any attribute is
-      //    rejected as UnknownAttribute.
+      // ===== EDIT (the mapping) ================================================
+      // 1. Normalize -> canonical Event. This is the only Ajar-specific code you
+      //    write: map one of YOUR records into an Event. Use the entity_type(s)
+      //    your operator registered, and add .attribute(k, v) ONLY for attributes
+      //    that type's ontology schema declares (else Core rejects it).
+      // =========================================================================
       ajar::Event event;
       try {
         ajar::EventBuilder builder(source_id, t.entity_type);
