@@ -98,6 +98,16 @@ else()
                  "(install nats.c / `brew install cnats` to build it)")
 endif()
 
+# Minimal copy-me template (the C++ counterpart of rust/examples/connector-template).
+# Built ALWAYS so `--dry-run` works with no system NATS client; the publish path is
+# compiled in only when cnats is present (AJAR_WITH_NATS).
+add_executable(connector_template examples/connector_template.cpp)
+target_link_libraries(connector_template PRIVATE ajar_connector)
+if(cnats_FOUND)
+  target_compile_definitions(connector_template PRIVATE AJAR_WITH_NATS)
+  target_link_libraries(connector_template PRIVATE cnats::nats)
+endif()
+
 # --- Embedded (nanopb, no-heap) path -----------------------------------------
 # The nanopb runtime + generated static types. Links NO libprotobuf: this is the
 # radar/effector-controller path. event.pb.c is committed (regenerate with

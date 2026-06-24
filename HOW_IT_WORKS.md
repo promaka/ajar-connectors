@@ -211,11 +211,11 @@ and correctly signed.
 |----------|-----------|---------------|
 | **Rust** | [rust/examples/connector-template/](rust/examples/connector-template/) | `MyRecord` struct (`EDIT 1`) + `to_event()` (`EDIT 2`) + the stdin loop |
 | **Python** | [python/examples/connector_template.py](python/examples/connector_template.py) | the one `to_event()` function (marked `EDIT`) + the stdin loop |
-| **Go** | [go/examples/synthetic-radar/](go/examples/synthetic-radar/) | the mapping in `main.go` (build the `Event` from your record) + the source loop |
-| **C++** | [cpp/examples/first_connector.cpp](cpp/examples/first_connector.cpp) / [synthetic_radar.cpp](cpp/examples/synthetic_radar.cpp) | the `normalize()` / event-build code + the source loop |
+| **Go** | [go/examples/connector-template/](go/examples/connector-template/) | `MyRecord` struct (`EDIT 1`) + `toEvent()` (`EDIT 2`) + the stdin loop |
+| **C++** | [cpp/examples/connector_template.cpp](cpp/examples/connector_template.cpp) | `MyRecord` + `parse_record()` (`EDIT 1`) + `to_event()` (`EDIT 2`) + the stdin loop |
 
-(Rust and Python ship dedicated copy-me templates with `EDIT` markers; Go and C++
-vendors start from the matching example and edit the equivalent build block.)
+(All four languages ship a dedicated minimal copy-me `connector-template` with the
+same `EDIT 1` / `EDIT 2` spots.)
 
 **5. Generate your key and declare your profile** — once. The seal/key mechanics
 are §6–§7 below; the exact commands (`scripts/gen-connector-key.sh`, then build a
@@ -490,7 +490,7 @@ produce exactly what step 8 will accept.
 | Public API surface | [rust/ajar-connector/src/lib.rs](rust/ajar-connector/src/lib.rs) |
 | Golden vectors + conformance | [vendor/contract/vectors.json](vendor/contract/vectors.json), `*/conformance/` |
 | Contract divergence check | [scripts/check-contract.sh](scripts/check-contract.sh) |
-| Copy-me templates | [rust/examples/connector-template/](rust/examples/connector-template/), [python/examples/connector_template.py](python/examples/connector_template.py) |
+| Copy-me templates (all 4 languages) | [rust](rust/examples/connector-template/), [python](python/examples/connector_template.py), [go](go/examples/connector-template/), [cpp](cpp/examples/connector_template.cpp) |
 | Deployment | [deploy/helm/connector/](deploy/helm/connector/), [deploy/docker/](deploy/docker/) |
 
 For "what do I type to get started," go to [ONBOARDING.md](ONBOARDING.md).
