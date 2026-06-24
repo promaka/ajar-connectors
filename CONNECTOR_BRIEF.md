@@ -1,9 +1,12 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Build an Ajar connector — the brief
 
-*This is the short version. It's the page an operator sends a vendor to get
-started. Operator: fill the **`<…>`** blanks before sending. Vendor: the whole
-job is ~15 lines of code and an afternoon.*
+*This is the short version — a **template**. Ajar is run by many independent
+operators (sovereigns, programmes, demos), and each runs their own Core, so the
+values below are **specific to the deployment you're connecting to**. The
+**operator who onboarded you** fills the `<…>` blanks in a copy of this page and
+sends it to you; if a value is missing, ask them. Vendor: the whole job is ~15
+lines of code and an afternoon.*
 
 ---
 
