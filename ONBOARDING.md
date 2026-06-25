@@ -239,6 +239,13 @@ you at this repo. The contact and the exact entity types are in the **Connector
 Brief** they send you (template: [CONNECTOR_BRIEF.md](CONNECTOR_BRIEF.md)); if you
 don't have one, ask them for it.
 
+> **Your connector stays private.** Its source — your record format and mapping
+> logic — never leaves your environment; it is not published here or anywhere. The
+> only things you hand over are your connector's **public** key and the agreed
+> **data contract** (entity types/attributes), and those go **privately to your
+> operator** (the team or sovereign running Ajar Core) — not to this repository or
+> any third party.
+
 Once that handshake is done, the same connector binary you already built and
 tested goes straight to production (§8c).
 

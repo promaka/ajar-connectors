@@ -13,8 +13,6 @@ Report privately via **GitHub private vulnerability reporting** — the
 **Security → Report a vulnerability** tab on this repository. (Maintainers:
 enable it under Settings → Code security → Private vulnerability reporting.)
 
-<!-- Optional: add a security email here if you prefer, e.g. security@your-org. -->
-
 Please include:
 
 - the affected component (language SDK, contract, deploy chart) and version /
