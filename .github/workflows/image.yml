@@ -44,7 +44,7 @@ jobs:
             org.opencontainers.image.description=REFERENCE / EXAMPLE ONLY — not for production
             ajar.reference-only=true
       - id: build
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: deploy/docker/Dockerfile
