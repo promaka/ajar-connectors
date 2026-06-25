@@ -33,28 +33,24 @@ the signing and encoding; **you write one mapping function.**
 1. **Copy a starting point** for your language and pin the SDK to `v0.1.0`:
    - **Rust** — copy [rust/examples/connector-template](rust/examples/connector-template/)
    - **Python** — copy [python/examples/connector_template.py](python/examples/connector_template.py)
-   - **Go** — copy [go/examples/synthetic-radar](go/examples/synthetic-radar/)
-   - **C++** — copy [cpp/examples/synthetic_radar.cpp](cpp/examples/synthetic_radar.cpp); build it with CMake per **[cpp/README.md](cpp/README.md)**
-2. **Edit the mapping:** describe *your* record and map it to an event — use the
-   **entity type** above, and add an `.attribute(k, v)` only for the attributes
-   listed above.
-   - Rust / Python: the two spots marked **`EDIT 1`** / **`EDIT 2`**.
-   - Go / C++: the event-build block (and swap the demo data loop for your feed) —
-     the spots marked **`EDIT`** in the example.
+   - **Go** — copy [go/examples/connector-template](go/examples/connector-template/)
+   - **C++** — copy [cpp/examples/connector_template.cpp](cpp/examples/connector_template.cpp); build with CMake per **[cpp/README.md](cpp/README.md)**
+2. **Edit two things:** the shape of *your* record (**`EDIT 1`**) and the mapping
+   to an event (**`EDIT 2`**) — use the **entity type** above, and add an
+   `.attribute(k, v)` only for the attributes listed above. Both spots are marked
+   in every template.
 3. **Make a key** and send us the **public** half:
    ```bash
    scripts/gen-connector-key.sh <your-source-id>
    ```
    Send us the printed public key (we register it); keep the `.seed` file secret.
 4. **See it work, no infra** (`--dry-run` builds + seals + prints, no NATS, no
-   mTLS needed):
+   mTLS needed) — every template reads one record per line on stdin:
    ```bash
-   # Rust / Python read your records on stdin:
-   echo '<one sample record as JSON>' | <run the template> --dry-run
-   # Go / C++ examples generate their own sample tracks:
-   <run the example> --dry-run        # Go uses -dry-run
+   echo '<one sample record>' | <run the template> --dry-run   # Go uses -dry-run
    ```
-   You should see sealed events printed.
+   Rust/Python/Go read JSON; the C++ template reads `lat lon alt_m quality` —
+   swap in your own parser. You should see sealed events printed.
 5. **Go live:** run the same binary pointed at the NATS endpoint above, with your
    real seed and the mTLS env vars we issue:
    ```bash

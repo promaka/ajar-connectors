@@ -120,10 +120,19 @@ shows the full cnats path: when `AJAR_TLS_CA` / `AJAR_TLS_CERT` / `AJAR_TLS_KEY`
 are set it calls `natsOptions_SetSecure(true)`, `LoadCATrustedCertificates(ca)`,
 and `LoadCertificatesChain(cert, key)` against a `tls://<host>:443` endpoint.
 
-See [examples/first_connector.cpp](examples/first_connector.cpp) for a complete
-end-to-end build, and [examples/synthetic_radar.cpp](examples/synthetic_radar.cpp)
-for a streaming connector that publishes to NATS (built only when the optional
-`cnats` client is found).
+**Fastest start: copy [examples/connector_template.cpp](examples/connector_template.cpp)**
+— the minimal copy-me template. Edit the two spots marked `EDIT 1` (your record)
+and `EDIT 2` (the mapping), build, and run:
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j
+echo "26.4 50.9 11000 0.9" | ./build/connector_template --dry-run
+```
+It builds even without `cnats` (dry-run); the NATS/mTLS publish path is compiled
+in automatically when `cnats` is present.
+
+See also [examples/first_connector.cpp](examples/first_connector.cpp) for a
+complete end-to-end build, and [examples/synthetic_radar.cpp](examples/synthetic_radar.cpp)
+for a fuller streaming connector.
 
 ## Embedded / no-heap target
 
