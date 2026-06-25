@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: Apache-2.0
+# Default reviewers for all changes.
+*                       @adamPromaka
+
+# The wire contract is byte-pinned and shared across all four SDKs. Changes here
+# affect compatibility and require extra scrutiny.
+/vendor/contract/       @adamPromaka
+/scripts/contract.sha256 @adamPromaka

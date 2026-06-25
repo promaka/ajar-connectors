@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: Apache-2.0
+blank_issues_enabled: false
+contact_links:
+  - name: Onboarding and integration questions
+    url: https://github.com/promaka/ajar-connectors/blob/main/ONBOARDING.md
+    about: Building a connector? Start with the onboarding guide and HOW_IT_WORKS.
+  - name: Security disclosures
+    url: https://github.com/promaka/ajar-connectors/blob/main/SECURITY.md
+    about: Do not open public issues for vulnerabilities. Use private reporting.
