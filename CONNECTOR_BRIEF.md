@@ -16,9 +16,10 @@ A small program that turns your data into a **signed event** and publishes it to
 a message bus (NATS). Ajar verifies your signature and stores it. The SDK does
 the signing and encoding; **you write one mapping function.**
 
-Your connector's code stays yours — it's never published. The only things you
-send us are your connector's **public** key and the **data contract** below; they
-go to us (your operator) privately, not to any public repository.
+You keep your connector's source private; building a connector never requires
+publishing your code. The only things you provide are your connector's **public**
+key and the **data contract** below — supplied to us (your operator) directly, and
+never added to any public repository.
 
 ## What we (your operator) are giving you
 
