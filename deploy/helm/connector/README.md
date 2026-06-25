@@ -51,7 +51,7 @@ image built from `deploy/docker/Dockerfile` works with no changes.
 ## Security posture (matches Core)
 
 - `podSecurityContext`: `runAsNonRoot: true`, **`runAsUser: 65532`**
-  (⚠️ required — distroless's `nonroot` is a non-numeric user, so without an
+  (required — distroless's `nonroot` is a non-numeric user, so without an
   explicit numeric uid the pod fails `CreateContainerConfigError`),
   `seccompProfile: RuntimeDefault`.
 - `securityContext`: `allowPrivilegeEscalation: false`, `readOnlyRootFilesystem:

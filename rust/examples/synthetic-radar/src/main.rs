@@ -167,7 +167,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     );
     if inject_rejected {
         eprintln!(
-            "[synthetic-radar] ⚠ INJECTING 1 known-bad track per sweep (label RJX-666): a\n\
+            "[synthetic-radar] NOTE: INJECTING 1 known-bad track per sweep (label RJX-666): a\n\
              [synthetic-radar]   well-formed, validly-SIGNED mim:aircraft carrying an undeclared\n\
              [synthetic-radar]   attribute. Ajar Core MUST reject it (UnknownAttribute) — if any\n\
              [synthetic-radar]   are ACCEPTED, that's a boundary failure. Watch Core's audit/reject log."

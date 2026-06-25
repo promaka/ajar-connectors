@@ -24,7 +24,7 @@ event with the SDK's `EventBuilder`, **seals** it, and publishes the sealed
 bytes to NATS subject `ajar.ingest.<source>` via the real
 [nats.c](https://github.com/nats-io/nats.c) (`cnats`) client.
 
-> ⚠️ **Example only.** Carries a **dev-only** signing seed (32 bytes of `0x03`)
+> **Example only.** Carries a **dev-only** signing seed (32 bytes of `0x03`)
 > and picks a transport (NATS). The SDK library stays transport-free — the NATS
 > client is linked into this example only. The `synthetic_radar` target is built
 > **only if cnats is found** (`brew install cnats`, or build nats.c from source),

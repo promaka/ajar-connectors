@@ -14,7 +14,7 @@ event with the SDK's `EventBuilder`, **seals** it, and publishes the sealed
 bytes to NATS subject `ajar.ingest.<source>` via the real
 [`nats.go`](https://github.com/nats-io/nats.go) client.
 
-> ⚠️ **Example only.** Carries a **dev-only** signing seed (32 bytes of `0x03`)
+> **Example only.** Carries a **dev-only** signing seed (32 bytes of `0x03`)
 > and picks a transport (NATS). The `ajarconnector` package stays minimal and
 > transport-free — the NATS client lives here. The examples are a **separate Go
 > module** (`go/examples/`, with `replace … => ../`) so `nats.go` never lands in

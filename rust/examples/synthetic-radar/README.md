@@ -15,7 +15,7 @@ the event with the SDK's `EventBuilder`, **sealing** it, and publishing the
 sealed bytes to NATS subject `ajar.ingest.<source>`. The volume is configurable;
 it streams **thousands of records a minute** (default ~3000/min, 50 aircraft).
 
-> ⚠️ **Example only.** This carries a **dev-only** signing seed (32 bytes of
+> **Example only.** This carries a **dev-only** signing seed (32 bytes of
 > `0x03`) and picks a transport (NATS). The `ajar-connector` crate stays minimal
 > and transport-free — the NATS client lives here, in the example. It uses the
 > real [`async-nats`](https://crates.io/crates/async-nats) client (the same one

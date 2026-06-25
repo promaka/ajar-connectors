@@ -6,7 +6,7 @@ A connector has one job: turn your system's native data into Ajar's canonical,
 **signed** event and publish it. The SDK does the hard parts (canonical
 encoding, signing); you write the small piece that maps *your* data.
 
-> ## ⚡ Quickstart — the whole job is two edits
+> ## Quickstart — the whole job is two edits
 >
 > See a real signed event **right now** — no key, no NATS, no feed:
 > ```bash

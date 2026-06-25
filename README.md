@@ -25,11 +25,11 @@ native bytes ──▶ Connector::normalize ──▶ Event ──▶ canonical_
 
 | Language | SDK | Conformance gate |
 |----------|-----|------------------|
-| Rust     | ✅ `rust/ajar-connector` | ✅ reproduces all golden vectors |
-| Go       | ✅ `go/ajarconnector` | ✅ reproduces all golden vectors (same `vectors.json`) |
-| C++ (desktop) | ✅ `cpp/` (protoc-C++) | ✅ reproduces all golden vectors (same `vectors.json`) |
-| C++ (embedded) | ✅ `cpp/embedded/` (nanopb, no-heap) | ✅ reproduces all golden vectors (same `vectors.json`) |
-| Python   | ✅ `python/ajar_connector` | ✅ reproduces all golden vectors (same `vectors.json`) |
+| Rust     | `rust/ajar-connector` | reproduces all golden vectors |
+| Go       | `go/ajarconnector` | reproduces all golden vectors (same `vectors.json`) |
+| C++ (desktop) | `cpp/` (protoc-C++) | reproduces all golden vectors (same `vectors.json`) |
+| C++ (embedded) | `cpp/embedded/` (nanopb, no-heap) | reproduces all golden vectors (same `vectors.json`) |
+| Python   | `python/ajar_connector` | reproduces all golden vectors (same `vectors.json`) |
 
 All language SDKs assert against the **same** [vendor/contract/vectors.json](vendor/contract/vectors.json)
 and produce byte-identical canonical bytes for every fixture — that
