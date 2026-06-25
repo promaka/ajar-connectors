@@ -1,0 +1,23 @@
+Ajar Connectors
+Copyright 2026 Promaka
+
+Licensed under the Apache License, Version 2.0 (the "License"); you may not use
+these files except in compliance with the License. A copy of the License is in
+the LICENSE file at the root of this repository.
+
+------------------------------------------------------------------------------
+Third-party components
+
+This product bundles third-party source under cpp/vendor/, each under its own
+license. See cpp/vendor/PROVENANCE.md for versions and provenance.
+
+  - Monocypher (Ed25519, SHA-512) — dual-licensed 2-clause BSD or CC0-1.0.
+    https://monocypher.org
+
+  - nanopb (embedded protobuf runtime) — zlib license.
+    https://github.com/nanopb/nanopb
+
+  - SHA-256 (crypto-algorithms) — public domain.
+
+The Ajar event contract under vendor/contract/ (event.proto, golden vectors,
+corpus fixtures) is licensed Apache-2.0 and is freely implementable.

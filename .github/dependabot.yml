@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: Apache-2.0
+# Keep dependencies and GitHub Actions current. Grouped, weekly, low-noise.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /rust
+    schedule:
+      interval: weekly
+  - package-ecosystem: cargo
+    directory: /rust/examples
+    schedule:
+      interval: weekly
+  - package-ecosystem: gomod
+    directory: /go
+    schedule:
+      interval: weekly
+  - package-ecosystem: gomod
+    directory: /go/examples
+    schedule:
+      interval: weekly
+  - package-ecosystem: pip
+    directory: /python
+    schedule:
+      interval: weekly
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

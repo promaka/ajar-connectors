@@ -204,5 +204,8 @@ The full guarantee — what we will and won't change within `contract-v1` — is
 
 ## Contributing & license
 
-Apache-2.0 (see [LICENSE](LICENSE)). Every source file carries an SPDX header.
-Commits require a [DCO](CONTRIBUTING.md) sign-off (`git commit -s`).
+Apache-2.0 (see [LICENSE](LICENSE) and [NOTICE](NOTICE)). Every source file
+carries an SPDX header. Commits require a [DCO](CONTRIBUTING.md) sign-off
+(`git commit -s`). Please read [CONTRIBUTING.md](CONTRIBUTING.md) and the
+[Code of Conduct](CODE_OF_CONDUCT.md) before opening a pull request; release
+notes are in [CHANGELOG.md](CHANGELOG.md).
