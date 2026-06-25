@@ -1,28 +1,58 @@
 # SPDX-License-Identifier: Apache-2.0
-# Keep dependencies and GitHub Actions current. Grouped, weekly, low-noise.
+# Dependency + Actions updates. Monthly, and GROUPED so each ecosystem opens at
+# most ONE pull request per run (not one per dependency) — keeps the noise low.
 version: 2
 updates:
   - package-ecosystem: cargo
     directory: /rust
     schedule:
-      interval: weekly
+      interval: monthly
+    open-pull-requests-limit: 3
+    groups:
+      cargo:
+        patterns: ["*"]
+
   - package-ecosystem: cargo
     directory: /rust/examples
     schedule:
-      interval: weekly
+      interval: monthly
+    open-pull-requests-limit: 3
+    groups:
+      cargo-examples:
+        patterns: ["*"]
+
   - package-ecosystem: gomod
     directory: /go
     schedule:
-      interval: weekly
+      interval: monthly
+    open-pull-requests-limit: 3
+    groups:
+      go:
+        patterns: ["*"]
+
   - package-ecosystem: gomod
     directory: /go/examples
     schedule:
-      interval: weekly
+      interval: monthly
+    open-pull-requests-limit: 3
+    groups:
+      go-examples:
+        patterns: ["*"]
+
   - package-ecosystem: pip
     directory: /python
     schedule:
-      interval: weekly
+      interval: monthly
+    open-pull-requests-limit: 3
+    groups:
+      pip:
+        patterns: ["*"]
+
   - package-ecosystem: github-actions
     directory: /
     schedule:
-      interval: weekly
+      interval: monthly
+    open-pull-requests-limit: 3
+    groups:
+      actions:
+        patterns: ["*"]
