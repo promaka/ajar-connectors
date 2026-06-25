@@ -18,8 +18,8 @@ the signing and encoding; **you write one mapping function.**
 
 You keep your connector's source private; building a connector never requires
 publishing your code. The only things you provide are your connector's **public**
-key and the **data contract** below — supplied to us (your operator) directly, and
-never added to any public repository.
+key and the **data contract** below — supplied to the operator directly, and never
+added to any public repository.
 
 ## What we (your operator) are giving you
 
