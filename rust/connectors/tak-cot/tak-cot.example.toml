@@ -1,0 +1,39 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Example TAK / Cursor-on-Target ingress config. Copy, adjust, and point the
+# connector at it:  ajar-tak-cot ./tak-cot.toml
+#
+# Adding a second TAK feed is a second copy of this file with a different
+# source_id, key, and bind — no rebuild.
+
+# This connector's Ajar identity. Its signing key (below) must be registered in
+# Core against this same id.
+source_id = "tak-field-1"
+
+# Where Core listens. Production is tls://<host>:443 with the AJAR_TLS_* env set
+# (see README); nats://… is for local development only.
+nats_url = "nats://127.0.0.1:4222"
+
+# Publishes to <subject_prefix>.<source_id>. Leave as-is unless Core says otherwise.
+subject_prefix = "ajar.ingest"
+
+# The connector's own Ed25519 signing seed: 32 raw bytes, or a 64-char hex file.
+# Secret — never commit it, never share it.
+signing_key_path = "/etc/ajar/tak-field-1.key"
+
+# Declared-in-ontology keys ride governed; the rest ride as metadata (safe
+# default: omitted/empty). See ../ATTRIBUTES.md for the standard set.
+# governed_attributes = ["affiliation", "callsign"]
+
+[transport]
+# udp-multicast (the CoT SA default) or udp (unicast).
+kind = "udp-multicast"
+bind = "0.0.0.0:6969"
+# Required for multicast; the SA group ATAK/WinTAK broadcast on.
+group = "239.2.3.1"
+
+# Optional: pin specific CoT type codes to Ajar entity types. Anything not listed
+# falls back to a battle-dimension default (air/sea) or an x:cot:<type> namespace,
+# so nothing is dropped for lack of a mapping.
+[entity_map]
+"a-f-G-U-C-D" = "mim:drone"

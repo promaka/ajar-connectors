@@ -9,7 +9,7 @@ members = [
 # transport-specific deps (e.g. async-nats and its async runtime) resolve their
 # own dependency graph independently of the SDK crate — keeping the SDK's
 # dependency tree minimal and avoiding cross-crate version clashes.
-exclude = ["examples"]
+exclude = ["examples", "connectors"]
 
 [workspace.package]
 version = "0.1.0"

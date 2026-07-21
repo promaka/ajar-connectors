@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Example ASTERIX CAT021 (ADS-B) ingress config. Copy, adjust, and run:
+#   ajar-asterix ./asterix.toml
+#
+# A second radar/ADS-B feed is a second copy of this file with a different
+# source_id, key, and group — no rebuild.
+
+source_id = "radar-adsb-1"
+nats_url = "nats://127.0.0.1:4222"
+subject_prefix = "ajar.ingest"
+signing_key_path = "/etc/ajar/radar-adsb-1.key"
+
+# ADS-B/radar picture: affiliation is assigned downstream; unknown by default.
+# default_affiliation = "unknown"
+
+# Declared-in-ontology keys ride governed; the rest ride as metadata (safe
+# default: omitted/empty). See ../ATTRIBUTES.md for the standard set.
+# governed_attributes = ["affiliation", "speed", "course", "squawk", "callsign", "aircraft_type"]
+
+[transport]
+# ASTERIX is usually distributed as UDP multicast on a surveillance LAN.
+kind = "udp-multicast"
+bind = "0.0.0.0:8600"
+group = "232.1.1.1"

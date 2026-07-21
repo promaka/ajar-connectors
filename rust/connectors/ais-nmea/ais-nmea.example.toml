@@ -1,0 +1,35 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Example AIS / NMEA ingress config. Copy, adjust, and run:
+#   ajar-ais-nmea ./ais-nmea.toml
+#
+# A second AIS feed is a second copy of this file with a different source_id,
+# key, and endpoint — no rebuild.
+
+# This connector's Ajar identity; its signing key is registered in Core here.
+source_id = "ais-coast-1"
+
+# Core's NATS endpoint (tls://host:443 with AJAR_TLS_* in production).
+nats_url = "nats://127.0.0.1:4222"
+
+subject_prefix = "ajar.ingest"
+
+# The connector's Ed25519 signing seed (32 raw bytes or 64-char hex). Secret.
+signing_key_path = "/etc/ajar/ais-coast-1.key"
+
+# Coastal AIS is overwhelmingly civil traffic.
+default_affiliation = "neutral"
+
+# Declared-in-ontology keys ride governed; the rest ride as metadata (safe
+# default: omitted/empty). See ../ATTRIBUTES.md for the standard set.
+# governed_attributes = ["affiliation", "speed", "course", "vessel_name", "vessel_type"]
+
+[transport]
+# AIS aggregators and ship-network NMEA servers usually expose a TCP port that
+# streams one sentence per line — connect out to it:
+kind = "tcp-client"
+connect = "ais-feed.example.mil:5631"
+
+# ...or a local receiver that UDP-broadcasts sentences (one per datagram):
+#   kind = "udp"
+#   bind = "0.0.0.0:10110"

@@ -180,11 +180,12 @@ use ajar_connector::{canonical_bytes, seal, EventBuilder, SigningKey};
 //    This is the only Ajar-specific logic you write (~15 lines).
 fn to_event(source_id: &str, r: &MyRecord) -> Result<ajar_connector::Event, ajar_connector::BuildError> {
     EventBuilder::new(source_id, "mim:aircraft")  // the entity type Ajar assigned you
-        .new_id()                                 // unique UUIDv7 id
+        .new_id()                                 // unique UUIDv7 id — NEVER your native id
         .now()                                    // observation time (RFC 3339)
         .location(r.lat, r.lon, r.altitude_m)     // aircraft need a position
         .confidence(r.quality)                    // 0.0..=1.0
         .policy_tag("class:secret")               // markings, if any
+        .metadata("serial_no", &r.serial_no)      // your native identifiers go HERE
         // .attribute("k", "v")  // ONLY if your entity type's ontology schema has them
         .build()                                  // validates; can't emit a bad event
 }
@@ -194,6 +195,17 @@ let canonical = canonical_bytes(&event);
 let sealed = seal(&canonical, &signing_key);          // 64-byte sig ++ canonical
 client.publish(subject.clone(), sealed.into()).await?; // to ajar.ingest.<source_id>
 ```
+
+The two field rules baked into that sample, worth stating plainly:
+
+- **`id` is always a fresh UUIDv7** (`.new_id()`). Your system's own identifier
+  (serial number, track id, MMSI, …) goes in **`.metadata(...)`** — ungoverned
+  passthrough that Core always accepts and surfaces to the C2.
+- **`.attribute(...)` is governed**: Core validates each key against the entity
+  type's ontology schema and rejects unknown ones. The ready connectors route
+  this **per key** via `governed_attributes` in their config; the standard
+  tactical keys and their units are listed in
+  [rust/connectors/ATTRIBUTES.md](rust/connectors/ATTRIBUTES.md).
 
 The easiest way to start is to **copy the minimal `connector-template`** for your
 language and edit the two `EDIT` spots (your record + the mapping):
@@ -211,6 +223,46 @@ native format `native bytes → Event`.
 
 Swap the synthetic track generator for your feed reader, keep the seal/publish
 loop as-is.
+
+### Or don't write code at all
+
+Before writing anything, check whether the work is already done:
+
+- **A ready connector for your standard.** [`rust/connectors/`](rust/connectors/)
+  ships production connectors for common wire standards — TAK/CoT, AIS/NMEA,
+  MAVLink, ASTERIX CAT021. If your kit already speaks one of these, you configure
+  a connector, you don't build one.
+- **The generic mapping connector.** If your source emits flat JSON or CSV,
+  [`ajar-generic`](rust/connectors/generic) turns it into events from a
+  `[mapping]` block in a TOML file — no Rust. A whole class of sources onboards
+  with only a config.
+
+Writing a connector is for sources that need real parsing logic a mapping can't
+express (a binary wire format, message reassembly).
+
+### Integration methods (transports)
+
+How the bytes arrive is **orthogonal** to how they're parsed: a connector declares
+its protocol once and runs on any transport by config. Pick the `kind` that
+matches your source — no code change:
+
+| `kind` | Method | For |
+|--------|--------|-----|
+| `udp-multicast`, `udp` | UDP datagrams | SA broadcast (CoT, ASTERIX) |
+| `tcp-client` | TCP stream (dial out) | AIS aggregators, record streams |
+| `tcp-server` | TCP listen | legacy kit that pushes to "your ip:port" |
+| `file` | tail a file | anything that writes to a log |
+| `dir` | watch a drop directory | SFTP batch exports, scheduled dumps |
+| `exec` | run a CLI tool, read its stdout | wrap any vendor binary |
+| `stdin` | a pipe | `producer \| ajar-<connector>` |
+| `serial` | RS-232/422/485 (`serial` feature) | NMEA/serial sensors |
+| `mqtt` | subscribe a topic (`mqtt` feature) | IoT / sensor buses |
+| `rest-poll` | HTTP GET on an interval (`rest-poll` feature) | pull-only REST APIs |
+
+**DDS** is integrated via an external gateway that re-publishes onto one of the
+above (typically `udp-multicast` or `mqtt`), not as a native kind — DDS is a
+peer-to-peer databus, so a small bridge subscribes to the topics and forwards
+them, keeping the connector transport-agnostic.
 
 ## 4. Before you start: what Ajar gives you
 
@@ -428,6 +480,39 @@ cd python && PYTHONPATH=. python conformance/golden_vectors.py
 # C++
 ctest --test-dir cpp/build
 ```
+
+## 9b. Fork → deploy runbook
+
+The whole path for a customer who forks this repo, end to end. It ties into the
+operator's [DEPLOY_RUNBOOK.md] **Step 4** (register connectors) on the Core side.
+
+1. **Pick a transport and get a parser.** Choose the `[transport]` `kind` that
+   matches your source (table in §3). Then either:
+   - a **ready connector** already covers your standard (configure it), or
+   - your source is flat JSON/CSV → write a `[mapping]` for [`ajar-generic`](rust/connectors/generic) (no code), or
+   - implement `normalize(frame) -> Event` (a `FrameParser`) — parse the native
+     frame, `.new_id()`, set `entity_type` + `location` + governed attributes, put
+     native identifiers in **`metadata`**, then `.seal()`.
+2. **Prove it with a golden vector.** Add one native-frame-in → canonical-bytes-out
+   test plus the content-contract test (UUIDv7 id + RFC 3339 timestamp + native id
+   in metadata), and `cargo test`. A connector isn't done until this is green.
+3. **Mint the connector identity.** Generate the Ed25519 signing seed
+   (`scripts/gen-connector-key.sh`, §6) — keep the private half, note the public
+   half. Obtain the mTLS client certificate for transport identity (CN =
+   `source_id`) from the operator's PKI.
+4. **Register with the control plane.** The operator registers your connector on
+   the Core side — `POST /control/connectors` with your `source_id`, the **public**
+   key, allowed entity-type namespaces, and the mTLS cert subject. This is Core's
+   [DEPLOY_RUNBOOK.md] Step 4; the ontology types you emit must already be
+   registered (§4). (Without a control-plane API, this is the email handshake in
+   §4 — same four facts.)
+5. **Run it.** Point the connector at the operator's NATS endpoint with
+   `AJAR_TLS_CA` / `AJAR_TLS_CERT` / `AJAR_TLS_KEY` set. Events flow → Core verifies
+   the seal against your registered key → governed events land in the audited
+   stream. Confirm on the operator's side (or `/metrics`: `published` climbing).
+
+[DEPLOY_RUNBOOK.md]: the operator's private Core deployment runbook — ask your
+operator; it is not part of this open repo.
 
 ## 10. Troubleshooting
 

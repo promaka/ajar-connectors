@@ -1,0 +1,35 @@
+# SPDX-License-Identifier: Apache-2.0
+[package]
+name = "ajar-tak-egress"
+description = "Ajar egress relay: governed CoT from Core's NATS egress to a TAK Server, verbatim."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[[bin]]
+name = "ajar-tak-egress"
+path = "src/main.rs"
+
+[dependencies]
+ajar-connector-common.workspace = true
+async-nats.workspace = true
+tokio.workspace = true
+tokio-rustls.workspace = true
+rustls-pemfile.workspace = true
+futures-util.workspace = true
+bytes.workspace = true
+serde.workspace = true
+toml.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+anyhow.workspace = true
+
+[dev-dependencies]
+# Mints a throwaway CA + server/client certs so the TLS acceptance tests need no
+# external PKI or fixtures. ring only — keep aws-lc-rs out of the tree so the
+# process has exactly one rustls crypto provider.
+rcgen = { version = "0.13", default-features = false, features = ["ring", "pem"] }

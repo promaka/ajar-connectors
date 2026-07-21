@@ -1,0 +1,32 @@
+# SPDX-License-Identifier: Apache-2.0
+[package]
+name = "ajar-tak-cot"
+description = "Ajar ingress connector for TAK / Cursor-on-Target (CoT) situational-awareness feeds."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[[bin]]
+name = "ajar-tak-cot"
+path = "src/main.rs"
+
+[dependencies]
+ajar-connector.workspace = true
+ajar-connector-common.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+anyhow.workspace = true
+quick-xml = "0.36"
+
+[dev-dependencies]
+ed25519-dalek.workspace = true
+sha2 = "0.10"
+hex.workspace = true
+serde_json = "1"
+proptest = "1"
+uuid = "1"

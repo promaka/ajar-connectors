@@ -156,6 +156,61 @@ matching public key in the connector's profile. The seed used by the golden
 vectors (32×`0x47`) is a published **TEST** seed — never sign production events
 with it.
 
+## Reference connectors
+
+The `rust/examples/` above teach the SDK. Alongside them, `rust/connectors/` holds
+**production, standard-format connectors** — one per open wire standard, not per
+system, so any kit already speaking that standard connects by config alone. They
+share a runtime crate ([`connectors/common`](rust/connectors/common)) — config,
+key loading, mTLS NATS, the transport layer, the seal-and-publish loop, health,
+graceful shutdown — so a new connector is a format parser (`FrameParser`) plus a
+few lines of wiring.
+
+| Connector | Standard | What it feeds | Typical transport |
+|-----------|----------|---------------|-------------------|
+| [tak-cot](rust/connectors/tak-cot) | TAK / Cursor-on-Target | ground/air situational-awareness tracks | UDP multicast / unicast |
+| [ais-nmea](rust/connectors/ais-nmea) | AIS over NMEA 0183 | maritime vessel tracks | TCP client / UDP |
+| [mavlink](rust/connectors/mavlink) | MAVLink v1/v2 | UAS / drone position | UDP |
+| [asterix](rust/connectors/asterix) | ASTERIX CAT021 | ADS-B / radar air tracks | UDP multicast |
+| [generic](rust/connectors/generic) | any flat JSON / CSV | the long tail — **no code, just a field mapping** | any of the below |
+| [tak-egress](rust/connectors/tak-egress) | TAK / CoT (**egress**) | governed COP tracks OUT to a TAK Server, verbatim | NATS → TLS 8089 |
+
+The first four map a standard's **position reports** onto Ajar tracks; each README
+states which message types/categories it covers. The **generic** connector needs
+no Rust at all — a `[mapping]` block in its config turns a JSON/CSV source into
+events. Extending coverage is additive.
+
+### Transport is orthogonal to protocol
+
+A connector never hard-codes *how bytes arrive*. The protocol (parsing) and the
+transport (delivery) are separate, so any connector runs on any method by config:
+
+| `kind` | Method | Notes |
+|--------|--------|-------|
+| `udp-multicast`, `udp` | UDP datagrams | one packet per frame (SA broadcast) |
+| `tcp-client` | TCP stream (dial out) | `framing = "line"` or `"length-delimited"`, auto-reconnect |
+| `tcp-server` | TCP listen | sources that push to a configured address; multiple pushers |
+| `file` | tail a file | follows appends, handles rotation |
+| `dir` | watch a drop directory | batch file drops (SFTP exports); reads files once settled |
+| `exec` | run a CLI tool | reads its stdout; wraps any vendor binary |
+| `stdin` | pipe | `producer \| ajar-<connector>` |
+| `serial` | RS-232/422/485 | needs the `serial` feature (NMEA sensors) |
+| `mqtt` | subscribe a topic | needs the `mqtt` feature (IoT buses) |
+| `rest-poll` | HTTP GET on interval | needs the `rest-poll` feature (pull-only APIs) |
+
+DDS is reached through an external gateway that re-publishes onto one of these
+(usually `udp-multicast` or `mqtt`), not as a native kind. Full onboarding —
+including registering the connector with the sovereign's control plane — is in
+[ONBOARDING.md](ONBOARDING.md).
+
+Build and test them on their own (they resolve their transport-heavy deps
+independently of the SDK workspace):
+
+```bash
+cd rust/connectors
+cargo build && cargo test
+```
+
 ## Not in scope
 
 The SDK does **not** implement policy, audit, ontology enforcement, correlation,

@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Example MAVLink ingress config. Copy, adjust, and run:
+#   ajar-mavlink ./mavlink.toml
+#
+# A second vehicle feed is a second copy of this file with a different source_id,
+# key, and bind — no rebuild. Multiple vehicles on one stream are kept distinct
+# by their MAVLink system id (carried as `mav_sysid` metadata on every event).
+
+source_id = "uav-flight-1"
+nats_url = "nats://127.0.0.1:4222"
+subject_prefix = "ajar.ingest"
+signing_key_path = "/etc/ajar/uav-flight-1.key"
+
+# Own-force UAS feed: stamp friendly on every track (MAVLink carries no
+# affiliation of its own).
+default_affiliation = "friendly"
+
+# Attribute keys the deployment's ontology declares -> ride governed; all others
+# ride as metadata (always accepted). Empty/omitted is the safe default.
+# See ../ATTRIBUTES.md for the standard set.
+# governed_attributes = ["affiliation", "speed", "heading", "vehicle_type", "status", "armed"]
+
+[transport]
+# Autopilots and ground stations commonly forward MAVLink over UDP.
+kind = "udp"
+bind = "0.0.0.0:14550"
