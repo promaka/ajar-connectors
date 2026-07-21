@@ -69,6 +69,8 @@ struct FixtureEvent {
     confidence: f64,
     #[serde(default)]
     attributes: Vec<FixtureAttr>,
+    #[serde(default)]
+    metadata: Vec<FixtureAttr>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -122,6 +124,14 @@ pub fn load_fixture(name: &str) -> Event {
         confidence: f.confidence,
         attributes: f
             .attributes
+            .into_iter()
+            .map(|a| Attribute {
+                key: a.key,
+                value: a.value,
+            })
+            .collect(),
+        metadata: f
+            .metadata
             .into_iter()
             .map(|a| Attribute {
                 key: a.key,

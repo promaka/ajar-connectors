@@ -12,6 +12,8 @@ use crate::event::{Attribute, Event, GeoPoint};
 
 /// Maximum number of attributes per event (contract limit, §3).
 pub const MAX_ATTRIBUTES: usize = 128;
+/// Maximum number of metadata entries per event (contract limit, §3).
+pub const MAX_METADATA: usize = 128;
 /// Maximum number of policy tags per event (contract limit, §3).
 pub const MAX_POLICY_TAGS: usize = 64;
 
@@ -30,6 +32,7 @@ pub struct EventBuilder {
     policy_tags: Vec<String>,
     confidence: f64,
     attributes: Vec<(String, String)>,
+    metadata: Vec<(String, String)>,
     strict_entity_namespace: bool,
 }
 
@@ -50,6 +53,7 @@ impl EventBuilder {
             policy_tags: Vec::new(),
             confidence: 0.0,
             attributes: Vec::new(),
+            metadata: Vec::new(),
             strict_entity_namespace: true,
         }
     }
@@ -120,6 +124,15 @@ impl EventBuilder {
         self
     }
 
+    /// Adds one ungoverned passthrough metadata entry (ADR-0030): a vendor-specific
+    /// field carried and audited opaquely, but not type-validated or correlated
+    /// (e.g. a source's native identifier). Order does not matter — the builder
+    /// sorts by key at [`EventBuilder::build`]. Duplicate keys are rejected there.
+    pub fn metadata(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.metadata.push((key.into(), value.into()));
+        self
+    }
+
     /// Disables the default `mim:` / `x:` entity-type namespace check.
     pub fn allow_unnamespaced_entity_type(mut self) -> Self {
         self.strict_entity_namespace = false;
@@ -132,6 +145,24 @@ impl EventBuilder {
         let timestamp = self
             .timestamp
             .ok_or(BuildError::MissingField("timestamp"))?;
+        // Fail closed on malformed content the boundary would reject anyway: a
+        // non-RFC3339 timestamp or an off-planet position must not be signed.
+        if !is_rfc3339(&timestamp) {
+            return Err(BuildError::InvalidTimestamp(timestamp));
+        }
+        if let Some(loc) = &self.location {
+            let ok = loc.latitude.is_finite()
+                && loc.longitude.is_finite()
+                && loc.altitude_m.is_finite()
+                && (-90.0..=90.0).contains(&loc.latitude)
+                && (-180.0..=180.0).contains(&loc.longitude);
+            if !ok {
+                return Err(BuildError::InvalidLocation {
+                    latitude: loc.latitude,
+                    longitude: loc.longitude,
+                });
+            }
+        }
         if self.source_id.is_empty() {
             return Err(BuildError::MissingField("source_id"));
         }
@@ -156,6 +187,12 @@ impl EventBuilder {
                 max: MAX_ATTRIBUTES,
             });
         }
+        if self.metadata.len() > MAX_METADATA {
+            return Err(BuildError::TooManyMetadata {
+                count: self.metadata.len(),
+                max: MAX_METADATA,
+            });
+        }
 
         // Canonical rule: attributes sorted by key, unique. Sort first (stable),
         // then reject any adjacent equal key.
@@ -167,6 +204,19 @@ impl EventBuilder {
             }
         }
         let attributes = attrs
+            .into_iter()
+            .map(|(key, value)| Attribute { key, value })
+            .collect();
+
+        // Metadata follows the identical canonical rule: sorted by key, unique.
+        let mut meta = self.metadata;
+        meta.sort_by(|a, b| a.0.cmp(&b.0));
+        for pair in meta.windows(2) {
+            if pair[0].0 == pair[1].0 {
+                return Err(BuildError::DuplicateMetadataKey(pair[0].0.clone()));
+            }
+        }
+        let metadata = meta
             .into_iter()
             .map(|(key, value)| Attribute { key, value })
             .collect();
@@ -183,7 +233,71 @@ impl EventBuilder {
             policy_tags: self.policy_tags,
             confidence: self.confidence,
             attributes,
+            metadata,
         })
+    }
+}
+
+/// True if `s` is an RFC 3339 date-time: `YYYY-MM-DDThh:mm:ss[.frac](Z|±hh:mm)`,
+/// with in-range date/time components. Hand-rolled because the SDK deliberately
+/// carries no datetime-parsing dependency (see the workspace notes on `time`).
+fn is_rfc3339(s: &str) -> bool {
+    let b = s.as_bytes();
+    if b.len() < 20 {
+        return false;
+    }
+    let d = |i: usize| b.get(i).is_some_and(u8::is_ascii_digit);
+    let c = |i: usize, ch: u8| b.get(i) == Some(&ch);
+    let num = |i: usize, n: usize| -> u32 {
+        b[i..i + n]
+            .iter()
+            .fold(0u32, |a, &x| a * 10 + (x - b'0') as u32)
+    };
+    let digits = |i: usize, n: usize| (0..n).all(|k| d(i + k));
+    if !(digits(0, 4)
+        && c(4, b'-')
+        && digits(5, 2)
+        && c(7, b'-')
+        && digits(8, 2)
+        && (c(10, b'T') || c(10, b't'))
+        && digits(11, 2)
+        && c(13, b':')
+        && digits(14, 2)
+        && c(16, b':')
+        && digits(17, 2))
+    {
+        return false;
+    }
+    if !((1..=12).contains(&num(5, 2))
+        && (1..=31).contains(&num(8, 2))
+        && num(11, 2) <= 23
+        && num(14, 2) <= 59
+        && num(17, 2) <= 60)
+    {
+        return false;
+    }
+    let mut i = 19;
+    if c(i, b'.') {
+        i += 1;
+        let start = i;
+        while d(i) {
+            i += 1;
+        }
+        if i == start {
+            return false;
+        }
+    }
+    match b.get(i) {
+        Some(b'Z') | Some(b'z') => i + 1 == b.len(),
+        Some(b'+') | Some(b'-') => {
+            digits(i + 1, 2)
+                && c(i + 3, b':')
+                && digits(i + 4, 2)
+                && i + 6 == b.len()
+                && num(i + 1, 2) <= 23
+                && num(i + 4, 2) <= 59
+        }
+        _ => false,
     }
 }
 
@@ -222,6 +336,28 @@ mod tests {
     }
 
     #[test]
+    fn sorts_metadata_and_rejects_duplicate_keys() {
+        let event = EventBuilder::new("sensor-1", "mim:drone")
+            .new_id()
+            .now()
+            .metadata("mmsi", "227006760")
+            .metadata("callsign", "F-ABCD")
+            .build()
+            .unwrap();
+        let keys: Vec<_> = event.metadata.iter().map(|m| m.key.as_str()).collect();
+        assert_eq!(keys, ["callsign", "mmsi"]);
+
+        let err = EventBuilder::new("sensor-1", "mim:drone")
+            .new_id()
+            .now()
+            .metadata("mmsi", "1")
+            .metadata("mmsi", "2")
+            .build()
+            .unwrap_err();
+        assert_eq!(err, BuildError::DuplicateMetadataKey("mmsi".into()));
+    }
+
+    #[test]
     fn rejects_duplicate_attribute_keys() {
         let err = EventBuilder::new("sensor-1", "mim:drone")
             .new_id()
@@ -239,6 +375,60 @@ mod tests {
             .build()
             .unwrap_err();
         assert_eq!(err, BuildError::MissingField("id"));
+    }
+
+    #[test]
+    fn rejects_malformed_timestamps() {
+        for bad in [
+            "t",
+            "2026-06-10",
+            "2026-13-10T08:00:00Z",
+            "2026-06-10T25:00:00Z",
+            "2026-06-10T08:00:00",
+        ] {
+            let err = EventBuilder::new("sensor-1", "mim:drone")
+                .new_id()
+                .timestamp(bad)
+                .build()
+                .unwrap_err();
+            assert_eq!(err, BuildError::InvalidTimestamp(bad.into()), "{bad}");
+        }
+        for good in [
+            "2026-06-10T08:00:00Z",
+            "2026-06-10T08:00:00.123Z",
+            "2026-06-10T08:00:00+02:00",
+        ] {
+            assert!(
+                EventBuilder::new("sensor-1", "mim:drone")
+                    .new_id()
+                    .timestamp(good)
+                    .build()
+                    .is_ok(),
+                "{good}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_out_of_range_coordinates() {
+        for (lat, lon) in [(9999.0, 2.0), (1.0, 999.0), (f64::NAN, 2.0), (-91.0, 0.0)] {
+            let err = EventBuilder::new("sensor-1", "mim:drone")
+                .new_id()
+                .now()
+                .location(lat, lon, 0.0)
+                .build()
+                .unwrap_err();
+            assert!(
+                matches!(err, BuildError::InvalidLocation { .. }),
+                "{lat},{lon}"
+            );
+        }
+        assert!(EventBuilder::new("sensor-1", "mim:drone")
+            .new_id()
+            .now()
+            .location(-90.0, 180.0, 11000.0)
+            .build()
+            .is_ok());
     }
 
     #[test]

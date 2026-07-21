@@ -37,6 +37,8 @@ typedef struct _ajar_event_v1_Event {
     char received_at[32];
     pb_size_t attributes_count;
     ajar_event_v1_Attribute attributes[16];
+    pb_size_t metadata_count;
+    ajar_event_v1_Attribute metadata[16];
 } ajar_event_v1_Event;
 
 
@@ -45,10 +47,10 @@ extern "C" {
 #endif
 
 /* Initializer values for message structs */
-#define ajar_event_v1_Event_init_default         {"", "", "", "", "", false, ajar_event_v1_GeoPoint_init_default, {0, {0}}, 0, {"", "", "", "", "", "", "", ""}, 0, "", 0, {ajar_event_v1_Attribute_init_default, ajar_event_v1_Attribute_init_default, ajar_event_v1_Attribute_init_default, ajar_event_v1_Attribute_init_default, ajar_event_v1_Attribute_init_default, ajar_event_v1_Attribute_init_default, ajar_event_v1_Attribute_init_default, ajar_event_v1_Attribute_init_default, ajar_event_v1_Attribute_init_default, ajar_event_v1_Attribute_init_default, ajar_event_v1_Attribute_init_default, ajar_event_v1_Attribute_init_default, ajar_event_v1_Attribute_init_default, ajar_event_v1_Attribute_init_default, ajar_event_v1_Attribute_init_default, ajar_event_v1_Attribute_init_default}}
+#define ajar_event_v1_Event_init_default         {"", "", "", "", "", false, ajar_event_v1_GeoPoint_init_default, {0, {0}}, 0, {"", "", "", "", "", "", "", ""}, 0, "", 0, {ajar_event_v1_Attribute_init_default, ajar_event_v1_Attribute_init_default, ajar_event_v1_Attribute_init_default, ajar_event_v1_Attribute_init_default, ajar_event_v1_Attribute_init_default, ajar_event_v1_Attribute_init_default, ajar_event_v1_Attribute_init_default, ajar_event_v1_Attribute_init_default, ajar_event_v1_Attribute_init_default, ajar_event_v1_Attribute_init_default, ajar_event_v1_Attribute_init_default, ajar_event_v1_Attribute_init_default, ajar_event_v1_Attribute_init_default, ajar_event_v1_Attribute_init_default, ajar_event_v1_Attribute_init_default, ajar_event_v1_Attribute_init_default}, 0, {ajar_event_v1_Attribute_init_default, ajar_event_v1_Attribute_init_default, ajar_event_v1_Attribute_init_default, ajar_event_v1_Attribute_init_default, ajar_event_v1_Attribute_init_default, ajar_event_v1_Attribute_init_default, ajar_event_v1_Attribute_init_default, ajar_event_v1_Attribute_init_default, ajar_event_v1_Attribute_init_default, ajar_event_v1_Attribute_init_default, ajar_event_v1_Attribute_init_default, ajar_event_v1_Attribute_init_default, ajar_event_v1_Attribute_init_default, ajar_event_v1_Attribute_init_default, ajar_event_v1_Attribute_init_default, ajar_event_v1_Attribute_init_default}}
 #define ajar_event_v1_Attribute_init_default     {"", ""}
 #define ajar_event_v1_GeoPoint_init_default      {0, 0, 0}
-#define ajar_event_v1_Event_init_zero            {"", "", "", "", "", false, ajar_event_v1_GeoPoint_init_zero, {0, {0}}, 0, {"", "", "", "", "", "", "", ""}, 0, "", 0, {ajar_event_v1_Attribute_init_zero, ajar_event_v1_Attribute_init_zero, ajar_event_v1_Attribute_init_zero, ajar_event_v1_Attribute_init_zero, ajar_event_v1_Attribute_init_zero, ajar_event_v1_Attribute_init_zero, ajar_event_v1_Attribute_init_zero, ajar_event_v1_Attribute_init_zero, ajar_event_v1_Attribute_init_zero, ajar_event_v1_Attribute_init_zero, ajar_event_v1_Attribute_init_zero, ajar_event_v1_Attribute_init_zero, ajar_event_v1_Attribute_init_zero, ajar_event_v1_Attribute_init_zero, ajar_event_v1_Attribute_init_zero, ajar_event_v1_Attribute_init_zero}}
+#define ajar_event_v1_Event_init_zero            {"", "", "", "", "", false, ajar_event_v1_GeoPoint_init_zero, {0, {0}}, 0, {"", "", "", "", "", "", "", ""}, 0, "", 0, {ajar_event_v1_Attribute_init_zero, ajar_event_v1_Attribute_init_zero, ajar_event_v1_Attribute_init_zero, ajar_event_v1_Attribute_init_zero, ajar_event_v1_Attribute_init_zero, ajar_event_v1_Attribute_init_zero, ajar_event_v1_Attribute_init_zero, ajar_event_v1_Attribute_init_zero, ajar_event_v1_Attribute_init_zero, ajar_event_v1_Attribute_init_zero, ajar_event_v1_Attribute_init_zero, ajar_event_v1_Attribute_init_zero, ajar_event_v1_Attribute_init_zero, ajar_event_v1_Attribute_init_zero, ajar_event_v1_Attribute_init_zero, ajar_event_v1_Attribute_init_zero}, 0, {ajar_event_v1_Attribute_init_zero, ajar_event_v1_Attribute_init_zero, ajar_event_v1_Attribute_init_zero, ajar_event_v1_Attribute_init_zero, ajar_event_v1_Attribute_init_zero, ajar_event_v1_Attribute_init_zero, ajar_event_v1_Attribute_init_zero, ajar_event_v1_Attribute_init_zero, ajar_event_v1_Attribute_init_zero, ajar_event_v1_Attribute_init_zero, ajar_event_v1_Attribute_init_zero, ajar_event_v1_Attribute_init_zero, ajar_event_v1_Attribute_init_zero, ajar_event_v1_Attribute_init_zero, ajar_event_v1_Attribute_init_zero, ajar_event_v1_Attribute_init_zero}}
 #define ajar_event_v1_Attribute_init_zero        {"", ""}
 #define ajar_event_v1_GeoPoint_init_zero         {0, 0, 0}
 
@@ -69,6 +71,7 @@ extern "C" {
 #define ajar_event_v1_Event_confidence_tag       9
 #define ajar_event_v1_Event_received_at_tag      10
 #define ajar_event_v1_Event_attributes_tag       11
+#define ajar_event_v1_Event_metadata_tag         12
 
 /* Struct field encoding specification for nanopb */
 #define ajar_event_v1_Event_FIELDLIST(X, a) \
@@ -82,11 +85,13 @@ X(a, STATIC,   SINGULAR, BYTES,    payload,           7) \
 X(a, STATIC,   REPEATED, STRING,   policy_tags,       8) \
 X(a, STATIC,   SINGULAR, DOUBLE,   confidence,        9) \
 X(a, STATIC,   SINGULAR, STRING,   received_at,      10) \
-X(a, STATIC,   REPEATED, MESSAGE,  attributes,       11)
+X(a, STATIC,   REPEATED, MESSAGE,  attributes,       11) \
+X(a, STATIC,   REPEATED, MESSAGE,  metadata,         12)
 #define ajar_event_v1_Event_CALLBACK NULL
 #define ajar_event_v1_Event_DEFAULT NULL
 #define ajar_event_v1_Event_location_MSGTYPE ajar_event_v1_GeoPoint
 #define ajar_event_v1_Event_attributes_MSGTYPE ajar_event_v1_Attribute
+#define ajar_event_v1_Event_metadata_MSGTYPE ajar_event_v1_Attribute
 
 #define ajar_event_v1_Attribute_FIELDLIST(X, a) \
 X(a, STATIC,   SINGULAR, STRING,   key,               1) \
@@ -113,7 +118,7 @@ extern const pb_msgdesc_t ajar_event_v1_GeoPoint_msg;
 /* Maximum encoded size of messages (where known) */
 #define AJAR_EVENT_V1_EVENT_PB_H_MAX_SIZE        ajar_event_v1_Event_size
 #define ajar_event_v1_Attribute_size             98
-#define ajar_event_v1_Event_size                 2278
+#define ajar_event_v1_Event_size                 3878
 #define ajar_event_v1_GeoPoint_size              27
 
 #ifdef __cplusplus

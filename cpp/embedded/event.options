@@ -13,6 +13,7 @@ ajar.event.v1.Event.received_at     max_size:32
 ajar.event.v1.Event.payload         max_size:64
 ajar.event.v1.Event.policy_tags     max_size:40 max_count:8
 ajar.event.v1.Event.attributes      max_count:16
+ajar.event.v1.Event.metadata        max_count:16
 
 ajar.event.v1.Attribute.key         max_size:32
 ajar.event.v1.Attribute.value       max_size:64

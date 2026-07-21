@@ -13,6 +13,10 @@
       "canonicalSha256": "5c2eea0db339ed9c63f46baa6feaa7b63bae1e51844d80e64bf9b5307e8bb1a3",
       "sealedSha256": "b9899443dcc2cfb830d555f34ff45fbe8b4a1654a308b5b1d9bb38cef5a003c6"
     },
+    "edge_metadata_passthrough": {
+      "canonicalSha256": "03e9fc0e7e9696697b1ac7abc8c989355d4ac158a89f0020d6a84a23828a5b6d",
+      "sealedSha256": "9a0b36832be01b9123eca4c9048b8ddabe3eedb3c3bfd6413f036a6a219aa9e0"
+    },
     "edge_origin_location": {
       "canonicalSha256": "b83e494d480042bc85b2d8a114a83abe595ccb32b2028157a5b2a7f4ad56d8bb",
       "sealedSha256": "f781ecd213ec8f42f9a8d6bd20cfb24de4cb82c9605306eeeff24dd5c0747f46"

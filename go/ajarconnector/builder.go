@@ -15,6 +15,7 @@ import (
 // Contract limits (§3).
 const (
 	MaxAttributes = 128
+	MaxMetadata   = 128
 	MaxPolicyTags = 64
 	schemaVersion = "v1"
 )
@@ -36,6 +37,7 @@ type EventBuilder struct {
 	policyTags            []string
 	confidence            float64
 	attributes            []*eventpb.Attribute
+	metadata              []*eventpb.Attribute
 	strictEntityNamespace bool
 }
 
@@ -95,6 +97,15 @@ func (b *EventBuilder) Attribute(key, value string) *EventBuilder {
 	return b
 }
 
+// Metadata adds one ungoverned passthrough metadata entry (ADR-0030): a
+// vendor-specific field carried and audited opaquely, but not type-validated or
+// correlated (e.g. a source's native identifier). Order does not matter — Build
+// sorts by key and rejects duplicate keys.
+func (b *EventBuilder) Metadata(key, value string) *EventBuilder {
+	b.metadata = append(b.metadata, &eventpb.Attribute{Key: key, Value: value})
+	return b
+}
+
 // AllowUnnamespacedEntityType disables the default mim:/x: namespace check.
 func (b *EventBuilder) AllowUnnamespacedEntityType() *EventBuilder {
 	b.strictEntityNamespace = false
@@ -127,6 +138,9 @@ func (b *EventBuilder) Build() (*eventpb.Event, error) {
 	if len(b.attributes) > MaxAttributes {
 		return nil, fmt.Errorf("ajarconnector: too many attributes: %d (max %d)", len(b.attributes), MaxAttributes)
 	}
+	if len(b.metadata) > MaxMetadata {
+		return nil, fmt.Errorf("ajarconnector: too many metadata entries: %d (max %d)", len(b.metadata), MaxMetadata)
+	}
 
 	// Canonical rule: attributes sorted by key, unique.
 	attrs := make([]*eventpb.Attribute, len(b.attributes))
@@ -135,6 +149,16 @@ func (b *EventBuilder) Build() (*eventpb.Event, error) {
 	for i := 1; i < len(attrs); i++ {
 		if attrs[i].Key == attrs[i-1].Key {
 			return nil, fmt.Errorf("ajarconnector: duplicate attribute key: %q", attrs[i].Key)
+		}
+	}
+
+	// Metadata follows the identical canonical rule: sorted by key, unique.
+	meta := make([]*eventpb.Attribute, len(b.metadata))
+	copy(meta, b.metadata)
+	sort.SliceStable(meta, func(i, j int) bool { return meta[i].Key < meta[j].Key })
+	for i := 1; i < len(meta); i++ {
+		if meta[i].Key == meta[i-1].Key {
+			return nil, fmt.Errorf("ajarconnector: duplicate metadata key: %q", meta[i].Key)
 		}
 	}
 
@@ -150,6 +174,7 @@ func (b *EventBuilder) Build() (*eventpb.Event, error) {
 		PolicyTags:    b.policyTags,
 		Confidence:    b.confidence,
 		Attributes:    attrs,
+		Metadata:      meta,
 	}, nil
 }
 

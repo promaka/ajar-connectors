@@ -109,6 +109,11 @@ EventBuilder& EventBuilder::confidence(double confidence) {
   confidence_ = confidence;
   return *this;
 }
+EventBuilder& EventBuilder::metadata(std::string key, std::string value) {
+  metadata_.emplace_back(std::move(key), std::move(value));
+  return *this;
+}
+
 EventBuilder& EventBuilder::attribute(std::string key, std::string value) {
   attributes_.emplace_back(std::move(key), std::move(value));
   return *this;
@@ -136,6 +141,9 @@ Event EventBuilder::build() const {
   if (attributes_.size() > kMaxAttributes) {
     throw BuildError("too many attributes: " + std::to_string(attributes_.size()));
   }
+  if (metadata_.size() > kMaxMetadata) {
+    throw BuildError("too many metadata entries: " + std::to_string(metadata_.size()));
+  }
 
   // Canonical rule: attributes sorted by key, unique.
   auto attrs = attributes_;
@@ -144,6 +152,16 @@ Event EventBuilder::build() const {
   for (std::size_t i = 1; i < attrs.size(); ++i) {
     if (attrs[i].first == attrs[i - 1].first) {
       throw BuildError("duplicate attribute key: " + attrs[i].first);
+    }
+  }
+
+  // Metadata follows the identical canonical rule: sorted by key, unique.
+  auto meta = metadata_;
+  std::stable_sort(meta.begin(), meta.end(),
+                   [](const auto& a, const auto& b) { return a.first < b.first; });
+  for (std::size_t i = 1; i < meta.size(); ++i) {
+    if (meta[i].first == meta[i - 1].first) {
+      throw BuildError("duplicate metadata key: " + meta[i].first);
     }
   }
 
@@ -167,6 +185,11 @@ Event EventBuilder::build() const {
     Attribute* a = e.add_attributes();
     a->set_key(kv.first);
     a->set_value(kv.second);
+  }
+  for (const auto& kv : meta) {
+    Attribute* m = e.add_metadata();
+    m->set_key(kv.first);
+    m->set_value(kv.second);
   }
   return e;
 }

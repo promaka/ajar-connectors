@@ -29,6 +29,30 @@ func TestBuilderSortsAttributesAndSetsDefaults(t *testing.T) {
 	}
 }
 
+func TestBuilderSortsMetadataAndRejectsDuplicateKeys(t *testing.T) {
+	event, err := NewEventBuilder("sensor-1", "mim:drone").
+		NewID().Now().
+		Metadata("mmsi", "227006760").
+		Metadata("callsign", "F-ABCD").
+		Build()
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	meta := event.GetMetadata()
+	if len(meta) != 2 || meta[0].GetKey() != "callsign" || meta[1].GetKey() != "mmsi" {
+		t.Errorf("metadata not sorted: %+v", meta)
+	}
+
+	_, err = NewEventBuilder("sensor-1", "mim:drone").
+		NewID().Now().
+		Metadata("mmsi", "1").
+		Metadata("mmsi", "2").
+		Build()
+	if err == nil || !strings.Contains(err.Error(), "duplicate metadata key") {
+		t.Fatalf("want duplicate-metadata-key error, got %v", err)
+	}
+}
+
 func TestBuilderRejectsDuplicateAttributeKeys(t *testing.T) {
 	_, err := NewEventBuilder("sensor-1", "mim:drone").
 		NewID().Now().

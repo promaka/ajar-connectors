@@ -8,7 +8,7 @@ hashed and signed. The shared ``vendor/contract/vectors.json`` proves this
 SDK's output is byte-identical to the others.
 """
 
-from .builder import MAX_ATTRIBUTES, MAX_POLICY_TAGS, BuildError, EventBuilder
+from .builder import MAX_ATTRIBUTES, MAX_METADATA, MAX_POLICY_TAGS, BuildError, EventBuilder
 from .canonical import canonical_bytes
 from .connector import Connector, OutboundProfile
 from .event_pb2 import Attribute, Event, GeoPoint
@@ -24,6 +24,7 @@ __all__ = [
     "EventBuilder",
     "GeoPoint",
     "MAX_ATTRIBUTES",
+    "MAX_METADATA",
     "MAX_POLICY_TAGS",
     "OutboundProfile",
     "SEAL_SIGNATURE_LEN",

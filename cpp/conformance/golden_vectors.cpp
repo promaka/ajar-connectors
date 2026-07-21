@@ -114,6 +114,13 @@ ajar::Event fixture_to_event(const mini_json::Value& f) {
       out->set_value(a.at("value").str);
     }
   }
+  if (const auto* meta = f.find("metadata")) {
+    for (const auto& m : meta->array) {
+      ajar::Attribute* out = e.add_metadata();
+      out->set_key(m.at("key").str);
+      out->set_value(m.at("value").str);
+    }
+  }
   return e;
 }
 

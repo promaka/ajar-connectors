@@ -69,7 +69,13 @@ type Event struct {
 	// keys so the canonical encoding stays byte-stable (the boundary rejects any
 	// event whose attributes are unsorted or duplicated). The connector normalises
 	// values into each attribute's declared unit.
-	Attributes    []*Attribute `protobuf:"bytes,11,rep,name=attributes,proto3" json:"attributes,omitempty"`
+	Attributes []*Attribute `protobuf:"bytes,11,rep,name=attributes,proto3" json:"attributes,omitempty"`
+	// Ungoverned passthrough metadata (ADR-0030): the long tail of vendor-specific
+	// fields a sovereign does NOT need to govern. Carried + audited as opaque,
+	// surfaced to the C2, but NOT type-validated/correlated. Allowed only when the
+	// entity type's signed ontology sets `allows_metadata`. MUST be sorted by `key`
+	// with unique keys (byte-stable canonical encoding) — a `repeated`, not a `map`.
+	Metadata      []*Attribute `protobuf:"bytes,12,rep,name=metadata,proto3" json:"metadata,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -177,6 +183,13 @@ func (x *Event) GetConfidence() float64 {
 func (x *Event) GetAttributes() []*Attribute {
 	if x != nil {
 		return x.Attributes
+	}
+	return nil
+}
+
+func (x *Event) GetMetadata() []*Attribute {
+	if x != nil {
+		return x.Metadata
 	}
 	return nil
 }
@@ -299,7 +312,7 @@ var File_event_proto protoreflect.FileDescriptor
 
 const file_event_proto_rawDesc = "" +
 	"\n" +
-	"\vevent.proto\x12\rajar.event.v1\"\x85\x03\n" +
+	"\vevent.proto\x12\rajar.event.v1\"\xbb\x03\n" +
 	"\x05Event\x12%\n" +
 	"\x0eschema_version\x18\x01 \x01(\tR\rschemaVersion\x12\x0e\n" +
 	"\x02id\x18\x02 \x01(\tR\x02id\x12\x1b\n" +
@@ -319,7 +332,8 @@ const file_event_proto_rawDesc = "" +
 	"confidence\x128\n" +
 	"\n" +
 	"attributes\x18\v \x03(\v2\x18.ajar.event.v1.AttributeR\n" +
-	"attributes\"3\n" +
+	"attributes\x124\n" +
+	"\bmetadata\x18\f \x03(\v2\x18.ajar.event.v1.AttributeR\bmetadata\"3\n" +
 	"\tAttribute\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value\"c\n" +
@@ -350,11 +364,12 @@ var file_event_proto_goTypes = []any{
 var file_event_proto_depIdxs = []int32{
 	2, // 0: ajar.event.v1.Event.location:type_name -> ajar.event.v1.GeoPoint
 	1, // 1: ajar.event.v1.Event.attributes:type_name -> ajar.event.v1.Attribute
-	2, // [2:2] is the sub-list for method output_type
-	2, // [2:2] is the sub-list for method input_type
-	2, // [2:2] is the sub-list for extension type_name
-	2, // [2:2] is the sub-list for extension extendee
-	0, // [0:2] is the sub-list for field type_name
+	1, // 2: ajar.event.v1.Event.metadata:type_name -> ajar.event.v1.Attribute
+	3, // [3:3] is the sub-list for method output_type
+	3, // [3:3] is the sub-list for method input_type
+	3, // [3:3] is the sub-list for extension type_name
+	3, // [3:3] is the sub-list for extension extendee
+	0, // [0:3] is the sub-list for field type_name
 }
 
 func init() { file_event_proto_init() }

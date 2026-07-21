@@ -29,6 +29,7 @@ using Attribute = ::ajar::event::v1::Attribute;
 
 // Contract limits (§3).
 constexpr std::size_t kMaxAttributes = 128;
+constexpr std::size_t kMaxMetadata = 128;
 constexpr std::size_t kMaxPolicyTags = 64;
 
 // Length in bytes of the Ed25519 signature prefix on a sealed envelope.
@@ -86,6 +87,11 @@ class EventBuilder {
   EventBuilder& policy_tag(std::string tag);
   EventBuilder& confidence(double confidence);
   EventBuilder& attribute(std::string key, std::string value);
+  // Adds one ungoverned passthrough metadata entry (ADR-0030): a vendor-specific
+  // field carried and audited opaquely, but not type-validated or correlated
+  // (e.g. a source's native identifier). Sorted by key at build(); duplicate
+  // keys rejected there.
+  EventBuilder& metadata(std::string key, std::string value);
   EventBuilder& allow_unnamespaced_entity_type();
 
   // Validates invariants and returns the canonical Event. Throws BuildError.
@@ -102,6 +108,7 @@ class EventBuilder {
   std::vector<std::string> policy_tags_;
   double confidence_ = 0.0;
   std::vector<std::pair<std::string, std::string>> attributes_;
+  std::vector<std::pair<std::string, std::string>> metadata_;
   bool strict_entity_namespace_ = true;
 };
 
