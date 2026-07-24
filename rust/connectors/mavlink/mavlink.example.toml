@@ -16,10 +16,20 @@ signing_key_path = "/etc/ajar/uav-flight-1.key"
 # affiliation of its own).
 default_affiliation = "friendly"
 
+# The connector decodes full telemetry (position, attitude, airdata, power/health,
+# GPS quality, flight mode) and maps every field the drone reports; whatever it
+# omits stays absent. Each airframe is its own track (MAVLink system id -> stable
+# source_uid + mav_sysid metadata), so Core never collapses multiple UAS onto one.
+#
 # Attribute keys the deployment's ontology declares -> ride governed; all others
 # ride as metadata (always accepted). Empty/omitted is the safe default.
-# See ../ATTRIBUTES.md for the standard set.
-# governed_attributes = ["affiliation", "speed", "heading", "vehicle_type", "status", "armed"]
+# See ../ATTRIBUTES.md for the full set and units.
+# governed_attributes = [
+#   "affiliation", "speed", "heading", "course", "vertical_speed", "relative_altitude",
+#   "vehicle_type", "status", "armed", "mode", "roll", "pitch", "yaw",
+#   "airspeed", "throttle", "battery_voltage", "battery_current", "battery_remaining",
+#   "battery_consumed", "battery_temp", "cpu_load", "gps_fix", "gps_satellites", "gps_hdop",
+# ]
 
 [transport]
 # Autopilots and ground stations commonly forward MAVLink over UDP.

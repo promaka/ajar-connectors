@@ -7,13 +7,26 @@
 //! is length-checked and its CRC verified before any field is read — it never
 //! panics and never trusts an unverified frame.
 //!
-//! Scope (military operating picture):
-//!  - **Position** — GLOBAL_POSITION_INT (33) and GPS_RAW_INT (24): WGS-84
-//!    position, altitude, ground speed, heading/course.
-//!  - **Identity/state** — HEARTBEAT (0): vehicle type, armed state, and system
-//!    status (active/critical/emergency). HEARTBEAT arrives separately from
-//!    position, so the connector caches it per system id and enriches each
-//!    position report with the vehicle's latest known state.
+//! Scope — full telemetry passthrough. A GPS fix anchors a track on the map, so
+//! GLOBAL_POSITION_INT (33) and GPS_RAW_INT (24) are the two messages that emit
+//! an event. Every other message the autopilot sends updates a per–system-id
+//! telemetry snapshot, and each emitted track carries the vehicle's latest known
+//! state. Whatever the drone reports is mapped; whatever it omits stays absent.
+//!
+//!  - **Position/kinematics** — GLOBAL_POSITION_INT (33): WGS-84 position,
+//!    altitude (AMSL + relative), true heading, ground/vertical speed.
+//!    GPS_RAW_INT (24): position, course, ground speed, and fix quality
+//!    (fix type, satellites, HDOP).
+//!  - **Attitude** — ATTITUDE (30): roll, pitch, yaw.
+//!  - **Airdata** — VFR_HUD (74): airspeed, throttle, climb rate.
+//!  - **Power/health** — SYS_STATUS (1) and BATTERY_STATUS (147): battery
+//!    voltage, current, remaining, consumed charge, temperature, CPU load.
+//!  - **Identity/state** — HEARTBEAT (0): vehicle type, armed state, system
+//!    status, and flight mode.
+//!
+//! Each airframe is its own track: the MAVLink system id is emitted as the stable
+//! `source_uid` (and `mav_sysid`), so Core derives a per-vehicle `track_id`
+//! rather than collapsing every drone onto the connector's `source_id`.
 //!
 //! MAVLink orders a message's fields on the wire by decreasing type size; the
 //! offsets below follow that layout and are verified against constructed frames.
@@ -52,38 +65,71 @@ impl std::fmt::Display for MavError {
 }
 impl std::error::Error for MavError {}
 
-/// A decoded MAVLink position enriched with the vehicle's known state.
+/// A vehicle's latest known non-positional telemetry, cached by system id and
+/// attached to every emitted track. Every field is optional: absent until the
+/// drone reports it.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct VehicleState {
+    // HEARTBEAT (0)
+    /// Vehicle category: fixed-wing, multirotor, …
+    pub vehicle_type: Option<&'static str>,
+    /// System status: active, critical, emergency, …
+    pub status: Option<&'static str>,
+    /// Armed state.
+    pub armed: Option<bool>,
+    /// Coarse flight mode derived from the base-mode flags.
+    pub mode: Option<&'static str>,
+    /// Autopilot-specific mode number (ArduPilot/PX4 differ); passthrough.
+    pub custom_mode: Option<u32>,
+    // ATTITUDE (30) — degrees
+    pub roll: Option<f64>,
+    pub pitch: Option<f64>,
+    pub yaw: Option<f64>,
+    // VFR_HUD (74)
+    /// Airspeed, knots (distinct from GPS ground speed).
+    pub airspeed: Option<f64>,
+    /// Throttle, percent.
+    pub throttle: Option<u16>,
+    /// Climb rate, m/s (positive up).
+    pub climb: Option<f64>,
+    // SYS_STATUS (1) / BATTERY_STATUS (147)
+    pub battery_voltage: Option<f64>,  // volts
+    pub battery_current: Option<f64>,  // amps
+    pub battery_remaining: Option<i8>, // percent
+    pub battery_consumed_mah: Option<i32>,
+    pub battery_temp: Option<f64>, // degrees C
+    pub cpu_load: Option<f64>,     // percent
+    // GPS_RAW_INT (24) quality
+    pub gps_fix: Option<&'static str>,
+    pub gps_sats: Option<u8>,
+    pub gps_hdop: Option<f64>,
+}
+
+/// A decoded MAVLink position, plus the vehicle's cached telemetry snapshot.
 #[derive(Debug, Clone, PartialEq)]
 pub struct MavPosition {
     pub sysid: u8,
     pub msg_id: u32,
     pub lat: f64,
     pub lon: f64,
+    /// Altitude above mean sea level, metres.
     pub alt_m: f64,
+    /// Altitude above home, metres (GLOBAL_POSITION_INT).
+    pub relative_alt_m: Option<f64>,
     /// True heading, degrees (GLOBAL_POSITION_INT).
     pub heading: Option<f64>,
     /// Course over ground, degrees (GPS_RAW_INT).
     pub course: Option<f64>,
     /// Ground speed, knots.
     pub sog: Option<f64>,
-    /// Vehicle type category (from HEARTBEAT): fixed-wing, multirotor, …
-    pub vehicle_type: Option<&'static str>,
-    /// System status (from HEARTBEAT): active, critical, emergency, …
-    pub status: Option<&'static str>,
-    /// Armed state (from HEARTBEAT).
-    pub armed: Option<bool>,
+    /// Vertical speed, m/s positive up (GLOBAL_POSITION_INT).
+    pub vertical_speed: Option<f64>,
+    /// Latest known non-positional telemetry for this system id.
+    pub state: VehicleState,
 }
 
-/// A vehicle's last-known state from its HEARTBEAT, cached by system id.
-#[derive(Debug, Clone, Default, PartialEq)]
-struct VehicleState {
-    vehicle_type: Option<&'static str>,
-    status: Option<&'static str>,
-    armed: Option<bool>,
-}
-
-/// Normalizes MAVLink for one connector identity, caching HEARTBEAT state per
-/// system id.
+/// Normalizes MAVLink for one connector identity, caching per–system-id
+/// telemetry across messages.
 pub struct MavParser {
     source_id: String,
     enrichment: Enrichment,
@@ -93,9 +139,13 @@ pub struct MavParser {
 /// CRC_EXTRA and full (untruncated) payload length for the messages we decode.
 fn spec(msg_id: u32) -> Option<(u8, usize)> {
     match msg_id {
-        0 => Some((50, 9)),    // HEARTBEAT
-        24 => Some((24, 30)),  // GPS_RAW_INT
-        33 => Some((104, 28)), // GLOBAL_POSITION_INT
+        0 => Some((50, 9)),     // HEARTBEAT
+        1 => Some((124, 31)),   // SYS_STATUS
+        24 => Some((24, 30)),   // GPS_RAW_INT
+        30 => Some((39, 28)),   // ATTITUDE
+        33 => Some((104, 28)),  // GLOBAL_POSITION_INT
+        74 => Some((20, 20)),   // VFR_HUD
+        147 => Some((154, 36)), // BATTERY_STATUS
         _ => None,
     }
 }
@@ -110,8 +160,8 @@ impl MavParser {
     }
 
     /// Parse one MAVLink frame. Returns a position for a CRC-valid position
-    /// message; `Ok(None)` for a HEARTBEAT (which updates the state cache) or a
-    /// message we do not map.
+    /// message (33/24); `Ok(None)` for a state message that updates the per-sysid
+    /// telemetry cache, or a message we do not map.
     pub fn parse_frame(&self, frame: &[u8]) -> Result<Option<MavPosition>, MavError> {
         let &magic = frame.first().ok_or(MavError::Truncated)?;
         let (len, header_len, sysid, msg_id) = match magic {
@@ -157,7 +207,23 @@ impl MavParser {
 
         match msg_id {
             0 => {
-                self.heartbeat(sysid, &payload);
+                self.mutate(sysid, |s| heartbeat(s, &payload));
+                Ok(None)
+            }
+            1 => {
+                self.mutate(sysid, |s| sys_status(s, &payload));
+                Ok(None)
+            }
+            30 => {
+                self.mutate(sysid, |s| attitude(s, &payload));
+                Ok(None)
+            }
+            74 => {
+                self.mutate(sysid, |s| vfr_hud(s, &payload));
+                Ok(None)
+            }
+            147 => {
+                self.mutate(sysid, |s| battery_status(s, &payload));
                 Ok(None)
             }
             33 => Ok(Some(self.global_position(sysid, &payload))),
@@ -166,118 +232,140 @@ impl MavParser {
         }
     }
 
-    /// HEARTBEAT (msg 0): cache vehicle type, armed state, system status by sysid.
-    fn heartbeat(&self, sysid: u8, p: &[u8]) {
-        let state = VehicleState {
-            vehicle_type: vehicle_type(p[4]),
-            status: mav_state(p[7]),
-            armed: Some(p[6] & 0x80 != 0), // MAV_MODE_FLAG_SAFETY_ARMED
-        };
+    /// Apply `f` to this system id's cached state (creating it on first sight).
+    fn mutate(&self, sysid: u8, f: impl FnOnce(&mut VehicleState)) {
+        let mut vehicles = self.vehicles.lock().expect("vehicle mutex");
+        f(vehicles.entry(sysid).or_default());
+    }
+
+    fn snapshot(&self, sysid: u8) -> VehicleState {
         self.vehicles
-            .lock()
-            .expect("vehicle mutex")
-            .insert(sysid, state);
-    }
-
-    /// GLOBAL_POSITION_INT (msg 33): position, altitude, ground speed from the
-    /// velocity vector, true heading.
-    fn global_position(&self, sysid: u8, p: &[u8]) -> MavPosition {
-        let vx = i16le(p, 20) as f64;
-        let vy = i16le(p, 22) as f64;
-        let sog = Some((vx * vx + vy * vy).sqrt() / 100.0 * MPS_TO_KNOTS);
-        let hdg = u16le(p, 26);
-        self.position(
-            sysid,
-            33,
-            i32le(p, 4),
-            i32le(p, 8),
-            i32le(p, 12),
-            (hdg != u16::MAX).then_some(hdg as f64 / 100.0),
-            None,
-            sog,
-        )
-    }
-
-    /// GPS_RAW_INT (msg 24): position, altitude, ground speed, course over ground.
-    fn gps_raw(&self, sysid: u8, p: &[u8]) -> MavPosition {
-        let vel = u16le(p, 24);
-        let cog = u16le(p, 26);
-        self.position(
-            sysid,
-            24,
-            i32le(p, 8),
-            i32le(p, 12),
-            i32le(p, 16),
-            None,
-            (cog != u16::MAX).then_some(cog as f64 / 100.0),
-            (vel != u16::MAX).then_some(vel as f64 / 100.0 * MPS_TO_KNOTS),
-        )
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn position(
-        &self,
-        sysid: u8,
-        msg_id: u32,
-        lat_e7: i32,
-        lon_e7: i32,
-        alt_mm: i32,
-        heading: Option<f64>,
-        course: Option<f64>,
-        sog: Option<f64>,
-    ) -> MavPosition {
-        let state = self
-            .vehicles
             .lock()
             .expect("vehicle mutex")
             .get(&sysid)
             .cloned()
-            .unwrap_or_default();
+            .unwrap_or_default()
+    }
+
+    /// GLOBAL_POSITION_INT (msg 33): position, altitudes, ground/vertical speed
+    /// from the velocity vector, true heading.
+    fn global_position(&self, sysid: u8, p: &[u8]) -> MavPosition {
+        let vx = i16le(p, 20) as f64;
+        let vy = i16le(p, 22) as f64;
+        let vz = i16le(p, 24) as f64; // positive down, cm/s
+        let sog = Some((vx * vx + vy * vy).sqrt() / 100.0 * MPS_TO_KNOTS);
+        let climb = -vz / 100.0;
+        let hdg = u16le(p, 26);
         MavPosition {
             sysid,
-            msg_id,
-            lat: lat_e7 as f64 / 1e7,
-            lon: lon_e7 as f64 / 1e7,
-            alt_m: alt_mm as f64 / 1000.0,
-            heading,
-            course,
+            msg_id: 33,
+            lat: i32le(p, 4) as f64 / 1e7,
+            lon: i32le(p, 8) as f64 / 1e7,
+            alt_m: i32le(p, 12) as f64 / 1000.0,
+            relative_alt_m: Some(i32le(p, 16) as f64 / 1000.0),
+            heading: (hdg != u16::MAX).then_some(hdg as f64 / 100.0),
+            course: None,
             sog,
-            vehicle_type: state.vehicle_type,
-            status: state.status,
-            armed: state.armed,
+            // Normalize IEEE negative zero so a level aircraft reads "0.0".
+            vertical_speed: Some(if climb == 0.0 { 0.0 } else { climb }),
+            state: self.snapshot(sysid),
+        }
+    }
+
+    /// GPS_RAW_INT (msg 24): position, altitude, ground speed, course, and fix
+    /// quality (which also updates the cache so later position reports carry it).
+    fn gps_raw(&self, sysid: u8, p: &[u8]) -> MavPosition {
+        let eph = u16le(p, 20);
+        let vel = u16le(p, 24);
+        let cog = u16le(p, 26);
+        let fix = gps_fix(p[28]);
+        let sats = p[29];
+        self.mutate(sysid, |s| {
+            s.gps_fix = fix;
+            s.gps_sats = (sats != u8::MAX).then_some(sats);
+            s.gps_hdop = (eph != u16::MAX).then_some(eph as f64 / 100.0);
+        });
+        MavPosition {
+            sysid,
+            msg_id: 24,
+            lat: i32le(p, 8) as f64 / 1e7,
+            lon: i32le(p, 12) as f64 / 1e7,
+            alt_m: i32le(p, 16) as f64 / 1000.0,
+            relative_alt_m: None,
+            heading: None,
+            course: (cog != u16::MAX).then_some(cog as f64 / 100.0),
+            sog: (vel != u16::MAX).then_some(vel as f64 / 100.0 * MPS_TO_KNOTS),
+            vertical_speed: None,
+            state: self.snapshot(sysid),
         }
     }
 
     fn base_builder(&self, p: &MavPosition) -> EventBuilder {
         let affiliation = self.enrichment.affiliation.as_deref().unwrap_or("unknown");
+        let s = &p.state;
 
-        // System id is an identifier -> always metadata; tactical fields follow mode.
+        // System id is the stable per-airframe identity: emit it as source_uid
+        // (Core's track key) and as mav_sysid. Identifiers ride metadata.
         let mut b = EventBuilder::new(self.source_id.clone(), "mim:aircraft")
             .new_id()
             .location(p.lat, p.lon, p.alt_m)
+            .metadata("source_uid", p.sysid.to_string())
             .metadata("mav_sysid", p.sysid.to_string())
             .tactical(&self.enrichment, "affiliation", affiliation);
-        if let Some(sog) = p.sog {
-            b = b.tactical(&self.enrichment, "speed", format!("{sog:.1}")); // knots
+
+        // Governance-routed tactical attributes: emit only what is present.
+        macro_rules! attr {
+            ($key:expr, $val:expr) => {
+                if let Some(v) = $val {
+                    b = b.tactical(&self.enrichment, $key, v);
+                }
+            };
         }
-        if let Some(h) = p.heading {
-            b = b.tactical(&self.enrichment, "heading", format!("{h:.1}")); // degrees true
-        }
-        if let Some(c) = p.course {
-            b = b.tactical(&self.enrichment, "course", format!("{c:.1}")); // degrees
-        }
-        if let Some(vt) = p.vehicle_type {
-            b = b.tactical(&self.enrichment, "vehicle_type", vt);
-        }
-        if let Some(st) = p.status {
-            b = b.tactical(&self.enrichment, "status", st);
-        }
-        if let Some(armed) = p.armed {
-            b = b.tactical(
-                &self.enrichment,
-                "armed",
-                if armed { "true" } else { "false" },
-            );
+        attr!("speed", p.sog.map(|v| format!("{v:.1}"))); // knots
+        attr!("heading", p.heading.map(|v| format!("{v:.1}"))); // deg true
+        attr!("course", p.course.map(|v| format!("{v:.1}"))); // deg
+        attr!(
+            "vertical_speed",
+            p.vertical_speed.or(s.climb).map(|v| format!("{v:.1}"))
+        ); // m/s
+        attr!(
+            "relative_altitude",
+            p.relative_alt_m.map(|v| format!("{v:.1}"))
+        ); // m
+        attr!("vehicle_type", s.vehicle_type);
+        attr!("status", s.status);
+        attr!("armed", s.armed.map(|a| if a { "true" } else { "false" }));
+        attr!("mode", s.mode);
+        attr!("roll", s.roll.map(|v| format!("{v:.1}"))); // deg
+        attr!("pitch", s.pitch.map(|v| format!("{v:.1}"))); // deg
+        attr!("yaw", s.yaw.map(|v| format!("{v:.1}"))); // deg
+        attr!("airspeed", s.airspeed.map(|v| format!("{v:.1}"))); // knots
+        attr!("throttle", s.throttle.map(|v| v.to_string())); // %
+        attr!(
+            "battery_voltage",
+            s.battery_voltage.map(|v| format!("{v:.2}"))
+        ); // V
+        attr!(
+            "battery_current",
+            s.battery_current.map(|v| format!("{v:.2}"))
+        ); // A
+        attr!(
+            "battery_remaining",
+            s.battery_remaining.map(|v| v.to_string())
+        ); // %
+        attr!(
+            "battery_consumed",
+            s.battery_consumed_mah.map(|v| v.to_string())
+        ); // mAh
+        attr!("battery_temp", s.battery_temp.map(|v| format!("{v:.1}"))); // °C
+        attr!("cpu_load", s.cpu_load.map(|v| format!("{v:.0}"))); // %
+        attr!("gps_fix", s.gps_fix);
+        attr!("gps_satellites", s.gps_sats.map(|v| v.to_string()));
+        attr!("gps_hdop", s.gps_hdop.map(|v| format!("{v:.2}")));
+
+        // Autopilot-specific mode number: an opaque identifier -> metadata.
+        if let Some(cm) = s.custom_mode {
+            b = b.metadata("custom_mode", cm.to_string());
         }
         b
     }
@@ -313,6 +401,81 @@ fn box_err(e: MavError) -> ParseError {
     Box::new(e) as ParseError
 }
 
+// --- per-message decoders (mutate the cached snapshot) ---
+
+/// HEARTBEAT (msg 0): vehicle type, armed state, system status, flight mode.
+fn heartbeat(s: &mut VehicleState, p: &[u8]) {
+    let base_mode = p[6];
+    s.vehicle_type = vehicle_type(p[4]);
+    s.status = mav_state(p[7]);
+    s.armed = Some(base_mode & 0x80 != 0); // MAV_MODE_FLAG_SAFETY_ARMED
+    s.mode = base_flag_mode(base_mode);
+    // custom_mode is only meaningful when the custom-mode flag is set.
+    s.custom_mode = (base_mode & 0x01 != 0).then(|| u32le(p, 0));
+}
+
+/// SYS_STATUS (msg 1): battery voltage/current/remaining and CPU load. Sentinel
+/// values (0xFFFF / -1) mean "unknown" and are dropped.
+fn sys_status(s: &mut VehicleState, p: &[u8]) {
+    let load = u16le(p, 12);
+    let voltage = u16le(p, 14);
+    let current = i16le(p, 16);
+    let remaining = p[30] as i8;
+    if load != u16::MAX {
+        s.cpu_load = Some(load as f64 / 10.0);
+    }
+    if voltage != u16::MAX {
+        s.battery_voltage = Some(voltage as f64 / 1000.0);
+    }
+    if current != -1 {
+        s.battery_current = Some(current as f64 / 100.0);
+    }
+    if remaining != -1 {
+        s.battery_remaining = Some(remaining);
+    }
+}
+
+/// ATTITUDE (msg 30): roll, pitch, yaw (radians on the wire -> degrees).
+fn attitude(s: &mut VehicleState, p: &[u8]) {
+    s.roll = Some((f32le(p, 4) as f64).to_degrees());
+    s.pitch = Some((f32le(p, 8) as f64).to_degrees());
+    s.yaw = Some((f32le(p, 12) as f64).to_degrees().rem_euclid(360.0));
+}
+
+/// VFR_HUD (msg 74): airspeed, throttle, climb rate.
+fn vfr_hud(s: &mut VehicleState, p: &[u8]) {
+    s.airspeed = Some(f32le(p, 0) as f64 * MPS_TO_KNOTS);
+    s.climb = Some(f32le(p, 12) as f64);
+    s.throttle = Some(u16le(p, 18));
+}
+
+/// BATTERY_STATUS (msg 147): consumed charge, temperature, and a more precise
+/// voltage/current/remaining than SYS_STATUS when both are sent.
+fn battery_status(s: &mut VehicleState, p: &[u8]) {
+    let consumed = i32le(p, 0);
+    let temperature = i16le(p, 8);
+    let cell0 = u16le(p, 10);
+    let current = i16le(p, 30);
+    let remaining = p[35] as i8;
+    if consumed != -1 {
+        s.battery_consumed_mah = Some(consumed);
+    }
+    if temperature != i16::MAX {
+        s.battery_temp = Some(temperature as f64 / 100.0);
+    }
+    if cell0 != u16::MAX {
+        s.battery_voltage = Some(cell0 as f64 / 1000.0);
+    }
+    if current != -1 {
+        s.battery_current = Some(current as f64 / 100.0);
+    }
+    if remaining != -1 {
+        s.battery_remaining = Some(remaining);
+    }
+}
+
+// --- enumerations ---
+
 /// MAV_TYPE (subset) → operational category.
 fn vehicle_type(t: u8) -> Option<&'static str> {
     Some(match t {
@@ -344,8 +507,50 @@ fn mav_state(s: u8) -> Option<&'static str> {
     })
 }
 
+/// Coarse flight mode from MAV_MODE_FLAG base-mode bits (most-specific first).
+/// The autopilot-specific detail is the separate `custom_mode` passthrough.
+fn base_flag_mode(base_mode: u8) -> Option<&'static str> {
+    if base_mode & 0x04 != 0 {
+        Some("auto") // MAV_MODE_FLAG_AUTO_ENABLED
+    } else if base_mode & 0x08 != 0 {
+        Some("guided") // MAV_MODE_FLAG_GUIDED_ENABLED
+    } else if base_mode & 0x10 != 0 {
+        Some("stabilize") // MAV_MODE_FLAG_STABILIZE_ENABLED
+    } else if base_mode & 0x40 != 0 {
+        Some("manual") // MAV_MODE_FLAG_MANUAL_INPUT_ENABLED
+    } else {
+        None
+    }
+}
+
+/// GPS_FIX_TYPE → string.
+fn gps_fix(t: u8) -> Option<&'static str> {
+    Some(match t {
+        0 => "no-gps",
+        1 => "no-fix",
+        2 => "2d",
+        3 => "3d",
+        4 => "dgps",
+        5 => "rtk-float",
+        6 => "rtk-fixed",
+        7 => "static",
+        8 => "ppp",
+        _ => return None,
+    })
+}
+
+// --- little-endian field readers ---
+
 fn i32le(b: &[u8], off: usize) -> i32 {
     i32::from_le_bytes([b[off], b[off + 1], b[off + 2], b[off + 3]])
+}
+
+fn u32le(b: &[u8], off: usize) -> u32 {
+    u32::from_le_bytes([b[off], b[off + 1], b[off + 2], b[off + 3]])
+}
+
+fn f32le(b: &[u8], off: usize) -> f32 {
+    f32::from_le_bytes([b[off], b[off + 1], b[off + 2], b[off + 3]])
 }
 
 fn i16le(b: &[u8], off: usize) -> i16 {
@@ -386,24 +591,83 @@ mod tests {
         MavParser::new("uav-flight-1", Enrichment::default())
     }
 
+    const GOVERNED: [&str; 24] = [
+        "affiliation",
+        "speed",
+        "heading",
+        "course",
+        "vertical_speed",
+        "relative_altitude",
+        "vehicle_type",
+        "status",
+        "armed",
+        "mode",
+        "roll",
+        "pitch",
+        "yaw",
+        "airspeed",
+        "throttle",
+        "battery_voltage",
+        "battery_current",
+        "battery_remaining",
+        "battery_consumed",
+        "battery_temp",
+        "cpu_load",
+        "gps_fix",
+        "gps_satellites",
+        "gps_hdop",
+    ];
+
     fn governed() -> MavParser {
         MavParser::new(
             "uav-flight-1",
-            Enrichment::governing([
-                "affiliation",
-                "speed",
-                "heading",
-                "course",
-                "vehicle_type",
-                "status",
-                "armed",
-            ])
-            .with_affiliation("friendly"),
+            Enrichment::governing(GOVERNED).with_affiliation("friendly"),
         )
     }
 
     fn bytes(h: &str) -> Vec<u8> {
         hex::decode(h).unwrap()
+    }
+
+    /// Assemble a CRC-correct v1 frame (sysid 1, compid 1, seq 0) for `msgid`
+    /// with `payload` placed verbatim — the encode side of the offset check.
+    fn frame(msgid: u32, payload: &[u8]) -> Vec<u8> {
+        let (extra, _) = spec(msgid).expect("known msgid");
+        let mut f = vec![0xFE, payload.len() as u8, 0, 1, 1, msgid as u8];
+        f.extend_from_slice(payload);
+        let c = crc(&f[1..], extra);
+        f.push((c & 0xFF) as u8);
+        f.push((c >> 8) as u8);
+        f
+    }
+
+    fn put_i32(p: &mut [u8], off: usize, v: i32) {
+        p[off..off + 4].copy_from_slice(&v.to_le_bytes());
+    }
+    fn put_u32(p: &mut [u8], off: usize, v: u32) {
+        p[off..off + 4].copy_from_slice(&v.to_le_bytes());
+    }
+    fn put_f32(p: &mut [u8], off: usize, v: f32) {
+        p[off..off + 4].copy_from_slice(&v.to_le_bytes());
+    }
+    fn put_i16(p: &mut [u8], off: usize, v: i16) {
+        p[off..off + 2].copy_from_slice(&v.to_le_bytes());
+    }
+    fn put_u16(p: &mut [u8], off: usize, v: u16) {
+        p[off..off + 2].copy_from_slice(&v.to_le_bytes());
+    }
+
+    fn attr_of<'a>(ev: &'a Event, k: &str) -> Option<&'a str> {
+        ev.attributes
+            .iter()
+            .find(|a| a.key == k)
+            .map(|a| a.value.as_str())
+    }
+    fn meta_of<'a>(ev: &'a Event, k: &str) -> Option<&'a str> {
+        ev.metadata
+            .iter()
+            .find(|m| m.key == k)
+            .map(|m| m.value.as_str())
     }
 
     #[test]
@@ -417,27 +681,195 @@ mod tests {
     }
 
     #[test]
+    fn sysid_becomes_stable_source_uid() {
+        let pos = parser().parse_frame(&bytes(GPI)).unwrap().unwrap();
+        let ev = parser().to_event_at(&pos, "2026-06-10T08:00:00Z").unwrap();
+        // Each airframe is its own track: sysid rides as source_uid (Core's track
+        // key) and mav_sysid.
+        assert_eq!(meta_of(&ev, "source_uid"), Some("1"));
+        assert_eq!(meta_of(&ev, "mav_sysid"), Some("1"));
+    }
+
+    #[test]
     fn heartbeat_state_correlates_into_positions() {
         let p = governed();
         assert_eq!(p.parse_frame(&bytes(HEARTBEAT)).unwrap(), None); // cached, no event
         let pos = p.parse_frame(&bytes(GPI)).unwrap().unwrap();
-        assert_eq!(pos.vehicle_type, Some("multirotor"));
-        assert_eq!(pos.status, Some("active"));
-        assert_eq!(pos.armed, Some(true));
+        assert_eq!(pos.state.vehicle_type, Some("multirotor"));
+        assert_eq!(pos.state.status, Some("active"));
+        assert_eq!(pos.state.armed, Some(true));
         let ev = p.to_event_at(&pos, "2026-06-10T08:00:00Z").unwrap();
-        let attr = |k: &str| {
-            ev.attributes
-                .iter()
-                .find(|a| a.key == k)
-                .map(|a| a.value.as_str())
-        };
-        assert_eq!(attr("affiliation"), Some("friendly"));
-        assert_eq!(attr("vehicle_type"), Some("multirotor"));
-        assert_eq!(attr("armed"), Some("true"));
-        assert!(ev
-            .metadata
-            .iter()
-            .any(|m| m.key == "mav_sysid" && m.value == "1"));
+        assert_eq!(attr_of(&ev, "affiliation"), Some("friendly"));
+        assert_eq!(attr_of(&ev, "vehicle_type"), Some("multirotor"));
+        assert_eq!(attr_of(&ev, "armed"), Some("true"));
+    }
+
+    #[test]
+    fn attitude_maps_roll_pitch_yaw_in_degrees() {
+        let p = governed();
+        let mut payload = vec![0u8; 28];
+        put_f32(&mut payload, 4, 0.5); // roll rad
+        put_f32(&mut payload, 8, -0.25); // pitch rad
+        put_f32(&mut payload, 12, std::f32::consts::FRAC_PI_2); // yaw = 90°
+        assert_eq!(p.parse_frame(&frame(30, &payload)).unwrap(), None);
+
+        let pos = p.parse_frame(&bytes(GPI)).unwrap().unwrap();
+        assert!((pos.state.roll.unwrap() - 0.5_f64.to_degrees()).abs() < 1e-3);
+        assert!((pos.state.pitch.unwrap() - (-0.25_f64).to_degrees()).abs() < 1e-3);
+        assert!((pos.state.yaw.unwrap() - 90.0).abs() < 1e-3);
+        let ev = p.to_event_at(&pos, "2026-06-10T08:00:00Z").unwrap();
+        assert_eq!(attr_of(&ev, "yaw"), Some("90.0"));
+    }
+
+    #[test]
+    fn sys_status_maps_battery_and_load() {
+        let p = governed();
+        let mut payload = vec![0u8; 31];
+        put_u16(&mut payload, 12, 250); // load 25.0%
+        put_u16(&mut payload, 14, 12600); // 12.6 V
+        put_i16(&mut payload, 16, 1500); // 15.0 A
+        payload[30] = 77i8 as u8; // remaining 77%
+        assert_eq!(p.parse_frame(&frame(1, &payload)).unwrap(), None);
+
+        let pos = p.parse_frame(&bytes(GPI)).unwrap().unwrap();
+        assert_eq!(pos.state.battery_remaining, Some(77));
+        let ev = p.to_event_at(&pos, "2026-06-10T08:00:00Z").unwrap();
+        assert_eq!(attr_of(&ev, "battery_voltage"), Some("12.60"));
+        assert_eq!(attr_of(&ev, "battery_current"), Some("15.00"));
+        assert_eq!(attr_of(&ev, "cpu_load"), Some("25"));
+    }
+
+    #[test]
+    fn sys_status_unknown_sentinels_stay_absent() {
+        let p = governed();
+        let mut payload = vec![0u8; 31];
+        put_u16(&mut payload, 14, u16::MAX); // voltage unknown
+        put_i16(&mut payload, 16, -1); // current unknown
+        payload[30] = (-1i8) as u8; // remaining unknown
+        assert_eq!(p.parse_frame(&frame(1, &payload)).unwrap(), None);
+
+        let pos = p.parse_frame(&bytes(GPI)).unwrap().unwrap();
+        assert_eq!(pos.state.battery_voltage, None);
+        assert_eq!(pos.state.battery_current, None);
+        assert_eq!(pos.state.battery_remaining, None);
+        let ev = p.to_event_at(&pos, "2026-06-10T08:00:00Z").unwrap();
+        assert_eq!(attr_of(&ev, "battery_voltage"), None);
+    }
+
+    #[test]
+    fn vfr_hud_maps_airspeed_throttle_climb() {
+        let p = governed();
+        let mut payload = vec![0u8; 20];
+        put_f32(&mut payload, 0, 20.0); // airspeed 20 m/s
+        put_f32(&mut payload, 12, 2.5); // climb 2.5 m/s
+        put_u16(&mut payload, 18, 55); // throttle 55%
+        assert_eq!(p.parse_frame(&frame(74, &payload)).unwrap(), None);
+
+        // Trigger on GPS_RAW (which has no vertical velocity of its own) so the
+        // cached VFR climb is what surfaces as vertical_speed.
+        let mut gps = vec![0u8; 30];
+        put_i32(&mut gps, 8, 474_000_000);
+        put_i32(&mut gps, 12, 85_000_000);
+        put_i32(&mut gps, 16, 500_000);
+        gps[28] = 3;
+        let pos = p.parse_frame(&frame(24, &gps)).unwrap().unwrap();
+        assert!((pos.state.airspeed.unwrap() - 20.0 * MPS_TO_KNOTS).abs() < 0.1);
+        let ev = p.to_event_at(&pos, "2026-06-10T08:00:00Z").unwrap();
+        assert_eq!(attr_of(&ev, "throttle"), Some("55"));
+        assert_eq!(attr_of(&ev, "vertical_speed"), Some("2.5")); // VFR climb fallback
+
+        // A GLOBAL_POSITION_INT carries its own (level) vertical speed, clean of
+        // negative zero, and it wins over the cached VFR value.
+        let gpi = p.parse_frame(&bytes(GPI)).unwrap().unwrap();
+        let ev2 = p.to_event_at(&gpi, "2026-06-10T08:00:00Z").unwrap();
+        assert_eq!(attr_of(&ev2, "vertical_speed"), Some("0.0"));
+    }
+
+    #[test]
+    fn battery_status_maps_consumed_and_temperature() {
+        let p = governed();
+        let mut payload = vec![0u8; 36];
+        put_i32(&mut payload, 0, 1234); // consumed 1234 mAh
+        put_i16(&mut payload, 8, 2500); // 25.0 °C
+        put_u16(&mut payload, 10, 12550); // cell0 12.55 V
+        put_i16(&mut payload, 30, 1600); // 16.0 A
+        payload[35] = 66i8 as u8; // remaining 66%
+        assert_eq!(p.parse_frame(&frame(147, &payload)).unwrap(), None);
+
+        let pos = p.parse_frame(&bytes(GPI)).unwrap().unwrap();
+        assert_eq!(pos.state.battery_consumed_mah, Some(1234));
+        let ev = p.to_event_at(&pos, "2026-06-10T08:00:00Z").unwrap();
+        assert_eq!(attr_of(&ev, "battery_consumed"), Some("1234"));
+        assert_eq!(attr_of(&ev, "battery_temp"), Some("25.0"));
+        assert_eq!(attr_of(&ev, "battery_voltage"), Some("12.55"));
+    }
+
+    #[test]
+    fn gps_raw_maps_fix_quality_and_caches_it() {
+        let p = governed();
+        let mut payload = vec![0u8; 30];
+        put_i32(&mut payload, 8, 474_000_000); // 47.4 N
+        put_i32(&mut payload, 12, 85_000_000); // 8.5 E
+        put_i32(&mut payload, 16, 500_000); // 500 m
+        put_u16(&mut payload, 20, 120); // eph -> hdop 1.2
+        put_u16(&mut payload, 24, 1000); // vel 10 m/s
+        put_u16(&mut payload, 26, 4500); // cog 45.0°
+        payload[28] = 3; // fix 3d
+        payload[29] = 12; // 12 sats
+
+        let pos = p.parse_frame(&frame(24, &payload)).unwrap().unwrap();
+        assert_eq!(pos.msg_id, 24);
+        assert_eq!(pos.state.gps_fix, Some("3d"));
+        assert_eq!(pos.state.gps_sats, Some(12));
+        assert!((pos.state.gps_hdop.unwrap() - 1.2).abs() < 1e-9);
+        assert!((pos.course.unwrap() - 45.0).abs() < 1e-6);
+        let ev = p.to_event_at(&pos, "2026-06-10T08:00:00Z").unwrap();
+        assert_eq!(attr_of(&ev, "gps_fix"), Some("3d"));
+        assert_eq!(attr_of(&ev, "gps_satellites"), Some("12"));
+
+        // The fix quality is cached, so a later GLOBAL_POSITION_INT carries it too.
+        let gpi = p.parse_frame(&bytes(GPI)).unwrap().unwrap();
+        assert_eq!(gpi.state.gps_fix, Some("3d"));
+    }
+
+    #[test]
+    fn heartbeat_maps_flight_mode() {
+        let p = governed();
+        let mut payload = vec![0u8; 9];
+        put_u32(&mut payload, 0, 4); // custom_mode = 4 (autopilot-specific)
+        payload[4] = 1; // type fixed-wing
+        payload[6] = 0x01 | 0x04 | 0x80; // custom-enabled | auto | armed
+        payload[7] = 4; // active
+        assert_eq!(p.parse_frame(&frame(0, &payload)).unwrap(), None);
+
+        let pos = p.parse_frame(&bytes(GPI)).unwrap().unwrap();
+        assert_eq!(pos.state.mode, Some("auto"));
+        assert_eq!(pos.state.custom_mode, Some(4));
+        let ev = p.to_event_at(&pos, "2026-06-10T08:00:00Z").unwrap();
+        assert_eq!(attr_of(&ev, "mode"), Some("auto"));
+        assert_eq!(meta_of(&ev, "custom_mode"), Some("4"));
+    }
+
+    #[test]
+    fn distinct_sysids_keep_separate_state() {
+        let p = governed();
+        // sysid 1 heartbeat: multirotor. sysid 7 heartbeat: fixed-wing.
+        assert_eq!(p.parse_frame(&bytes(HEARTBEAT)).unwrap(), None); // sysid 1
+        let mut hb7 = vec![0u8; 9];
+        hb7[4] = 1; // fixed-wing
+        hb7[7] = 4;
+        let mut f7 = frame(0, &hb7);
+        f7[3] = 7; // override sysid -> 7 (recompute CRC)
+        let (extra, _) = spec(0).unwrap();
+        let c = crc(&f7[1..f7.len() - 2], extra);
+        let n = f7.len();
+        f7[n - 2] = (c & 0xFF) as u8;
+        f7[n - 1] = (c >> 8) as u8;
+        assert_eq!(p.parse_frame(&f7).unwrap(), None); // sysid 7 cached
+
+        let pos1 = p.parse_frame(&bytes(GPI)).unwrap().unwrap(); // sysid 1
+        assert_eq!(pos1.sysid, 1);
+        assert_eq!(pos1.state.vehicle_type, Some("multirotor"));
     }
 
     #[test]
@@ -458,10 +890,9 @@ mod tests {
 
     #[test]
     fn unmapped_message_is_ignored_not_errored() {
-        // ATTITUDE (msgid 30), zero-length body: valid framing, not mapped. We do
-        // not validate its CRC (unmapped), we just decline to map it.
-        let attitude = bytes("fe000001011e0000");
-        assert_eq!(parser().parse_frame(&attitude).unwrap(), None);
+        // PARAM_VALUE (msgid 22), zero-length body: valid framing, not mapped.
+        let param = bytes("fe00000101160000");
+        assert_eq!(parser().parse_frame(&param).unwrap(), None);
     }
 
     #[test]
