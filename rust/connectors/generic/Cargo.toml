@@ -1,0 +1,34 @@
+# SPDX-License-Identifier: Apache-2.0
+[package]
+name = "ajar-generic"
+description = "Config-driven Ajar ingress connector: map JSON/CSV fields to events with no code."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[[bin]]
+name = "ajar-generic"
+path = "src/main.rs"
+
+[dependencies]
+ajar-connector.workspace = true
+ajar-connector-common.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+toml.workspace = true
+serde_json = "1"
+time = { version = "0.3", features = ["formatting"] }
+
+[dev-dependencies]
+ed25519-dalek.workspace = true
+sha2 = "0.10"
+hex.workspace = true
+proptest = "1"
+uuid = "1"

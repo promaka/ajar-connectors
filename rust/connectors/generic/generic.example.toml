@@ -1,0 +1,71 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Example config-driven connector — no code, just a field mapping. Run:
+#   ajar-generic ./generic.toml
+#
+# This one reads newline-delimited JSON from a TCP feed and maps it to a sensor
+# track. Point [transport] at any method (see the connectors README): udp, tcp,
+# file, exec, stdin, or (with the matching feature) serial, mqtt, rest-poll.
+
+source_id = "acme-sensor-1"
+nats_url = "nats://127.0.0.1:4222"
+subject_prefix = "ajar.ingest"
+signing_key_path = "/etc/ajar/acme-sensor-1.key"
+
+# Feeds mapped generically usually carry no affiliation; stamp one for the COP.
+# default_affiliation = "friendly"
+# governed_attributes = ["affiliation"]
+
+[transport]
+kind = "tcp-client"
+connect = "sensor-gateway.example.mil:9000"
+framing = "line"
+
+# ...or listen for a source that PUSHES to you ("point your output at ip:port"):
+#   kind = "tcp-server"
+#   bind = "0.0.0.0:9000"
+#   framing = "line"
+
+# ...or consume batch file drops (SFTP exports) from a directory:
+#   kind = "dir"
+#   path = "/data/drop"
+#   process_existing = false
+
+[mapping]
+# Native record format: "json" (one object per frame) or "csv".
+format = "json"
+
+# The Ajar entity type every event gets (must be registered in the ontology).
+entity_type = "x:acme:sensor"
+
+# Observation time. Omit timestamp_field to stamp receipt time instead.
+timestamp_field = "observed_at"
+timestamp_format = "rfc3339"        # rfc3339 | epoch-millis | epoch-seconds
+
+# WGS-84 position (a location is emitted only when both lat and lon are present).
+lat_field = "latitude"
+lon_field = "longitude"
+alt_field = "altitude_m"            # optional
+
+# Governed attributes: source field = ajar attribute key (ontology-validated).
+[mapping.attributes]
+heading = "heading"
+speed = "speed"
+
+# Ungoverned passthrough: source field = metadata key. Native identifiers go here
+# (never the event id — that is always a fresh UUIDv7).
+[mapping.metadata]
+sensor_id = "sensor_id"
+
+# --- CSV variant (delete the JSON one above and use this instead) ---
+# [mapping]
+# format = "csv"
+# delimiter = ","
+# columns = ["observed_at", "sensor_id", "latitude", "longitude", "heading"]
+# entity_type = "x:acme:sensor"
+# timestamp_field = "observed_at"
+# timestamp_format = "epoch-seconds"
+# lat_field = "latitude"
+# lon_field = "longitude"
+# [mapping.metadata]
+# sensor_id = "sensor_id"

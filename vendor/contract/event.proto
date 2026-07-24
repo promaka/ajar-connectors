@@ -60,6 +60,13 @@ message Event {
   // event whose attributes are unsorted or duplicated). The connector normalises
   // values into each attribute's declared unit.
   repeated Attribute attributes = 11;
+
+  // Ungoverned passthrough metadata (ADR-0030): the long tail of vendor-specific
+  // fields a sovereign does NOT need to govern. Carried + audited as opaque,
+  // surfaced to the C2, but NOT type-validated/correlated. Allowed only when the
+  // entity type's signed ontology sets `allows_metadata`. MUST be sorted by `key`
+  // with unique keys (byte-stable canonical encoding) — a `repeated`, not a `map`.
+  repeated Attribute metadata = 12;
 }
 
 // One structured attribute (e.g. heading="225"). Values are carried as strings;

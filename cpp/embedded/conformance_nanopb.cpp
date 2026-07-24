@@ -147,6 +147,14 @@ void fixture_to_nanopb(const mini_json::Value& f, ajar_event_v1_Event& e) {
       ++e.attributes_count;
     }
   }
+  if (const auto* meta = f.find("metadata")) {
+    e.metadata_count = 0;
+    for (const auto& m : meta->array) {
+      put(e.metadata[e.metadata_count].key, m.at("key").str);
+      put(e.metadata[e.metadata_count].value, m.at("value").str);
+      ++e.metadata_count;
+    }
+  }
 }
 
 }  // namespace

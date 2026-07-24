@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: Apache-2.0
+[package]
+name = "ajar-mavlink"
+description = "Ajar ingress connector for MAVLink vehicle position telemetry (UAS / drones)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[[bin]]
+name = "ajar-mavlink"
+path = "src/main.rs"
+
+[dependencies]
+ajar-connector.workspace = true
+ajar-connector-common.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+anyhow.workspace = true
+
+[dev-dependencies]
+ed25519-dalek.workspace = true
+sha2 = "0.10"
+hex.workspace = true
+serde_json = "1"
+proptest = "1"
+uuid = "1"

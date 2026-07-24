@@ -47,6 +47,8 @@ def fixture_to_event(f: dict) -> Event:
         e.confidence = f["confidence"]
     for attr in f.get("attributes", []):
         e.attributes.add(key=attr["key"], value=attr["value"])
+    for entry in f.get("metadata", []):
+        e.metadata.add(key=entry["key"], value=entry["value"])
     return e
 
 

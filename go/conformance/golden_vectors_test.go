@@ -51,6 +51,10 @@ type fixtureEvent struct {
 		Key   string `json:"key"`
 		Value string `json:"value"`
 	} `json:"attributes"`
+	Metadata []struct {
+		Key   string `json:"key"`
+		Value string `json:"value"`
+	} `json:"metadata"`
 }
 
 func loadVectors(t *testing.T) vectorsFile {
@@ -102,6 +106,11 @@ func loadFixture(t *testing.T, name string) *eventpb.Event {
 		attrs[i] = &eventpb.Attribute{Key: a.Key, Value: a.Value}
 	}
 
+	meta := make([]*eventpb.Attribute, len(f.Metadata))
+	for i, m := range f.Metadata {
+		meta[i] = &eventpb.Attribute{Key: m.Key, Value: m.Value}
+	}
+
 	return &eventpb.Event{
 		SchemaVersion: f.SchemaVersion,
 		Id:            f.ID,
@@ -114,6 +123,7 @@ func loadFixture(t *testing.T, name string) *eventpb.Event {
 		PolicyTags:    f.PolicyTags,
 		Confidence:    f.Confidence,
 		Attributes:    attrs,
+		Metadata:      meta,
 	}
 }
 

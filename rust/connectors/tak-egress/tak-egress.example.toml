@@ -1,0 +1,32 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Example TAK info-egress relay config. Copy, adjust, and run:
+#   ajar-tak-egress ./tak-egress.toml
+#
+# This relay is pure transport: Core has already governed everything it
+# publishes to the egress subject, and the relay forwards each CoT event to the
+# TAK Server byte-verbatim.
+
+# Ajar's NATS endpoint. Production is tls://… with the AJAR_TLS_* env holding
+# this relay's SUBSCRIBE-ONLY mTLS identity (see README: egress-reader cert).
+nats_url = "tls://nats.ajar.svc:4222"
+
+# Governed CoT egress subject; * = per-source token.
+egress_subject = "ajar.egress.cot.*"
+
+# Optional: AJAR_HEALTH_ADDR=0.0.0.0:9110 exposes /healthz and /metrics.
+
+[tak]
+# The TAK Server streaming input (standard port 8089).
+url = "tls://takserver.mil:8089"
+# CA that signed the TAK Server's certificate.
+tls_ca = "/etc/tak/ca.crt"
+# This relay's client certificate, enrolled with the TAK Server, and its key.
+tls_cert = "/etc/tak/client.crt"
+tls_key = "/etc/tak/client.key"
+# Name to verify on the server certificate (defaults to the host in url).
+server_name = "takserver.mil"
+# Events held in memory while the TAK Server is unreachable. On overflow the
+# OLDEST is dropped and egress_gap_dropped_total increments (bounded, lossy —
+# right for a live picture feed).
+buffer_max = 1000

@@ -1,0 +1,19 @@
+{
+  "schemaVersion": "v1",
+  "id": "0191e7b0-4c5d-7e6f-8a9b-1c2d3e4f5a6b",
+  "sourceId": "tak-field-1",
+  "entityType": "mim:aircraft",
+  "timestamp": "2026-06-04T00:00:00Z",
+  "receivedAt": "2026-06-04T00:00:01Z",
+  "location": { "latitude": 26.4, "longitude": 50.9, "altitudeM": 1200.0 },
+  "policyTags": ["default"],
+  "confidence": 0.9,
+  "attributes": [
+    { "key": "affiliation", "value": "friendly" },
+    { "key": "callsign", "value": "EAGLE01" }
+  ],
+  "metadata": [
+    { "key": "mmsi", "value": "227006760" },
+    { "key": "source_uid", "value": "ANDROID-a1b2c3d4" }
+  ]
+}

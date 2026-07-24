@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from .event_pb2 import Event
 
 MAX_ATTRIBUTES = 128
+MAX_METADATA = 128
 MAX_POLICY_TAGS = 64
 _SCHEMA_VERSION = "v1"
 
@@ -59,6 +60,7 @@ class EventBuilder:
         self._policy_tags: list[str] = []
         self._confidence = 0.0
         self._attributes: list[tuple[str, str]] = []
+        self._metadata: list[tuple[str, str]] = []
         self._strict_entity_namespace = True
 
     def id(self, value: str) -> "EventBuilder":
@@ -97,6 +99,15 @@ class EventBuilder:
         self._attributes.append((key, value))
         return self
 
+    def metadata(self, key: str, value: str) -> "EventBuilder":
+        """Add one ungoverned passthrough metadata entry (ADR-0030): a
+        vendor-specific field carried and audited opaquely, but not
+        type-validated or correlated (e.g. a source's native identifier).
+        Order does not matter — ``build`` sorts by key and rejects duplicates.
+        """
+        self._metadata.append((key, value))
+        return self
+
     def allow_unnamespaced_entity_type(self) -> "EventBuilder":
         self._strict_entity_namespace = False
         return self
@@ -122,12 +133,20 @@ class EventBuilder:
             raise BuildError(f"too many policy tags: {len(self._policy_tags)} (max {MAX_POLICY_TAGS})")
         if len(self._attributes) > MAX_ATTRIBUTES:
             raise BuildError(f"too many attributes: {len(self._attributes)} (max {MAX_ATTRIBUTES})")
+        if len(self._metadata) > MAX_METADATA:
+            raise BuildError(f"too many metadata entries: {len(self._metadata)} (max {MAX_METADATA})")
 
         # Canonical rule: attributes sorted by key, unique.
         attrs = sorted(self._attributes, key=lambda kv: kv[0])
         for i in range(1, len(attrs)):
             if attrs[i][0] == attrs[i - 1][0]:
                 raise BuildError(f"duplicate attribute key: {attrs[i][0]!r}")
+
+        # Metadata follows the identical canonical rule: sorted by key, unique.
+        meta = sorted(self._metadata, key=lambda kv: kv[0])
+        for i in range(1, len(meta)):
+            if meta[i][0] == meta[i - 1][0]:
+                raise BuildError(f"duplicate metadata key: {meta[i][0]!r}")
 
         event = Event()
         event.schema_version = _SCHEMA_VERSION
@@ -145,4 +164,6 @@ class EventBuilder:
         event.confidence = self._confidence
         for key, value in attrs:
             event.attributes.add(key=key, value=value)
+        for key, value in meta:
+            event.metadata.add(key=key, value=value)
         return event

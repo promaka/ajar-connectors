@@ -24,7 +24,7 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0b\x65vent.proto\x12\rajar.event.v1\"\x8e\x02\n\x05\x45vent\x12\x16\n\x0eschema_version\x18\x01 \x01(\t\x12\n\n\x02id\x18\x02 \x01(\t\x12\x11\n\tsource_id\x18\x03 \x01(\t\x12\x13\n\x0b\x65ntity_type\x18\x04 \x01(\t\x12\x11\n\ttimestamp\x18\x05 \x01(\t\x12\x13\n\x0breceived_at\x18\n \x01(\t\x12)\n\x08location\x18\x06 \x01(\x0b\x32\x17.ajar.event.v1.GeoPoint\x12\x0f\n\x07payload\x18\x07 \x01(\x0c\x12\x13\n\x0bpolicy_tags\x18\x08 \x03(\t\x12\x12\n\nconfidence\x18\t \x01(\x01\x12,\n\nattributes\x18\x0b \x03(\x0b\x32\x18.ajar.event.v1.Attribute\"\'\n\tAttribute\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t\"C\n\x08GeoPoint\x12\x10\n\x08latitude\x18\x01 \x01(\x01\x12\x11\n\tlongitude\x18\x02 \x01(\x01\x12\x12\n\naltitude_m\x18\x03 \x01(\x01\x62\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0b\x65vent.proto\x12\rajar.event.v1\"\xba\x02\n\x05\x45vent\x12\x16\n\x0eschema_version\x18\x01 \x01(\t\x12\n\n\x02id\x18\x02 \x01(\t\x12\x11\n\tsource_id\x18\x03 \x01(\t\x12\x13\n\x0b\x65ntity_type\x18\x04 \x01(\t\x12\x11\n\ttimestamp\x18\x05 \x01(\t\x12\x13\n\x0breceived_at\x18\n \x01(\t\x12)\n\x08location\x18\x06 \x01(\x0b\x32\x17.ajar.event.v1.GeoPoint\x12\x0f\n\x07payload\x18\x07 \x01(\x0c\x12\x13\n\x0bpolicy_tags\x18\x08 \x03(\t\x12\x12\n\nconfidence\x18\t \x01(\x01\x12,\n\nattributes\x18\x0b \x03(\x0b\x32\x18.ajar.event.v1.Attribute\x12*\n\x08metadata\x18\x0c \x03(\x0b\x32\x18.ajar.event.v1.Attribute\"\'\n\tAttribute\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t\"C\n\x08GeoPoint\x12\x10\n\x08latitude\x18\x01 \x01(\x01\x12\x11\n\tlongitude\x18\x02 \x01(\x01\x12\x12\n\naltitude_m\x18\x03 \x01(\x01\x62\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -32,9 +32,9 @@ _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'event_pb2', _globals)
 if not _descriptor._USE_C_DESCRIPTORS:
   DESCRIPTOR._loaded_options = None
   _globals['_EVENT']._serialized_start=31
-  _globals['_EVENT']._serialized_end=301
-  _globals['_ATTRIBUTE']._serialized_start=303
-  _globals['_ATTRIBUTE']._serialized_end=342
-  _globals['_GEOPOINT']._serialized_start=344
-  _globals['_GEOPOINT']._serialized_end=411
+  _globals['_EVENT']._serialized_end=345
+  _globals['_ATTRIBUTE']._serialized_start=347
+  _globals['_ATTRIBUTE']._serialized_end=386
+  _globals['_GEOPOINT']._serialized_start=388
+  _globals['_GEOPOINT']._serialized_end=455
 # @@protoc_insertion_point(module_scope)
