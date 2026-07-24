@@ -36,6 +36,7 @@ jobs:
         run: |
           helm template demo deploy/helm/connector \
             --set image.repository=registry.example/connector \
+            --set image.tag=1.0.0 \
             --set connector.sourceId=acme-radar-1 \
             --set signingSeed.existingSecret=connector-seed > /dev/null
       - name: Guard rails reject incomplete config
@@ -45,5 +46,9 @@ jobs:
           fi
           if helm template demo deploy/helm/connector --set image.repository=x >/dev/null 2>&1; then
             echo "expected failure: missing signing key was accepted"; exit 1
+          fi
+          if helm template demo deploy/helm/connector \
+               --set image.repository=x --set signingSeed.existingSecret=x >/dev/null 2>&1; then
+            echo "expected failure: unpinned image (no tag/digest) was accepted"; exit 1
           fi
           echo "guard rails OK"
