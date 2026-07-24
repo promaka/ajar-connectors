@@ -1,0 +1,64 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Example: an EO/IR CAMERA object-detection feed, mapped with NO new code —
+# the generic connector turns a detector's JSON output into canonical Ajar
+# events. Run:
+#   ajar-generic ./camera-detections.toml
+#
+# This is the cheap path to closing the camera/EO-IR gap: a CV pipeline (edge
+# box, NVR, or the camera itself) emits one JSON detection per line over TCP,
+# and this mapping carries the geolocated detection — class, confidence,
+# bearing — plus the image bounding box as passthrough metadata. Full ONVIF
+# discovery + RTSP video is a separate, heavier connector; a georeferenced
+# detection stream is what a COP actually consumes.
+#
+# Expected record (one JSON object per line):
+#   {"ts":"2026-06-10T08:00:00Z","track_id":"cam1-42","class":"person",
+#    "confidence":0.92,"lat":51.5019,"lon":-0.1425,"bearing":47.0,
+#    "bbox_x":312,"bbox_y":118,"bbox_w":64,"bbox_h":140,"camera_id":"north-gate"}
+
+source_id = "camera-north-gate"
+nats_url = "nats://127.0.0.1:4222"
+subject_prefix = "ajar.ingest"
+signing_key_path = "/etc/ajar/camera-north-gate.key"
+
+# Camera detections carry no affiliation; stamp one for the COP.
+default_affiliation = "unknown"
+# governed_attributes = ["affiliation", "object_class", "confidence", "course"]
+
+[transport]
+# The detector pushes newline-delimited JSON; listen for it (or dial it with
+# tcp-client, or watch a drop directory of detection files with dir).
+kind = "tcp-server"
+bind = "0.0.0.0:9200"
+framing = "line"
+
+[mapping]
+format = "json"
+# Register this type in the ontology (or map per class with several configs).
+entity_type = "x:acme:camera-detection"
+timestamp_field = "ts"
+timestamp_format = "rfc3339"
+# The detector must geolocate the object (pixel->world) for a map track.
+lat_field = "lat"
+lon_field = "lon"
+
+# Governed: ontology-validated tactical facts.
+# Direction is `<record field> = "<ajar key>"` — the JSON key on the left, the
+# Ajar attribute name on the right.
+[mapping.attributes]
+class = "object_class"
+confidence = "confidence"
+bearing = "course"
+
+# Ungoverned passthrough (same direction: record field -> ajar key). The
+# detector's own track id becomes source_uid, so Core keeps each tracked object
+# its own symbol (never a merged blob); the image bounding box rides through
+# verbatim for the console to overlay on the video.
+[mapping.metadata]
+track_id = "source_uid"
+camera_id = "camera_id"
+bbox_x = "bbox_x"
+bbox_y = "bbox_y"
+bbox_w = "bbox_w"
+bbox_h = "bbox_h"

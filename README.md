@@ -170,12 +170,13 @@ few lines of wiring.
 |-----------|----------|---------------|-------------------|
 | [tak-cot](rust/connectors/tak-cot) | TAK / Cursor-on-Target | ground/air situational-awareness tracks | UDP multicast / unicast |
 | [ais-nmea](rust/connectors/ais-nmea) | AIS over NMEA 0183 | maritime vessel tracks | TCP client / UDP |
-| [mavlink](rust/connectors/mavlink) | MAVLink v1/v2 | UAS / drone position | UDP |
-| [asterix](rust/connectors/asterix) | ASTERIX CAT021 | ADS-B / radar air tracks | UDP multicast |
+| [mavlink](rust/connectors/mavlink) | MAVLink v1/v2 | UAS / drone telemetry | UDP |
+| [asterix](rust/connectors/asterix) | ASTERIX CAT021 | radar / ADS-B air tracks | UDP multicast |
+| [adsb](rust/connectors/adsb) | ADS-B (SBS-1 / BaseStation) | cooperative aircraft tracks | TCP client |
 | [generic](rust/connectors/generic) | any flat JSON / CSV | the long tail — **no code, just a field mapping** | any of the below |
 | [tak-egress](rust/connectors/tak-egress) | TAK / CoT (**egress**) | governed COP tracks OUT to a TAK Server, verbatim | NATS → TLS 8089 |
 
-The first four map a standard's **position reports** onto Ajar tracks; each README
+The first five map a standard's **position reports** onto Ajar tracks; each README
 states which message types/categories it covers. The **generic** connector needs
 no Rust at all — a `[mapping]` block in its config turns a JSON/CSV source into
 events. Extending coverage is additive.

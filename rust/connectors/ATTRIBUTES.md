@@ -26,6 +26,7 @@ same set pre-declared in its ontology seed). Once declared, put the keys in
 | ais-nmea | `mim:vessel` | `affiliation`, `speed`, `course`, `heading`, `rate_of_turn`, `nav_status`, `vessel_type`, `vessel_name`, `callsign` |
 | mavlink | `mim:aircraft` | `affiliation`, `speed`, `heading`, `course`, `vertical_speed`, `relative_altitude`, `vehicle_type`, `status`, `armed`, `mode`, `roll`, `pitch`, `yaw`, `airspeed`, `throttle`, `battery_voltage`, `battery_current`, `battery_remaining`, `battery_consumed`, `battery_temp`, `cpu_load`, `gps_fix`, `gps_satellites`, `gps_hdop` |
 | asterix | `mim:aircraft` | `affiliation`, `speed`, `course`, `squawk`, `callsign`, `aircraft_type` |
+| adsb | `mim:aircraft` | `affiliation`, `callsign`, `speed`, `course`, `vertical_speed`, `squawk`, `on_ground` |
 | generic | per mapping | `affiliation`, plus whatever the operator maps in `[mapping.attributes]` |
 
 ## Key semantics and units
@@ -60,6 +61,7 @@ same set pre-declared in its ontology seed). Once declared, put the keys in
 | `gps_hdop` | horizontal dilution of precision | unitless, 2 decimals |
 | `squawk` | Mode 3/A code | four octal digits (e.g. `7700`) |
 | `aircraft_type` | ADS-B emitter category | `light`, `heavy`, `rotorcraft`, `uav`, … |
+| `on_ground` | ADS-B on-ground flag | `true` \| `false` |
 
 ## Config example
 

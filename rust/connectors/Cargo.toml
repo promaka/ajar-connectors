@@ -16,6 +16,7 @@ members = [
     "ais-nmea",
     "mavlink",
     "asterix",
+    "adsb",
     "generic",
     "tak-egress",
 ]

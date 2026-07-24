@@ -1,0 +1,36 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Example ADS-B ingress config. Copy, adjust, and run:
+#   ajar-adsb ./adsb.toml
+#
+# Consumes SBS-1 "BaseStation" CSV — the line-delimited stream every dump1090 /
+# readsb receiver emits on TCP port 30003. One line per message; the connector
+# correlates identity (callsign), velocity, and squawk onto each position report,
+# keyed by the 24-bit ICAO address. Each aircraft is its own track: the ICAO
+# address is emitted as a stable source_uid (and icao metadata), so Core never
+# collapses the air picture onto one source_id.
+
+source_id = "adsb-tower-1"
+nats_url = "nats://127.0.0.1:4222"
+subject_prefix = "ajar.ingest"
+signing_key_path = "/etc/ajar/adsb-tower-1.key"
+
+# ADS-B is cooperative civil traffic and carries no affiliation of its own.
+# Stamp one for the COP (usually "neutral"; "civil" if your ontology declares it).
+default_affiliation = "neutral"
+
+# Attribute keys the deployment's ontology declares -> ride governed; all others
+# ride as metadata (always accepted). Empty/omitted is the safe default.
+# See ../ATTRIBUTES.md for the standard set.
+# governed_attributes = ["affiliation", "callsign", "speed", "course", "vertical_speed", "squawk", "on_ground"]
+
+[transport]
+# Point at the receiver's SBS-1 output (dump1090 / readsb default port 30003).
+kind = "tcp-client"
+connect = "127.0.0.1:30003"
+framing = "line"
+
+# ...or listen for a receiver that PUSHES its SBS stream to you:
+#   kind = "tcp-server"
+#   bind = "0.0.0.0:30003"
+#   framing = "line"
