@@ -1,0 +1,33 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Parameterized production connector image — build ANY connector by package name,
+# distroless + non-root. Used by deploy/release.sh.
+#
+#   docker build -f deploy/docker/Dockerfile.build \
+#     --build-arg WSDIR=rust/connectors --build-arg PKG=tak-egress \
+#     -t ghcr.io/promaka/ajar-connector-tak-egress:v0.1.0 .
+ARG WSDIR=rust/connectors
+ARG PKG=tak-egress
+
+FROM rust:1.96-bookworm AS build
+ARG WSDIR
+ARG PKG
+WORKDIR /build
+COPY rust ./rust
+COPY vendor ./vendor
+RUN cargo build --release --manifest-path ${WSDIR}/Cargo.toml -p ${PKG} \
+ && cp ${WSDIR}/target/release/${PKG} /connector
+
+FROM gcr.io/distroless/cc-debian12:nonroot
+# Provenance labels: which connector, version, and the commit it was built from.
+ARG PKG
+ARG VERSION=""
+ARG REVISION=""
+LABEL org.opencontainers.image.title="ajar-connector-${PKG}" \
+      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.revision="${REVISION}" \
+      org.opencontainers.image.source="https://github.com/promaka/ajar-connectors" \
+      org.opencontainers.image.licenses="Apache-2.0"
+COPY --from=build /connector /usr/local/bin/connector
+USER nonroot
+ENTRYPOINT ["/usr/local/bin/connector"]

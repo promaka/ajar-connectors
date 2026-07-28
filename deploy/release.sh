@@ -28,11 +28,13 @@ else
   esac
 fi
 IMAGE="ghcr.io/promaka/ajar-connector-${NAME}"
+REVISION="$(git rev-parse HEAD 2>/dev/null || echo unknown)"
 
 echo "building + pushing $IMAGE:$VERSION (multi-arch, $WSDIR -p $PKG)"
 docker buildx build -f deploy/docker/Dockerfile.build \
   --platform linux/amd64,linux/arm64 \
   --build-arg WSDIR="$WSDIR" --build-arg PKG="$PKG" \
+  --build-arg VERSION="$VERSION" --build-arg REVISION="$REVISION" \
   -t "$IMAGE:$VERSION" -t "$IMAGE:latest" \
   --metadata-file /tmp/conn-meta.json --push .
 
