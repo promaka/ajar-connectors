@@ -21,3 +21,46 @@ pub fn load(path: &str) -> anyhow::Result<SigningKey> {
     };
     Ok(SigningKey::from_bytes(&seed))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::load;
+    use ed25519_dalek::SigningKey;
+    use std::io::Write as _;
+
+    fn tmp(tag: &str, contents: &[u8]) -> std::path::PathBuf {
+        let p = std::env::temp_dir().join(format!("ajar-key-{tag}-{}", std::process::id()));
+        std::fs::File::create(&p).unwrap().write_all(contents).unwrap();
+        p
+    }
+
+    #[test]
+    fn accepts_the_64_hex_ajar_keygen_writes() {
+        // `ajar keygen` emits 64 hex chars, commonly with a trailing newline.
+        let seed = [0x11u8; 32];
+        let p = tmp("hex", format!("{}\n", hex::encode(seed)).as_bytes());
+        let key = load(p.to_str().unwrap()).unwrap();
+        assert_eq!(key.to_bytes(), seed);
+        // The verifying key must match what `ajar connector add` wrote to the registry.
+        assert_eq!(
+            key.verifying_key().to_bytes(),
+            SigningKey::from_bytes(&seed).verifying_key().to_bytes()
+        );
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn still_accepts_32_raw_bytes() {
+        let seed = [0x22u8; 32];
+        let p = tmp("raw", &seed);
+        assert_eq!(load(p.to_str().unwrap()).unwrap().to_bytes(), seed);
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn rejects_garbage_fail_closed() {
+        let p = tmp("bad", b"not a valid key");
+        assert!(load(p.to_str().unwrap()).is_err());
+        let _ = std::fs::remove_file(&p);
+    }
+}

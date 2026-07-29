@@ -1,33 +1,34 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-//! Synthetic radar: stream synthetic `mim:aircraft` tracks into a locally
-//! running Ajar Core so a developer can watch the full path
-//! `connector -> NATS -> Core -> audit + Postgres`.
+//! Synthetic radar: stream a realistic **multi-domain** picture (air, surface,
+//! ground) of canonical `mim:` tracks into an Ajar Core over NATS, so an operator
+//! can watch the full governed path `connector -> NATS -> Core -> audit + egress`
+//! render live on the Vantage map.
 //!
-//! Each tracked aircraft follows a **flight path** (a looping waypoint route),
-//! and the connector emits a position update for every track each sweep. The
-//! overall rate is configurable, so it can stream **thousands of records a
-//! minute**.
+//! Each track follows a looping waypoint route and carries a **stable
+//! `source_uid`** (its native track key — a callsign / hull id), so Core mints a
+//! fresh event id per observation while the console trails one moving symbol.
+//! Domain-conveying `entity_type` (`mim:aircraft` / `mim:surface-vessel` /
+//! `mim:ground-vehicle`) drives correct symbology, and an `affiliation` attribute
+//! colours friend/hostile/neutral.
 //!
 //! The shape every connector follows is the three steps in the loop:
 //!   1. normalize a native observation into a canonical Event (here synthesised),
 //!   2. seal it (detached Ed25519 signature ++ canonical bytes),
 //!   3. publish the sealed bytes to the connector's NATS ingest subject.
 //!
-//! Clearly-marked example: dev-only signing seed + a transport (NATS). The
-//! `ajar-connector` crate stays transport-free.
-//!
 //! ## Run
 //!
 //! ```text
-//! cd rust/examples
-//! cargo run -p synthetic-radar                 # ~3000 records/min by default
+//! cargo run -p synthetic-radar                 # dev: plaintext localhost NATS
 //! cargo run -p synthetic-radar -- --dry-run    # build+seal+print, no NATS
 //! ```
 //!
-//! Env overrides: `NATS_URL`, `AJAR_SOURCE_ID`, `AJAR_INGEST_PREFIX`,
-//! `AJAR_TRACKS` (number of aircraft, default 50), `AJAR_RATE_PER_MIN`
-//! (target records/minute, default 3000).
+//! Env: `NATS_URL`, `AJAR_SOURCE_ID` (connector identity, default `demo-radar`),
+//! `AJAR_INGEST_PREFIX`, `AJAR_RATE_PER_MIN` (records/min, default 600),
+//! `AJAR_SEED_FILE` (32-byte Ed25519 signing seed; default = dev seed),
+//! `AJAR_TLS_CA` / `AJAR_TLS_CERT` / `AJAR_TLS_KEY` (enable mTLS),
+//! `AJAR_HEALTH_ADDR` (Prometheus `/metrics` + `/healthz`).
 
 use std::env;
 use std::error::Error;
@@ -37,24 +38,45 @@ use std::time::{Duration, Instant};
 
 use ajar_connector::{canonical_bytes, seal, EventBuilder, SigningKey};
 
-/// Dev-only signing seed: 32 bytes of `0x03`. Matches the default Core's
-/// registered dev connector profile. Documented TEST seed — never production.
+/// Dev-only fallback signing seed: 32 bytes of `0x03` (documented TEST seed).
+/// Production loads a real registered seed via `AJAR_SEED_FILE`.
 const DEV_SEED: [u8; 32] = [0x03; 32];
 
-/// Process counters, surfaced at `/metrics` when `AJAR_HEALTH_ADDR` is set.
 #[derive(Default)]
 struct Metrics {
     published: AtomicU64,
     publish_errors: AtomicU64,
 }
 
-/// A synthetic aircraft that follows a looping waypoint route — a flight path,
-/// not random motion. Each tick it advances toward the current waypoint along a
-/// straight leg, then turns to the next when it arrives.
+/// The three domains this feed renders, each a canonical `mim:` type that drives
+/// the console's symbology.
+#[derive(Clone, Copy)]
+enum Domain {
+    Air,
+    Surface,
+    Ground,
+}
+
+impl Domain {
+    fn entity_type(self) -> &'static str {
+        match self {
+            Domain::Air => "mim:aircraft",
+            Domain::Surface => "mim:surface-vessel",
+            Domain::Ground => "mim:ground-vehicle",
+        }
+    }
+}
+
+/// A synthetic track following a looping waypoint route (a patrol/orbit, not
+/// random motion). Each tick it advances along the current leg, then turns to the
+/// next waypoint on arrival.
 struct Track {
-    label: String,
+    /// Native track key — rides in `source_uid` metadata; the console's stable id.
+    uid: String,
+    domain: Domain,
+    affiliation: &'static str,
     route: Vec<(f64, f64)>, // waypoints (lat, lon)
-    leg: usize,             // index of the waypoint currently flown toward
+    leg: usize,
     lat: f64,
     lon: f64,
     alt_m: f64,
@@ -67,7 +89,6 @@ impl Track {
         let (dlat, dlon) = (tlat - self.lat, tlon - self.lon);
         let dist = (dlat * dlat + dlon * dlon).sqrt();
         if dist <= self.step_deg || dist == 0.0 {
-            // Reached the waypoint: snap to it and turn toward the next (loop).
             self.lat = tlat;
             self.lon = tlon;
             self.leg = (self.leg + 1) % self.route.len();
@@ -76,43 +97,59 @@ impl Track {
             self.lon += dlon / dist * self.step_deg;
         }
     }
+
+    /// A diamond racetrack centred on `(cx, cy)` with radius `r`.
+    fn racetrack(cx: f64, cy: f64, r: f64) -> Vec<(f64, f64)> {
+        vec![(cx + r, cy), (cx, cy + r), (cx - r, cy), (cx, cy - r)]
+    }
 }
 
-/// Builds `n` aircraft, each on a diamond racetrack (a clean looping flight
-/// path) at a spread of positions, altitudes, and speeds over the Gulf region.
-fn make_tracks(n: usize) -> Vec<Track> {
-    let mut tracks = Vec::with_capacity(n);
-    for i in 0..n {
-        // Spread orbit centres across the region in a grid.
-        let cx = 25.3 + (i % 7) as f64 * 0.38; // latitude  25.3 .. 27.6
-        let cy = 49.4 + ((i / 7) % 7) as f64 * 0.42; // longitude 49.4 .. 51.9
-        let r = 0.12 + (i % 4) as f64 * 0.06; // racetrack radius
-        let route = vec![(cx + r, cy), (cx, cy + r), (cx - r, cy), (cx, cy - r)];
-        let (lat, lon) = route[0];
-        tracks.push(Track {
-            label: format!("AJX-{:03}", i + 1),
-            route,
-            leg: 1,
-            lat,
-            lon,
-            alt_m: 8000.0 + (i % 12) as f64 * 500.0,
-            step_deg: 0.02 + (i % 5) as f64 * 0.004,
-        });
-    }
-    tracks
+/// Builds a realistic mixed order of battle over the Gulf: airborne CAP/AWACS,
+/// surface combatants + merchant traffic, and a coastal ground patrol. Stable,
+/// hand-picked track keys and affiliations so the picture reads like a real feed.
+fn make_tracks() -> Vec<Track> {
+    // (uid, domain, affiliation, centre lat, centre lon, radius, altitude m, step)
+    let defs: &[(&str, Domain, &str, f64, f64, f64, f64, f64)] = &[
+        // Air
+        ("QTR41", Domain::Air, "friend", 25.6, 51.2, 0.22, 10600.0, 0.030),
+        ("IAF221", Domain::Air, "friend", 26.2, 50.6, 0.18, 9100.0, 0.026),
+        ("AWACS1", Domain::Air, "friend", 26.0, 50.9, 0.30, 9800.0, 0.018),
+        ("UNK07", Domain::Air, "unknown", 26.7, 52.0, 0.15, 7300.0, 0.034),
+        ("HOSTILE9", Domain::Air, "hostile", 27.0, 52.3, 0.20, 6100.0, 0.038),
+        ("9HA4721", Domain::Air, "neutral", 25.3, 51.6, 0.24, 11200.0, 0.028),
+        // Surface
+        ("HMS-DARING", Domain::Surface, "friend", 25.9, 50.3, 0.10, 0.0, 0.006),
+        ("USS-COLE", Domain::Surface, "friend", 26.1, 50.1, 0.08, 0.0, 0.005),
+        ("IRIS-JAMARAN", Domain::Surface, "hostile", 26.6, 51.4, 0.09, 0.0, 0.006),
+        ("MV-SHERE", Domain::Surface, "neutral", 25.5, 50.5, 0.14, 0.0, 0.004),
+        ("MT-PATROL3", Domain::Surface, "unknown", 26.4, 50.8, 0.07, 0.0, 0.005),
+        // Ground (coastal)
+        ("SAM-SKORP1", Domain::Ground, "hostile", 26.9, 51.9, 0.04, 15.0, 0.002),
+        ("PATROL-V7", Domain::Ground, "friend", 25.7, 50.2, 0.06, 20.0, 0.003),
+        ("CONVOY-ZZ", Domain::Ground, "friend", 25.4, 50.35, 0.05, 12.0, 0.0025),
+    ];
+    defs.iter()
+        .map(|&(uid, domain, aff, cx, cy, r, alt, step)| {
+            let route = Track::racetrack(cx, cy, r);
+            let (lat, lon) = route[0];
+            Track {
+                uid: uid.to_string(),
+                domain,
+                affiliation: aff,
+                route,
+                leg: 1,
+                lat,
+                lon,
+                alt_m: alt,
+                step_deg: step,
+            }
+        })
+        .collect()
 }
 
 fn flag_value(args: &[String], name: &str) -> Option<String> {
     let i = args.iter().position(|a| a == name)?;
     args.get(i + 1).cloned()
-}
-
-fn env_usize(key: &str, default: usize) -> usize {
-    env::var(key)
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(default)
-        .max(1)
 }
 
 fn env_f64(key: &str, default: f64) -> f64 {
@@ -122,35 +159,64 @@ fn env_f64(key: &str, default: f64) -> f64 {
         .unwrap_or(default)
 }
 
+/// Loads the Ed25519 signing seed from `AJAR_SEED_FILE`, falling back to the
+/// documented dev seed. The file is either 32 raw bytes or the 64 hex characters
+/// `ajar keygen` writes (surrounding whitespace tolerated) — this is how the
+/// connector assumes its **registered identity**; the seed's public half must be
+/// in Core's registry.
+fn load_seed() -> [u8; 32] {
+    match env::var("AJAR_SEED_FILE") {
+        Ok(path) if !path.is_empty() => {
+            let bytes = std::fs::read(&path)
+                .unwrap_or_else(|e| panic!("[synthetic-radar] read AJAR_SEED_FILE {path}: {e}"));
+            parse_seed(&bytes).unwrap_or_else(|| {
+                panic!(
+                    "[synthetic-radar] seed file {path}: expected 32 raw bytes or 64 hex chars, got {} bytes",
+                    bytes.len()
+                )
+            })
+        }
+        _ => {
+            eprintln!("[synthetic-radar] no AJAR_SEED_FILE — using dev seed (0x03)");
+            DEV_SEED
+        }
+    }
+}
+
+/// A signing seed is 32 raw bytes, or the 64 hex characters `ajar keygen` writes
+/// (with optional surrounding whitespace). Fails closed on anything else.
+fn parse_seed(bytes: &[u8]) -> Option<[u8; 32]> {
+    if let Ok(raw) = <[u8; 32]>::try_from(bytes) {
+        return Some(raw);
+    }
+    let decoded = hex::decode(std::str::from_utf8(bytes).ok()?.trim()).ok()?;
+    decoded.try_into().ok()
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let args: Vec<String> = env::args().collect();
     let dry_run = args.iter().any(|a| a == "--dry-run");
     let max_ticks: Option<u64> = flag_value(&args, "--ticks").and_then(|v| v.parse().ok());
-    // Negative test: also emit one deliberately-bad track that Ajar Core MUST
-    // reject. Off by default so the normal demo stays clean.
-    let inject_rejected = args.iter().any(|a| a == "--inject-rejected")
-        || env::var("AJAR_INJECT_REJECTED")
-            .map(|v| !v.is_empty())
-            .unwrap_or(false);
 
-    let source_id = env::var("AJAR_SOURCE_ID").unwrap_or_else(|_| "demo-connector".to_string());
+    let source_id = env::var("AJAR_SOURCE_ID").unwrap_or_else(|_| "demo-radar".to_string());
     let prefix = env::var("AJAR_INGEST_PREFIX").unwrap_or_else(|_| "ajar.ingest".to_string());
     let nats_url = env::var("NATS_URL").unwrap_or_else(|_| "nats://127.0.0.1:4222".to_string());
+    let rate_per_min = env_f64("AJAR_RATE_PER_MIN", 600.0).max(1.0);
 
-    let n_tracks = env_usize("AJAR_TRACKS", 50);
-    let rate_per_min = env_f64("AJAR_RATE_PER_MIN", 3000.0).max(1.0);
+    let mut tracks = make_tracks();
+    let n_tracks = tracks.len();
 
     // One "sweep" emits a position for every track. Pick the sweep interval so
     // `n_tracks * sweeps_per_sec` hits the requested records/minute.
     let sweeps_per_sec = (rate_per_min / 60.0) / n_tracks as f64;
-    let interval = Duration::from_secs_f64((1.0 / sweeps_per_sec).clamp(0.005, 5.0));
+    let interval = Duration::from_secs_f64((1.0 / sweeps_per_sec).clamp(0.05, 5.0));
 
     let subject = format!("{prefix}.{source_id}");
-    let key = SigningKey::from_bytes(&DEV_SEED);
+    let key = SigningKey::from_bytes(&load_seed());
 
     let metrics = Arc::new(Metrics::default());
-    spawn_health(metrics.clone()); // no-op unless AJAR_HEALTH_ADDR is set
+    spawn_health(metrics.clone());
 
     let client = if dry_run {
         eprintln!("[synthetic-radar] --dry-run: building + sealing, not publishing");
@@ -162,37 +228,30 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     eprintln!(
         "[synthetic-radar] source_id={source_id}  subject={subject}\n\
-         [synthetic-radar] {n_tracks} aircraft on flight paths, target ~{rate_per_min:.0} records/min\n\
-         [synthetic-radar] entity_type=mim:aircraft, no attributes, Core stamps received_at. Ctrl-C to stop."
+         [synthetic-radar] {n_tracks} tracks (air/surface/ground), target ~{rate_per_min:.0} records/min\n\
+         [synthetic-radar] canonical mim: types + stable source_uid + affiliation. Ctrl-C to stop."
     );
-    if inject_rejected {
-        eprintln!(
-            "[synthetic-radar] NOTE: INJECTING 1 known-bad track per sweep (label RJX-666): a\n\
-             [synthetic-radar]   well-formed, validly-SIGNED mim:aircraft carrying an undeclared\n\
-             [synthetic-radar]   attribute. Ajar Core MUST reject it (UnknownAttribute) — if any\n\
-             [synthetic-radar]   are ACCEPTED, that's a boundary failure. Watch Core's audit/reject log."
-        );
-    }
 
-    let mut tracks = make_tracks(n_tracks);
     let start = Instant::now();
     let mut last_report = Instant::now();
     let mut total: u64 = 0;
-    let mut poison_total: u64 = 0;
     let mut tick: u64 = 0;
 
     loop {
         for track in tracks.iter_mut() {
             track.advance();
 
-            // 1. normalize (synthesised) — no attributes: seed mim:aircraft has
-            //    no attribute schema, so any attribute is rejected.
-            let event = EventBuilder::new(&source_id, "mim:aircraft")
+            // 1. normalize (synthesised). `affiliation` is a declared optional
+            //    attribute on these types (governed); `source_uid` is ungoverned
+            //    passthrough metadata — the stable per-track id the console trails.
+            let event = EventBuilder::new(&source_id, track.domain.entity_type())
                 .new_id()
                 .now()
                 .location(track.lat, track.lon, track.alt_m)
                 .confidence(0.9)
                 .policy_tag("air-defence")
+                .attribute("affiliation", track.affiliation)
+                .metadata("source_uid", &track.uid)
                 .build()?;
 
             // 2. seal, 3. publish
@@ -202,7 +261,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     .publish(subject.clone(), bytes::Bytes::from(sealed))
                     .await
                 {
-                    // Non-fatal: keep streaming; the client reconnects underneath.
                     eprintln!("[synthetic-radar] publish error (continuing): {e}");
                     metrics.publish_errors.fetch_add(1, Ordering::Relaxed);
                     continue;
@@ -212,59 +270,26 @@ async fn main() -> Result<(), Box<dyn Error>> {
             metrics.published.fetch_add(1, Ordering::Relaxed);
         }
 
-        // Negative test: one known-bad track ("RJX-666"). Well-formed and validly
-        // SIGNED, but it carries an UNDECLARED attribute — so it isolates Core's
-        // ontology/validation boundary (UnknownAttribute), not the auth boundary.
-        // Core MUST reject it; if it's accepted, that's the vulnerability.
-        if inject_rejected {
-            let poison = EventBuilder::new(&source_id, "mim:aircraft")
-                .new_id()
-                .now()
-                .location(26.0, 50.5, 10_000.0)
-                .confidence(0.9)
-                .policy_tag("air-defence")
-                .attribute("inject", "1") // not in the entity type's schema
-                .build()?;
-            let sealed = seal(&canonical_bytes(&poison), &key);
-            if let Some(client) = &client {
-                if let Err(e) = client
-                    .publish(subject.clone(), bytes::Bytes::from(sealed))
-                    .await
-                {
-                    eprintln!("[synthetic-radar] publish error (continuing): {e}");
-                    metrics.publish_errors.fetch_add(1, Ordering::Relaxed);
-                }
-            }
-            poison_total += 1;
-        }
-
         if let Some(client) = &client {
             client.flush().await?;
         }
 
-        // Throttled status (~1/sec) — printing every event would swamp stdout at
-        // thousands/min. Shows a live total, rate, and a sample track position.
         if max_ticks.is_some() || last_report.elapsed() >= Duration::from_secs(1) {
             let secs = start.elapsed().as_secs_f64().max(0.001);
             let sample = &tracks[0];
             eprintln!(
-                "[+{:>4.0}s] {} tracks  published {:>7} events  (~{:.0}/min)  e.g. {} @ {:.3},{:.3} {:.0}m{}",
+                "[+{:>4.0}s] {} tracks  published {:>7} events  (~{:.0}/min)  e.g. {} {} @ {:.3},{:.3} {:.0}m{}",
                 secs,
                 n_tracks,
                 total,
                 total as f64 / secs * 60.0,
-                sample.label,
+                sample.uid,
+                sample.domain.entity_type(),
                 sample.lat,
                 sample.lon,
                 sample.alt_m,
                 if client.is_some() { "" } else { "  [dry-run]" },
             );
-            if inject_rejected {
-                eprintln!(
-                    "          + {} injected bad events (RJX-666) — expect ALL rejected by Core",
-                    poison_total
-                );
-            }
             last_report = Instant::now();
         }
 
@@ -279,8 +304,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
 }
 
 /// Connects to NATS, enabling **mTLS** when `AJAR_TLS_CA` / `AJAR_TLS_CERT` /
-/// `AJAR_TLS_KEY` are all set (production; client-cert CN = `source_id`, mounted
-/// by the Helm chart under `/etc/ajar/tls`). Unset → plaintext for local dev.
+/// `AJAR_TLS_KEY` are all set (production; client-cert CN = `source_id`). Unset →
+/// plaintext for local dev.
 async fn nats_connect(url: &str) -> Result<async_nats::Client, async_nats::ConnectError> {
     let mut opts = async_nats::ConnectOptions::new().retry_on_initial_connect();
     match (
@@ -300,9 +325,8 @@ async fn nats_connect(url: &str) -> Result<async_nats::Client, async_nats::Conne
     opts.connect(url).await
 }
 
-/// Spawns a tiny health/metrics HTTP endpoint when `AJAR_HEALTH_ADDR` is set
-/// (e.g. `0.0.0.0:9090`). `GET /healthz` → liveness; `GET /metrics` → Prometheus
-/// text. Std-only — no extra dependency, no impact unless you opt in.
+/// Spawns a tiny health/metrics HTTP endpoint when `AJAR_HEALTH_ADDR` is set.
+/// `GET /healthz` → liveness; `GET /metrics` → Prometheus text.
 fn spawn_health(metrics: Arc<Metrics>) {
     let addr = match env::var("AJAR_HEALTH_ADDR") {
         Ok(a) if !a.is_empty() => a,
@@ -345,4 +369,28 @@ fn spawn_health(metrics: Arc<Metrics>) {
             let _ = stream.write_all(resp.as_bytes());
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_seed;
+
+    #[test]
+    fn accepts_32_raw_bytes() {
+        let raw = [7u8; 32];
+        assert_eq!(parse_seed(&raw), Some(raw));
+    }
+
+    #[test]
+    fn accepts_64_hex_from_ajar_keygen() {
+        // What `ajar keygen` writes: 64 hex chars, here with a trailing newline.
+        let file = format!("{}\n", "03".repeat(32));
+        assert_eq!(parse_seed(file.as_bytes()), Some([0x03u8; 32]));
+    }
+
+    #[test]
+    fn rejects_wrong_length() {
+        assert_eq!(parse_seed(b"tooshort"), None);
+        assert_eq!(parse_seed(&[0u8; 31]), None);
+    }
 }

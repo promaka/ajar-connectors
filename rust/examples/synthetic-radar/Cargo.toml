@@ -26,3 +26,5 @@ ajar-connector.workspace = true
 async-nats = { version = "0.49", default-features = false, features = ["ring"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
 bytes = "1"
+# Accept the 64-char hex seed `ajar keygen` writes, not just 32 raw bytes.
+hex = "0.4"
