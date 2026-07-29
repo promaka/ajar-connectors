@@ -30,7 +30,8 @@ mod tests {
 
     fn tmp(tag: &str, contents: &[u8]) -> std::path::PathBuf {
         let p = std::env::temp_dir().join(format!("ajar-key-{tag}-{}", std::process::id()));
-        std::fs::File::create(&p).unwrap().write_all(contents).unwrap();
+        let mut f = std::fs::File::create(&p).unwrap();
+        f.write_all(contents).unwrap();
         p
     }
 
