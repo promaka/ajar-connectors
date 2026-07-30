@@ -29,7 +29,7 @@ use std::collections::VecDeque;
 use std::sync::Mutex;
 
 use ajar_connector::{Event, EventBuilder};
-use ajar_connector_common::{Enrichment, FrameParser, ParseError, Tactical};
+use ajar_connector_common::{Enrichment, FrameParser, ParseError};
 
 /// 1 foot in metres.
 const FT_TO_M: f64 = 0.3048;
@@ -74,6 +74,11 @@ pub struct AdsbPosition {
     pub alt_m: f64,
     /// Latest known state for this aircraft.
     pub state: AircraftState,
+    /// Every raw SBS line that contributed to this event — the anchor position
+    /// line plus any cache-only lines (callsign, velocity, squawk) that arrived
+    /// since the last emit — newline-delimited, carried verbatim into the signed
+    /// `payload` so nothing is lost.
+    pub raw: Vec<u8>,
 }
 
 /// An aircraft's latest known non-positional state, cached by ICAO address.
@@ -102,17 +107,64 @@ pub struct AircraftState {
 /// aircraft's next message simply re-caches it. A dense TMA is a few thousand.
 const MAX_AIRCRAFT: usize = 10_000;
 
-/// A bounded ICAO → [`AircraftState`] cache with FIFO eviction.
+/// Per-aircraft cap on raw SBS lines carried forward before the next emit, and
+/// on their total bytes. A feed streaming identity/velocity lines for an
+/// aircraft that never reports a position must cost bounded memory: past the cap
+/// the oldest pending line is dropped (with a warning), never the whole event.
+const MAX_PENDING_FRAMES: usize = 64;
+const MAX_PENDING_BYTES: usize = 16 * 1024;
+
+/// One aircraft: latest parsed state, plus the raw SBS lines received since its
+/// last emitted event (carried forward so cache-only lines are not lost).
+#[derive(Default)]
+struct Entry {
+    state: AircraftState,
+    pending: VecDeque<Vec<u8>>,
+    pending_bytes: usize,
+}
+
+impl Entry {
+    /// Remember one raw line, dropping the oldest pending line(s) past the cap.
+    fn push_raw(&mut self, raw: &[u8]) {
+        self.pending.push_back(raw.to_vec());
+        self.pending_bytes += raw.len();
+        while self.pending.len() > MAX_PENDING_FRAMES || self.pending_bytes > MAX_PENDING_BYTES {
+            match self.pending.pop_front() {
+                Some(old) => {
+                    self.pending_bytes -= old.len();
+                    tracing::warn!("adsb: pending-raw cap exceeded, dropped oldest line");
+                }
+                None => break,
+            }
+        }
+    }
+
+    /// Drain all pending lines into one newline-delimited payload (a re-parse
+    /// splits on `\n`), leaving the buffer empty.
+    fn drain_payload(&mut self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(self.pending_bytes + self.pending.len());
+        for (i, f) in self.pending.drain(..).enumerate() {
+            if i > 0 {
+                out.push(b'\n');
+            }
+            out.extend_from_slice(&f);
+        }
+        self.pending_bytes = 0;
+        out
+    }
+}
+
+/// A bounded ICAO → [`Entry`] cache with FIFO eviction of whole aircraft.
 #[derive(Default)]
 struct StateCache {
-    map: HashMap<String, AircraftState>,
+    map: HashMap<String, Entry>,
     order: VecDeque<String>,
 }
 
 impl StateCache {
-    /// Apply `f` to `icao`'s state (creating it, evicting the oldest if at
-    /// capacity, on first sight) and return the updated snapshot.
-    fn update(&mut self, icao: &str, f: impl FnOnce(&mut AircraftState)) -> AircraftState {
+    /// The entry for `icao`, creating it (and evicting the oldest aircraft if at
+    /// capacity) on first sight.
+    fn entry(&mut self, icao: &str) -> &mut Entry {
         if !self.map.contains_key(icao) {
             if self.order.len() >= MAX_AIRCRAFT {
                 if let Some(old) = self.order.pop_front() {
@@ -121,9 +173,7 @@ impl StateCache {
             }
             self.order.push_back(icao.to_string());
         }
-        let entry = self.map.entry(icao.to_string()).or_default();
-        f(entry);
-        entry.clone()
+        self.map.entry(icao.to_string()).or_default()
     }
 }
 
@@ -166,38 +216,40 @@ impl AdsbParser {
             .to_ascii_uppercase();
         let tx = field(&parts, 1).and_then(|s| s.parse::<u8>().ok());
 
-        // Update the cache from whatever this message carries.
-        let state =
-            self.aircraft
-                .lock()
-                .expect("aircraft mutex")
-                .update(&icao, |s: &mut AircraftState| {
-                    if let Some(cs) = field(&parts, 10) {
-                        s.callsign = Some(cs.trim().to_string());
-                    }
-                    if let Some(a) = num(&parts, 11) {
-                        s.altitude = Some(a * FT_TO_M);
-                    }
-                    if let Some(gs) = num(&parts, 12) {
-                        s.ground_speed = Some(gs);
-                    }
-                    if let Some(t) = num(&parts, 13) {
-                        s.track = Some(t);
-                    }
-                    if let Some(vr) = num(&parts, 16) {
-                        let mps = vr * FTMIN_TO_MPS;
-                        s.vertical_speed = Some(if mps == 0.0 { 0.0 } else { mps });
-                    }
-                    if let Some(sq) = field(&parts, 17) {
-                        s.squawk = Some(sq.to_string());
-                    }
-                    if let Some(g) = field(&parts, 21) {
-                        // SBS uses -1/0 for airborne, 1 for on-ground (receivers vary).
-                        s.on_ground = Some(g == "1");
-                    }
-                });
+        // Carry this raw line forward, then fold whatever it carries into state.
+        let mut cache = self.aircraft.lock().expect("aircraft mutex");
+        let entry = cache.entry(&icao);
+        entry.push_raw(line.as_bytes());
+        {
+            let s = &mut entry.state;
+            if let Some(cs) = field(&parts, 10) {
+                s.callsign = Some(cs.trim().to_string());
+            }
+            if let Some(a) = num(&parts, 11) {
+                s.altitude = Some(a * FT_TO_M);
+            }
+            if let Some(gs) = num(&parts, 12) {
+                s.ground_speed = Some(gs);
+            }
+            if let Some(t) = num(&parts, 13) {
+                s.track = Some(t);
+            }
+            if let Some(vr) = num(&parts, 16) {
+                let mps = vr * FTMIN_TO_MPS;
+                s.vertical_speed = Some(if mps == 0.0 { 0.0 } else { mps });
+            }
+            if let Some(sq) = field(&parts, 17) {
+                s.squawk = Some(sq.to_string());
+            }
+            if let Some(g) = field(&parts, 21) {
+                // SBS uses -1/0 for airborne, 1 for on-ground (receivers vary).
+                s.on_ground = Some(g == "1");
+            }
+        }
 
-        // A position report (surface=2, airborne=3) with a fix emits a track.
+        // A position report (surface=2, airborne=3) with a fix emits a track,
+        // draining every raw line carried since the last emit into its payload.
+        // A cache-only line (or a position without a fix) leaves them pending.
         match tx {
             Some(2) | Some(3) => {
                 let (Some(lat), Some(lon)) = (num(&parts, 14), num(&parts, 15)) else {
@@ -206,6 +258,8 @@ impl AdsbParser {
                 if !(-90.0..=90.0).contains(&lat) || !(-180.0..=180.0).contains(&lon) {
                     return Ok(None);
                 }
+                let state = entry.state.clone();
+                let raw = entry.drain_payload();
                 Ok(Some(AdsbPosition {
                     icao,
                     msg_type: tx.expect("matched above"),
@@ -213,6 +267,7 @@ impl AdsbParser {
                     lon,
                     alt_m: state.altitude.unwrap_or(0.0),
                     state,
+                    raw,
                 }))
             }
             _ => Ok(None),
@@ -220,32 +275,36 @@ impl AdsbParser {
     }
 
     fn base_builder(&self, p: &AdsbPosition) -> EventBuilder {
-        let affiliation = self.enrichment.affiliation.as_deref().unwrap_or("unknown");
         let s = &p.state;
 
-        // The ICAO address is the stable per-airframe identity: emit it as
-        // source_uid (Core's track key) and as icao. Identifiers ride metadata.
+        // Every raw line that produced this event is preserved verbatim in the
+        // signed payload (newline-delimited) — nothing the parser does not yet map
+        // is ever lost, and a future ontology can re-extract from it. The ICAO
+        // address is the stable identity (source_uid = track key; `icao` = native).
         let mut b = EventBuilder::new(self.source_id.clone(), "mim:aircraft")
             .new_id()
             .location(p.lat, p.lon, p.alt_m)
+            .payload(p.raw.clone())
             .metadata("source_uid", p.icao.clone())
-            .metadata("icao", p.icao.clone())
-            .tactical(&self.enrichment, "affiliation", affiliation);
+            .metadata("icao", p.icao.clone());
 
+        // Parse every field into attributes; Core auto-demotes undeclared keys.
+        // Affiliation is only ever the operator's explicit assertion — never a
+        // connector-invented default (ADS-B carries none of its own).
+        if let Some(aff) = self.enrichment.affiliation.as_deref() {
+            b = b.attribute("affiliation", aff);
+        }
         macro_rules! attr {
             ($key:expr, $val:expr) => {
                 if let Some(v) = $val {
-                    b = b.tactical(&self.enrichment, $key, v);
+                    b = b.attribute($key, v);
                 }
             };
         }
         attr!("callsign", s.callsign.clone().filter(|c| !c.is_empty()));
         attr!("speed", s.ground_speed.map(|v| format!("{v:.1}"))); // knots
         attr!("course", s.track.map(|v| format!("{v:.1}"))); // degrees
-        attr!(
-            "vertical_speed",
-            s.vertical_speed.map(|v| format!("{v:.1}"))
-        ); // m/s
+        attr!("vertical_speed", s.vertical_speed.map(|v| format!("{v:.1}"))); // m/s
         attr!("squawk", s.squawk.clone().filter(|q| !q.is_empty()));
         attr!(
             "on_ground",
@@ -402,11 +461,54 @@ mod tests {
     }
 
     #[test]
-    fn default_mode_routes_tactical_to_metadata() {
+    fn absent_affiliation_is_not_invented_and_raw_is_preserved() {
+        // Default mode: no operator affiliation -> none is invented (absent stays
+        // absent), and the raw SBS line is preserved verbatim in the signed payload.
         let pos = parser().parse_line(AIRBORNE.as_bytes()).unwrap().unwrap();
-        let ev = parser().to_event_at(&pos, "2026-06-10T08:00:00Z").unwrap();
-        assert!(ev.metadata.iter().any(|m| m.key == "affiliation"));
+        let ev = parser()
+            .to_event_at(&pos, "2026-06-10T08:00:00Z").unwrap();
         assert!(!ev.attributes.iter().any(|a| a.key == "affiliation"));
+        assert!(!ev.metadata.iter().any(|m| m.key == "affiliation"));
+        assert_eq!(ev.payload.as_slice(), AIRBORNE.as_bytes());
+    }
+
+    #[test]
+    fn carries_cache_only_frames_forward_into_payload() {
+        // A callsign-only line (MSG,1) does not emit; its raw must ride into the
+        // next position event's payload, newline-joined with the position line.
+        let p = governed();
+        let ident =
+            "MSG,1,1,1,4CA2D6,1,2026/06/10,08:00:00.000,2026/06/10,08:00:00.000,BAW123,,,,,,,,,,0";
+        assert_eq!(p.parse_line(ident.as_bytes()).unwrap(), None); // cached, no event
+        let pos = p.parse_line(AIRBORNE.as_bytes()).unwrap().unwrap();
+        let ev = p.to_event_at(&pos, "2026-06-10T08:00:00Z").unwrap();
+        // payload = both raw lines, newline-delimited (re-parse splits on \n).
+        let want = format!("{ident}\n{AIRBORNE}");
+        assert_eq!(ev.payload.as_slice(), want.as_bytes());
+        // ...and the parsed callsign still surfaces as an attribute.
+        assert_eq!(attr_of(&ev, "callsign"), Some("BAW123"));
+
+        // Attached once: the NEXT position emits only its own line.
+        let pos2 = p.parse_line(AIRBORNE.as_bytes()).unwrap().unwrap();
+        let ev2 = p.to_event_at(&pos2, "2026-06-10T08:00:00Z").unwrap();
+        assert_eq!(ev2.payload.as_slice(), AIRBORNE.as_bytes());
+    }
+
+    #[test]
+    fn bytes_per_event_before_vs_after_raw_payload() {
+        use ajar_connector::canonical_bytes;
+        let p = governed();
+        let pos = p.parse_line(AIRBORNE.as_bytes()).unwrap().unwrap();
+        let after = p.to_event_at(&pos, "2026-06-10T08:00:00Z").unwrap();
+        let mut before = after.clone();
+        before.payload.clear();
+        let (b, a) = (canonical_bytes(&before).len(), canonical_bytes(&after).len());
+        println!(
+            "ADSB canonical bytes/event: before(no payload)={b}  after(raw payload)={a}  raw={}  sealed_after={}",
+            after.payload.len(),
+            a + 64
+        );
+        assert!(a > b); // raw is carried
     }
 
     #[test]
