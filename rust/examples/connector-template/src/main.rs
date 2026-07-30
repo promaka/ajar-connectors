@@ -173,19 +173,29 @@ async fn nats_connect(url: &str) -> Result<async_nats::Client, async_nats::Conne
 /// instantly — never used for real publishing.
 fn load_seed(dry_run: bool) -> [u8; 32] {
     match env::var("AJAR_SIGNING_SEED") {
-        Ok(path) => std::fs::read(&path)
-            .unwrap_or_else(|e| panic!("read AJAR_SIGNING_SEED {path}: {e}"))
-            .as_slice()
-            .try_into()
-            .expect("signing seed file must be exactly 32 bytes"),
+        Ok(path) => {
+            let bytes = std::fs::read(&path)
+                .unwrap_or_else(|e| panic!("read AJAR_SIGNING_SEED {path}: {e}"));
+            parse_seed(&bytes).expect("signing seed must be 32 raw bytes or 64 hex chars")
+        }
         Err(_) if dry_run => {
             eprintln!("[connector] no AJAR_SIGNING_SEED set — using a DEV seed (dry-run only)");
             [0x03; 32]
         }
         Err(_) => panic!(
-            "set AJAR_SIGNING_SEED to your 32-byte key file (see scripts/gen-connector-key.sh)"
+            "set AJAR_SIGNING_SEED to your key file (32 raw bytes or 64 hex chars; see scripts/gen-connector-key.sh)"
         ),
     }
+}
+
+/// A signing seed is 32 raw bytes, or the 64 hex characters `ajar keygen` writes
+/// (surrounding whitespace tolerated). Fails closed on anything else.
+fn parse_seed(bytes: &[u8]) -> Option<[u8; 32]> {
+    if let Ok(raw) = <[u8; 32]>::try_from(bytes) {
+        return Some(raw);
+    }
+    let decoded = hex::decode(std::str::from_utf8(bytes).ok()?.trim()).ok()?;
+    decoded.try_into().ok()
 }
 
 /// Spawns a tiny health/metrics HTTP endpoint when `AJAR_HEALTH_ADDR` is set

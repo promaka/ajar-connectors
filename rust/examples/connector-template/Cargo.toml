@@ -21,3 +21,5 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread", "io-util", "io
 bytes = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Accept the 64-char hex seed `ajar keygen` writes, not just 32 raw bytes.
+hex = "0.4"

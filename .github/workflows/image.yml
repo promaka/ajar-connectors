@@ -59,3 +59,72 @@ jobs:
           subject-name: ${{ env.IMAGE }}
           subject-digest: ${{ steps.build.outputs.digest }}
           push-to-registry: true
+
+  # The PRODUCTION per-connector images a customer actually runs. Built ONLY on a
+  # v* tag so a tagged release is the single thing that produces them — with the
+  # git revision stamped in, and an SLSA build-provenance attestation so anyone
+  # can prove what a given image contains.
+  connectors:
+    name: build + push + attest (${{ matrix.name }})
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: mavlink, wsdir: rust/connectors, pkg: ajar-mavlink }
+          - { name: generic, wsdir: rust/connectors, pkg: ajar-generic }
+          - { name: tak-egress, wsdir: rust/connectors, pkg: ajar-tak-egress }
+          - { name: adsb, wsdir: rust/connectors, pkg: ajar-adsb }
+          - { name: synthetic-radar, wsdir: rust/examples, pkg: synthetic-radar }
+    env:
+      IMAGE: ghcr.io/${{ github.repository_owner }}/ajar-connector-${{ matrix.name }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: release-guard — tag must match the connector-suite version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          ver="$(grep -m1 '^version' rust/connectors/Cargo.toml | cut -d'"' -f2)"
+          if [ "$tag" != "$ver" ]; then
+            echo "::error::git tag v$tag does not match rust/connectors/Cargo.toml version $ver"
+            exit 1
+          fi
+          echo "release-guard OK: tag and crate version agree ($ver)"
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=sha
+          labels: |
+            org.opencontainers.image.title=ajar-connector-${{ matrix.name }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+      - id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/docker/Dockerfile.build
+          platforms: linux/amd64,linux/arm64
+          build-args: |
+            WSDIR=${{ matrix.wsdir }}
+            PKG=${{ matrix.pkg }}
+            VERSION=${{ steps.meta.outputs.version }}
+            REVISION=${{ github.sha }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          provenance: true
+          sbom: true
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
