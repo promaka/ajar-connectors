@@ -109,6 +109,8 @@ impl Track {
 /// hand-picked track keys and affiliations so the picture reads like a real feed.
 fn make_tracks() -> Vec<Track> {
     // (uid, domain, affiliation, centre lat, centre lon, radius, altitude m, step)
+    #[rustfmt::skip]
+    #[allow(clippy::type_complexity)]
     let defs: &[(&str, Domain, &str, f64, f64, f64, f64, f64)] = &[
         // Air
         ("QTR41", Domain::Air, "friend", 25.6, 51.2, 0.22, 10600.0, 0.030),
