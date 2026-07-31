@@ -44,9 +44,6 @@ use ajar_connector_common::{Enrichment, FrameParser, ParseError};
 const MAX_PENDING_FRAMES: usize = 128;
 const MAX_PENDING_BYTES: usize = 32 * 1024;
 
-/// 1 metre/second in knots.
-const MPS_TO_KNOTS: f64 = 1.943_844;
-
 /// Why a MAVLink frame could not be turned into a position.
 #[derive(Debug, PartialEq, Eq)]
 pub enum MavError {
@@ -93,7 +90,7 @@ pub struct VehicleState {
     pub pitch: Option<f64>,
     pub yaw: Option<f64>,
     // VFR_HUD (74)
-    /// Airspeed, knots (distinct from GPS ground speed).
+    /// Airspeed, m/s (distinct from GPS ground speed).
     pub airspeed: Option<f64>,
     /// Throttle, percent.
     pub throttle: Option<u16>,
@@ -127,7 +124,7 @@ pub struct MavPosition {
     pub heading: Option<f64>,
     /// Course over ground, degrees (GPS_RAW_INT).
     pub course: Option<f64>,
-    /// Ground speed, knots.
+    /// Ground speed, m/s.
     pub sog: Option<f64>,
     /// Vertical speed, m/s positive up (GLOBAL_POSITION_INT).
     pub vertical_speed: Option<f64>,
@@ -342,7 +339,7 @@ impl MavParser {
         let vx = i16le(p, 20) as f64;
         let vy = i16le(p, 22) as f64;
         let vz = i16le(p, 24) as f64; // positive down, cm/s
-        let sog = Some((vx * vx + vy * vy).sqrt() / 100.0 * MPS_TO_KNOTS);
+        let sog = Some((vx * vx + vy * vy).sqrt() / 100.0);
         let climb = -vz / 100.0;
         let hdg = u16le(p, 26);
         let (raw, truncated) = self.drain(sysid);
@@ -387,7 +384,7 @@ impl MavParser {
             relative_alt_m: None,
             heading: None,
             course: (cog != u16::MAX).then_some(cog as f64 / 100.0),
-            sog: (vel != u16::MAX).then_some(vel as f64 / 100.0 * MPS_TO_KNOTS),
+            sog: (vel != u16::MAX).then_some(vel as f64 / 100.0),
             vertical_speed: None,
             state: self.snapshot(sysid),
             raw,
@@ -422,11 +419,11 @@ impl MavParser {
                 }
             };
         }
-        attr!("speed", p.sog.map(|v| format!("{v:.1}"))); // knots
+        attr!("speed", p.sog.map(|v| format!("{v:.1}"))); // m/s
         attr!("heading", p.heading.map(|v| format!("{v:.1}"))); // deg true
         attr!("course", p.course.map(|v| format!("{v:.1}"))); // deg
         attr!(
-            "vertical_speed",
+            "vertical_rate",
             p.vertical_speed.or(s.climb).map(|v| format!("{v:.1}"))
         ); // m/s
         attr!(
@@ -440,7 +437,7 @@ impl MavParser {
         attr!("roll", s.roll.map(|v| format!("{v:.1}"))); // deg
         attr!("pitch", s.pitch.map(|v| format!("{v:.1}"))); // deg
         attr!("yaw", s.yaw.map(|v| format!("{v:.1}"))); // deg
-        attr!("airspeed", s.airspeed.map(|v| format!("{v:.1}"))); // knots
+        attr!("airspeed", s.airspeed.map(|v| format!("{v:.1}"))); // m/s (ungoverned)
         attr!("throttle", s.throttle.map(|v| v.to_string())); // %
         attr!(
             "battery_voltage",
@@ -451,7 +448,7 @@ impl MavParser {
             s.battery_current.map(|v| format!("{v:.2}"))
         ); // A
         attr!(
-            "battery_remaining",
+            "battery",
             s.battery_remaining.map(|v| v.to_string())
         ); // %
         attr!(
@@ -549,7 +546,7 @@ fn attitude(s: &mut VehicleState, p: &[u8]) {
 
 /// VFR_HUD (msg 74): airspeed, throttle, climb rate.
 fn vfr_hud(s: &mut VehicleState, p: &[u8]) {
-    s.airspeed = Some(f32le(p, 0) as f64 * MPS_TO_KNOTS);
+    s.airspeed = Some(f32le(p, 0) as f64);
     s.climb = Some(f32le(p, 12) as f64);
     s.throttle = Some(u16le(p, 18));
 }
@@ -701,7 +698,7 @@ mod tests {
         "speed",
         "heading",
         "course",
-        "vertical_speed",
+        "vertical_rate",
         "relative_altitude",
         "vehicle_type",
         "status",
@@ -714,7 +711,7 @@ mod tests {
         "throttle",
         "battery_voltage",
         "battery_current",
-        "battery_remaining",
+        "battery",
         "battery_consumed",
         "battery_temp",
         "cpu_load",
@@ -782,7 +779,7 @@ mod tests {
         assert!((p.lat - 47.397742).abs() < 1e-6);
         assert!((p.alt_m - 500.0).abs() < 1e-6);
         assert!((p.heading.unwrap() - 90.0).abs() < 1e-6);
-        assert!((p.sog.unwrap() - 19.44).abs() < 0.01); // 10 m/s in knots
+        assert!((p.sog.unwrap() - 10.0).abs() < 0.01); // 10 m/s
     }
 
     #[test]
@@ -878,16 +875,16 @@ mod tests {
         put_i32(&mut gps, 16, 500_000);
         gps[28] = 3;
         let pos = p.parse_frame(&frame(24, &gps)).unwrap().unwrap();
-        assert!((pos.state.airspeed.unwrap() - 20.0 * MPS_TO_KNOTS).abs() < 0.1);
+        assert!((pos.state.airspeed.unwrap() - 20.0).abs() < 0.1);
         let ev = p.to_event_at(&pos, "2026-06-10T08:00:00Z").unwrap();
         assert_eq!(attr_of(&ev, "throttle"), Some("55"));
-        assert_eq!(attr_of(&ev, "vertical_speed"), Some("2.5")); // VFR climb fallback
+        assert_eq!(attr_of(&ev, "vertical_rate"), Some("2.5")); // VFR climb fallback
 
         // A GLOBAL_POSITION_INT carries its own (level) vertical speed, clean of
         // negative zero, and it wins over the cached VFR value.
         let gpi = p.parse_frame(&bytes(GPI)).unwrap().unwrap();
         let ev2 = p.to_event_at(&gpi, "2026-06-10T08:00:00Z").unwrap();
-        assert_eq!(attr_of(&ev2, "vertical_speed"), Some("0.0"));
+        assert_eq!(attr_of(&ev2, "vertical_rate"), Some("0.0"));
     }
 
     #[test]

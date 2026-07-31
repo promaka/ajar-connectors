@@ -36,6 +36,9 @@ use ajar_connector_common::{Enrichment, FrameParser, ParseError};
 const FT_TO_M: f64 = 0.3048;
 /// 1 foot/minute in metres/second.
 const FTMIN_TO_MPS: f64 = FT_TO_M / 60.0;
+/// 1 knot in metres/second. The governed `speed` attribute is m/s; SBS ground
+/// speed is knots, so normalise (ADR-0019) and keep the native knots in metadata.
+const KNOTS_TO_MPS: f64 = 0.514_444;
 
 /// Why an SBS-1 line could not be turned into a track.
 #[derive(Debug, PartialEq, Eq)]
@@ -329,9 +332,13 @@ impl AdsbParser {
             };
         }
         attr!("callsign", s.callsign.clone().filter(|c| !c.is_empty()));
-        attr!("speed", s.ground_speed.map(|v| format!("{v:.1}"))); // knots
-        attr!("course", s.track.map(|v| format!("{v:.1}"))); // degrees
-        attr!("vertical_speed", s.vertical_speed.map(|v| format!("{v:.1}"))); // m/s
+        // Governed `speed` is m/s; keep the native knots in metadata (ADR-0019).
+        if let Some(kn) = s.ground_speed {
+            b = b.attribute("speed", format!("{:.2}", kn * KNOTS_TO_MPS));
+            b = b.metadata("speed_kn", format!("{kn:.1}"));
+        }
+        attr!("course", s.track.map(|v| format!("{v:.1}"))); // deg, course over ground
+        attr!("vertical_rate", s.vertical_speed.map(|v| format!("{v:.1}"))); // m/s, signed
         attr!("squawk", s.squawk.clone().filter(|q| !q.is_empty()));
         attr!(
             "on_ground",
@@ -406,7 +413,7 @@ mod tests {
         "callsign",
         "speed",
         "course",
-        "vertical_speed",
+        "vertical_rate",
         "squawk",
     ];
 
@@ -473,10 +480,12 @@ mod tests {
 
         let pos = p.parse_line(AIRBORNE.as_bytes()).unwrap().unwrap();
         let ev = p.to_event_at(&pos, "2026-06-10T08:00:00Z").unwrap();
-        assert_eq!(attr_of(&ev, "speed"), Some("450.0"));
+        // Governed speed is m/s (450 kt * 0.514444); native knots kept in metadata.
+        assert_eq!(attr_of(&ev, "speed"), Some("231.50"));
+        assert_eq!(meta_of(&ev, "speed_kn"), Some("450.0"));
         assert_eq!(attr_of(&ev, "course"), Some("270.0"));
         // -1024 ft/min = -5.2 m/s (descending).
-        assert_eq!(attr_of(&ev, "vertical_speed"), Some("-5.2"));
+        assert_eq!(attr_of(&ev, "vertical_rate"), Some("-5.2"));
     }
 
     #[test]

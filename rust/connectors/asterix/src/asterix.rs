@@ -22,6 +22,8 @@ use ajar_connector::{Event, EventBuilder};
 use ajar_connector_common::{Enrichment, FrameParser, ParseError};
 
 const CAT021: u8 = 21;
+/// 1 knot in metres/second — the governed `speed` attribute is m/s (ADR-0019).
+const KNOTS_TO_MPS: f64 = 0.514_444;
 
 /// Why an ASTERIX block or record could not be decoded.
 #[derive(Debug, PartialEq, Eq)]
@@ -327,7 +329,9 @@ impl AsterixParser {
             b = b.attribute("affiliation", aff);
         }
         if let Some(gs) = t.ground_speed {
-            b = b.attribute("speed", format!("{gs:.1}")); // knots
+            // Governed `speed` is m/s; keep the native knots in metadata (ADR-0019).
+            b = b.attribute("speed", format!("{:.2}", gs * KNOTS_TO_MPS));
+            b = b.metadata("speed_kn", format!("{gs:.1}"));
         }
         if let Some(ta) = t.track_angle {
             b = b.attribute("course", format!("{ta:.1}")); // degrees
