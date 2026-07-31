@@ -26,7 +26,8 @@
 
 use std::collections::HashMap;
 use std::collections::VecDeque;
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 use ajar_connector::{Event, EventBuilder};
 use ajar_connector_common::{Enrichment, FrameParser, ParseError};
@@ -79,6 +80,10 @@ pub struct AdsbPosition {
     /// since the last emit — newline-delimited, carried verbatim into the signed
     /// `payload` so nothing is lost.
     pub raw: Vec<u8>,
+    /// True if the per-ICAO buffer dropped one or more raw lines before this
+    /// emit (over the cap). The event marks itself `payload_truncated` so a
+    /// re-parser can tell "all contributing frames" from "some were discarded".
+    pub truncated: bool,
 }
 
 /// An aircraft's latest known non-positional state, cached by ICAO address.
@@ -121,27 +126,34 @@ struct Entry {
     state: AircraftState,
     pending: VecDeque<Vec<u8>>,
     pending_bytes: usize,
+    /// Set when a pending line was dropped over the cap since the last emit;
+    /// cleared on drain. Drives the event's `payload_truncated` marker.
+    dropped_since_emit: bool,
 }
 
 impl Entry {
     /// Remember one raw line, dropping the oldest pending line(s) past the cap.
-    fn push_raw(&mut self, raw: &[u8]) {
+    /// Returns how many were dropped (for the metric).
+    fn push_raw(&mut self, raw: &[u8]) -> u64 {
         self.pending.push_back(raw.to_vec());
         self.pending_bytes += raw.len();
+        let mut dropped = 0;
         while self.pending.len() > MAX_PENDING_FRAMES || self.pending_bytes > MAX_PENDING_BYTES {
             match self.pending.pop_front() {
                 Some(old) => {
                     self.pending_bytes -= old.len();
-                    tracing::warn!("adsb: pending-raw cap exceeded, dropped oldest line");
+                    self.dropped_since_emit = true;
+                    dropped += 1;
                 }
                 None => break,
             }
         }
+        dropped
     }
 
     /// Drain all pending lines into one newline-delimited payload (a re-parse
-    /// splits on `\n`), leaving the buffer empty.
-    fn drain_payload(&mut self) -> Vec<u8> {
+    /// splits on `\n`), and report whether any were dropped since the last emit.
+    fn drain_payload(&mut self) -> (Vec<u8>, bool) {
         let mut out = Vec::with_capacity(self.pending_bytes + self.pending.len());
         for (i, f) in self.pending.drain(..).enumerate() {
             if i > 0 {
@@ -150,7 +162,8 @@ impl Entry {
             out.extend_from_slice(&f);
         }
         self.pending_bytes = 0;
-        out
+        let truncated = std::mem::take(&mut self.dropped_since_emit);
+        (out, truncated)
     }
 }
 
@@ -182,6 +195,8 @@ pub struct AdsbParser {
     source_id: String,
     enrichment: Enrichment,
     aircraft: Mutex<StateCache>,
+    /// Carry-forward lines dropped over the per-ICAO cap, since start.
+    dropped: Arc<AtomicU64>,
 }
 
 impl AdsbParser {
@@ -190,6 +205,7 @@ impl AdsbParser {
             source_id: source_id.into(),
             enrichment,
             aircraft: Mutex::new(StateCache::default()),
+            dropped: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -219,7 +235,11 @@ impl AdsbParser {
         // Carry this raw line forward, then fold whatever it carries into state.
         let mut cache = self.aircraft.lock().expect("aircraft mutex");
         let entry = cache.entry(&icao);
-        entry.push_raw(line.as_bytes());
+        let dropped = entry.push_raw(line.as_bytes());
+        if dropped > 0 {
+            self.dropped.fetch_add(dropped, Ordering::Relaxed);
+            tracing::warn!(dropped, %icao, "adsb: carry-forward buffer over cap");
+        }
         {
             let s = &mut entry.state;
             if let Some(cs) = field(&parts, 10) {
@@ -259,7 +279,7 @@ impl AdsbParser {
                     return Ok(None);
                 }
                 let state = entry.state.clone();
-                let raw = entry.drain_payload();
+                let (raw, truncated) = entry.drain_payload();
                 Ok(Some(AdsbPosition {
                     icao,
                     msg_type: tx.expect("matched above"),
@@ -268,6 +288,7 @@ impl AdsbParser {
                     alt_m: state.altitude.unwrap_or(0.0),
                     state,
                     raw,
+                    truncated,
                 }))
             }
             _ => Ok(None),
@@ -287,6 +308,12 @@ impl AdsbParser {
             .payload(p.raw.clone())
             .metadata("source_uid", p.icao.clone())
             .metadata("icao", p.icao.clone());
+
+        // If the carry-forward buffer dropped lines, the payload is incomplete —
+        // say so, so a re-parser never mistakes it for the full set of frames.
+        if p.truncated {
+            b = b.metadata("payload_truncated", "true");
+        }
 
         // Parse every field into attributes; Core auto-demotes undeclared keys.
         // Affiliation is only ever the operator's explicit assertion — never a
@@ -337,6 +364,10 @@ impl FrameParser for AdsbParser {
             Some(pos) => Ok(vec![self.to_event_now(&pos).map_err(box_err)?]),
             None => Ok(Vec::new()),
         }
+    }
+
+    fn counters(&self) -> Vec<(&'static str, Arc<AtomicU64>)> {
+        vec![("connector_dropped_carryforward_total", self.dropped.clone())]
     }
 }
 
@@ -509,6 +540,52 @@ mod tests {
             a + 64
         );
         assert!(a > b); // raw is carried
+    }
+
+    #[test]
+    fn over_cap_drops_oldest_and_marks_payload_truncated() {
+        let p = governed();
+        let vel =
+            "MSG,4,1,1,4CA2D6,1,2026/06/10,08:00:00.000,2026/06/10,08:00:00.000,,,450,270,,,-1024,,,,,";
+        // Flood one ICAO with cache-only lines past the frame cap.
+        for _ in 0..(MAX_PENDING_FRAMES + 5) {
+            assert_eq!(p.parse_line(vel.as_bytes()).unwrap(), None);
+        }
+        let pos = p.parse_line(AIRBORNE.as_bytes()).unwrap().unwrap();
+        assert!(pos.truncated);
+        let ev = p.to_event_at(&pos, "2026-06-10T08:00:00Z").unwrap();
+        assert_eq!(meta_of(&ev, "payload_truncated"), Some("true"));
+        // The dropped-frame metric advanced.
+        assert!(p.counters()[0].1.load(Ordering::Relaxed) >= 5);
+    }
+
+    #[test]
+    fn bytes_per_event_realistic_frame_mix() {
+        use ajar_connector::canonical_bytes;
+        let p = governed();
+        // A realistic burst contributing to one position event: identity, two
+        // velocity updates, a squawk, then the airborne position (5 frames).
+        let frames = [
+            "MSG,1,1,1,4CA2D6,1,2026/06/10,08:00:00.000,2026/06/10,08:00:00.000,BAW123,,,,,,,,,,0",
+            "MSG,4,1,1,4CA2D6,1,2026/06/10,08:00:00.100,2026/06/10,08:00:00.100,,,450,270,,,-1024,,,,,",
+            "MSG,4,1,1,4CA2D6,1,2026/06/10,08:00:00.200,2026/06/10,08:00:00.200,,,451,271,,,-960,,,,,",
+            "MSG,6,1,1,4CA2D6,1,2026/06/10,08:00:00.300,2026/06/10,08:00:00.300,,,,,,,,7700,,,,",
+        ];
+        for f in &frames {
+            assert_eq!(p.parse_line(f.as_bytes()).unwrap(), None);
+        }
+        let pos = p.parse_line(AIRBORNE.as_bytes()).unwrap().unwrap();
+        let ev = p.to_event_at(&pos, "2026-06-10T08:00:00Z").unwrap();
+        let sealed = canonical_bytes(&ev).len() + 64;
+        let per_day = |rate: f64| (50.0 * rate * sealed as f64 * 86_400.0) / 1e9;
+        println!(
+            "ADSB realistic: {}frames/event  payload={}B  sealed={sealed}B  => {:.1} GB/day @1Hz, {:.1} GB/day @2Hz (50 aircraft)",
+            frames.len() + 1,
+            ev.payload.len(),
+            per_day(1.0),
+            per_day(2.0),
+        );
+        assert!(sealed > 363);
     }
 
     #[test]
