@@ -20,10 +20,6 @@ signing_key_path = "/etc/ajar/ais-coast-1.key"
 # Coastal AIS is overwhelmingly civil traffic.
 default_affiliation = "neutral"
 
-# Declared-in-ontology keys ride governed; the rest ride as metadata (safe
-# default: omitted/empty). See ../ATTRIBUTES.md for the standard set.
-# governed_attributes = ["affiliation", "speed", "course", "vessel_name", "vessel_type"]
-
 [transport]
 # AIS aggregators and ship-network NMEA servers usually expose a TCP port that
 # streams one sentence per line — connect out to it:

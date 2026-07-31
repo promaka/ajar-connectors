@@ -32,16 +32,6 @@ pub struct Config {
     /// connector's default, so nothing is silently dropped.
     #[serde(default)]
     pub entity_map: std::collections::HashMap<String, String>,
-    /// Tactical attribute keys the deployment's ontology declares for this
-    /// connector's entity types. A key listed here rides as a **governed**
-    /// attribute (type-validated, correlated); every other tactical key rides as
-    /// **metadata** (always accepted, surfaced to the C2). Per-attribute, so one
-    /// undeclared key can never reject a whole track. Empty (the default) routes
-    /// everything to metadata — the safe plug-and-play posture. Each connector's
-    /// README lists its standard keys; Core ships the same set pre-declared in
-    /// its ontology seed.
-    #[serde(default)]
-    pub governed_attributes: Vec<String>,
     /// Force-identity affiliation for feeds that carry none (AIS, MAVLink, civil
     /// ADS-B). E.g. `"friendly"` for own-force UAS, `"neutral"` for civil traffic.
     /// Connectors whose wire format encodes affiliation (CoT) derive it and ignore
@@ -84,8 +74,11 @@ impl Enrichment {
 impl Config {
     /// The enrichment settings for a connector built from this config.
     pub fn enrichment(&self) -> Enrichment {
+        // `governed` is vestigial (connectors now emit every decoded field as an
+        // attribute and Core's ontology governs / demotes); only `affiliation` is
+        // still config-driven. It is removed with the Tactical trait once AIS lands.
         Enrichment {
-            governed: self.governed_attributes.iter().cloned().collect(),
+            governed: std::collections::HashSet::new(),
             affiliation: self.default_affiliation.clone(),
         }
     }

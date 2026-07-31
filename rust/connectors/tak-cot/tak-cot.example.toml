@@ -21,10 +21,6 @@ subject_prefix = "ajar.ingest"
 # Secret — never commit it, never share it.
 signing_key_path = "/etc/ajar/tak-field-1.key"
 
-# Declared-in-ontology keys ride governed; the rest ride as metadata (safe
-# default: omitted/empty). See ../ATTRIBUTES.md for the standard set.
-# governed_attributes = ["affiliation", "callsign"]
-
 [transport]
 # udp-multicast (the CoT SA default) or udp (unicast).
 kind = "udp-multicast"

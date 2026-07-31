@@ -24,7 +24,6 @@ signing_key_path = "/etc/ajar/camera-north-gate.key"
 
 # Camera detections carry no affiliation; stamp one for the COP.
 default_affiliation = "unknown"
-# governed_attributes = ["affiliation", "object_class", "confidence", "course"]
 
 [transport]
 # The detector pushes newline-delimited JSON; listen for it (or dial it with
