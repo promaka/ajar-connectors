@@ -242,11 +242,7 @@ mod tests {
 
     /// Parser for a deployment that declared its ontology: governed mode.
     fn governed() -> CotParser {
-        CotParser::new(
-            "tak-field-1",
-            HashMap::new(),
-            Enrichment::governing(["affiliation", "callsign"]),
-        )
+        CotParser::new("tak-field-1", HashMap::new(), Enrichment::default())
     }
 
     /// Find a tactical value in whichever place the mode put it.

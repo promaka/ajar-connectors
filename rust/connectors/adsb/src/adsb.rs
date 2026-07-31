@@ -337,10 +337,13 @@ impl AdsbParser {
             b = b.metadata("speed_kn", format!("{kn:.1}"));
         }
         attr!("course", s.track.map(|v| format!("{v:.1}"))); // deg, course over ground
-        // Governed vertical_rate is m/s; keep native ft/min in metadata (ADR-0019).
+                                                             // Governed vertical_rate is m/s; keep native ft/min in metadata (ADR-0019).
         if let Some(ftmin) = s.vertical_speed {
             let mps = ftmin * FTMIN_TO_MPS;
-            b = b.attribute("vertical_rate", format!("{:.1}", if mps == 0.0 { 0.0 } else { mps }));
+            b = b.attribute(
+                "vertical_rate",
+                format!("{:.1}", if mps == 0.0 { 0.0 } else { mps }),
+            );
             b = b.metadata("vertical_rate_ftmin", format!("{ftmin:.0}"));
         }
         // Altitude is located in metres (GeoPoint); keep native feet in metadata.
@@ -416,20 +419,8 @@ mod tests {
         AdsbParser::new("adsb-1", Enrichment::default())
     }
 
-    const GOVERNED: [&str; 6] = [
-        "affiliation",
-        "callsign",
-        "speed",
-        "course",
-        "vertical_rate",
-        "squawk",
-    ];
-
     fn governed() -> AdsbParser {
-        AdsbParser::new(
-            "adsb-1",
-            Enrichment::governing(GOVERNED).with_affiliation("neutral"),
-        )
+        AdsbParser::new("adsb-1", Enrichment::default().with_affiliation("neutral"))
     }
 
     fn attr_of<'a>(ev: &'a Event, k: &str) -> Option<&'a str> {
@@ -514,8 +505,7 @@ mod tests {
         // Default mode: no operator affiliation -> none is invented (absent stays
         // absent), and the raw SBS line is preserved verbatim in the signed payload.
         let pos = parser().parse_line(AIRBORNE.as_bytes()).unwrap().unwrap();
-        let ev = parser()
-            .to_event_at(&pos, "2026-06-10T08:00:00Z").unwrap();
+        let ev = parser().to_event_at(&pos, "2026-06-10T08:00:00Z").unwrap();
         assert!(!ev.attributes.iter().any(|a| a.key == "affiliation"));
         assert!(!ev.metadata.iter().any(|m| m.key == "affiliation"));
         assert_eq!(ev.payload.as_slice(), AIRBORNE.as_bytes());
@@ -551,7 +541,10 @@ mod tests {
         let after = p.to_event_at(&pos, "2026-06-10T08:00:00Z").unwrap();
         let mut before = after.clone();
         before.payload.clear();
-        let (b, a) = (canonical_bytes(&before).len(), canonical_bytes(&after).len());
+        let (b, a) = (
+            canonical_bytes(&before).len(),
+            canonical_bytes(&after).len(),
+        );
         println!(
             "ADSB canonical bytes/event: before(no payload)={b}  after(raw payload)={a}  raw={}  sealed_after={}",
             after.payload.len(),

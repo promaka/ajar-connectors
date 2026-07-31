@@ -41,7 +41,7 @@ fn hex32(v: &serde_json::Value, key: &str) -> [u8; 32] {
 fn connector_event() -> ajar_connector::Event {
     // Governed mode: a deployment that declared its ontology, so the tactical
     // attributes ride as governed attributes (what the conformance below asserts).
-    let enrichment = Enrichment::governing(["affiliation", "callsign"]);
+    let enrichment = Enrichment::default();
     CotParser::new("tak-field-1", HashMap::new(), enrichment)
         .to_event(SAMPLE.as_bytes())
         .expect("sample parses")

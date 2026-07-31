@@ -246,7 +246,7 @@ mod tests {
             confidence_field = "quality"
             "#,
         );
-        let enrichment = Enrichment::governing(["affiliation"]).with_affiliation("friendly");
+        let enrichment = Enrichment::default().with_affiliation("friendly");
         let ev = GenericParser::new("gen-1", m, enrichment)
             .to_event(br#"{"ts":"2026-06-10T08:00:00Z","quality":87}"#)
             .unwrap();

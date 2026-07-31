@@ -491,15 +491,7 @@ mod tests {
     fn governed() -> AsterixParser {
         AsterixParser::new(
             "radar-adsb-1",
-            Enrichment::governing([
-                "affiliation",
-                "speed",
-                "course",
-                "squawk",
-                "callsign",
-                "aircraft_type",
-            ])
-            .with_affiliation("neutral"),
+            Enrichment::default().with_affiliation("neutral"),
         )
     }
 

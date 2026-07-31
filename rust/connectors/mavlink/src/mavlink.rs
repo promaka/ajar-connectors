@@ -447,10 +447,7 @@ impl MavParser {
             "battery_current",
             s.battery_current.map(|v| format!("{v:.2}"))
         ); // A
-        attr!(
-            "battery",
-            s.battery_remaining.map(|v| v.to_string())
-        ); // %
+        attr!("battery", s.battery_remaining.map(|v| v.to_string())); // %
         attr!(
             "battery_consumed",
             s.battery_consumed_mah.map(|v| v.to_string())
@@ -693,37 +690,10 @@ mod tests {
         MavParser::new("uav-flight-1", Enrichment::default())
     }
 
-    const GOVERNED: [&str; 24] = [
-        "affiliation",
-        "speed",
-        "heading",
-        "course",
-        "vertical_rate",
-        "relative_altitude",
-        "vehicle_type",
-        "status",
-        "armed",
-        "mode",
-        "roll",
-        "pitch",
-        "yaw",
-        "airspeed",
-        "throttle",
-        "battery_voltage",
-        "battery_current",
-        "battery",
-        "battery_consumed",
-        "battery_temp",
-        "cpu_load",
-        "gps_fix",
-        "gps_satellites",
-        "gps_hdop",
-    ];
-
     fn governed() -> MavParser {
         MavParser::new(
             "uav-flight-1",
-            Enrichment::governing(GOVERNED).with_affiliation("friendly"),
+            Enrichment::default().with_affiliation("friendly"),
         )
     }
 
