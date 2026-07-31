@@ -19,7 +19,7 @@
 //! operational use.
 
 use ajar_connector::{Event, EventBuilder};
-use ajar_connector_common::{Enrichment, FrameParser, ParseError, Tactical};
+use ajar_connector_common::{Enrichment, FrameParser, ParseError};
 
 const CAT021: u8 = 21;
 
@@ -74,6 +74,9 @@ pub struct AsterixTarget {
     pub callsign: Option<String>,
     /// Emitter category — light, heavy, rotorcraft, uav, … (I021/020).
     pub emitter: Option<&'static str>,
+    /// The raw bytes of this record within the data block, preserved verbatim in
+    /// the signed payload (a re-parser reads it as one CAT021 record).
+    pub raw: Vec<u8>,
 }
 
 /// How to measure a UAP item's length so the record walk can skip it.
@@ -181,7 +184,9 @@ impl AsterixParser {
         let mut off = 3;
         while off < len {
             let (target, next) = self.parse_record(&frame[..len], off)?;
-            if let Some(t) = target {
+            if let Some(mut t) = target {
+                // Preserve this record's raw bytes for the signed payload.
+                t.raw = frame[off..next.min(len)].to_vec();
                 targets.push(t);
             }
             if next <= off {
@@ -291,6 +296,7 @@ impl AsterixParser {
             squawk,
             callsign,
             emitter,
+            raw: Vec::new(), // filled by parse_block, which knows the record extent
         });
         Ok((target, off))
     }
@@ -306,31 +312,34 @@ impl AsterixParser {
             (None, Some(track)) => format!("asterix:{}:{}:{}", t.sac, t.sic, track),
             (None, None) => format!("asterix:{}:{}", t.sac, t.sic),
         };
-        let affiliation = self.enrichment.affiliation.as_deref().unwrap_or("unknown");
-
         // Core requires the event id to be a fresh UUIDv7. The native identity is
-        // an identifier -> metadata; tactical fields follow the configured mode.
+        // an identifier -> metadata; the raw record rides verbatim in the payload;
+        // decoded fields ride as attributes (Core demotes undeclared keys).
         // Altitude is the structured location field, in metres.
         let altitude_m = t.alt_ft.map(|ft| ft * 0.3048).unwrap_or(0.0);
         let mut b = EventBuilder::new(self.source_id.clone(), "mim:aircraft")
             .new_id()
             .location(t.lat, t.lon, altitude_m)
-            .metadata("track", track)
-            .tactical(&self.enrichment, "affiliation", affiliation);
+            .payload(t.raw.clone())
+            .metadata("track", track);
+        // Operator-asserted affiliation only — never a connector-invented default.
+        if let Some(aff) = self.enrichment.affiliation.as_deref() {
+            b = b.attribute("affiliation", aff);
+        }
         if let Some(gs) = t.ground_speed {
-            b = b.tactical(&self.enrichment, "speed", format!("{gs:.1}")); // knots
+            b = b.attribute("speed", format!("{gs:.1}")); // knots
         }
         if let Some(ta) = t.track_angle {
-            b = b.tactical(&self.enrichment, "course", format!("{ta:.1}")); // degrees
+            b = b.attribute("course", format!("{ta:.1}")); // degrees
         }
         if let Some(sq) = &t.squawk {
-            b = b.tactical(&self.enrichment, "squawk", sq.clone());
+            b = b.attribute("squawk", sq.clone());
         }
         if let Some(cs) = &t.callsign {
-            b = b.tactical(&self.enrichment, "callsign", cs.clone());
+            b = b.attribute("callsign", cs.clone());
         }
         if let Some(cat) = t.emitter {
-            b = b.tactical(&self.enrichment, "aircraft_type", cat);
+            b = b.attribute("aircraft_type", cat);
         }
         stamp(b)
             .build()
