@@ -3,31 +3,56 @@
 # Parameterized production connector image — build ANY connector by package name,
 # distroless + non-root. Used by deploy/release.sh.
 #
+# Multi-arch by TRUE CROSS-COMPILATION, not QEMU: the build stage is pinned to the
+# runner's native arch ($BUILDPLATFORM) and cross-compiles to the target arch, so
+# an arm64 image (AWS Graviton validation box, Raspberry Pi SDR) builds at native
+# speed on an amd64 runner instead of under slow emulation.
+#
 #   docker build -f deploy/docker/Dockerfile.build \
 #     --build-arg WSDIR=rust/connectors --build-arg PKG=tak-egress \
 #     -t ghcr.io/promaka/ajar-connector-tak-egress:v0.1.0 .
+#
+# For a specific arch, add `--platform linux/arm64` (buildx). Bare `docker build`
+# targets the host arch, which cross-compiles to itself — same path, no emulation.
 ARG WSDIR=rust/connectors
 ARG PKG=tak-egress
 
-FROM rust:1.96-bookworm AS build
+# $BUILDPLATFORM pins this stage to the runner's native arch; we cross-compile to
+# $TARGETARCH rather than running the compiler under emulation.
+FROM --platform=$BUILDPLATFORM rust:1.96-bookworm AS build
 ARG WSDIR
 ARG PKG
+ARG TARGETARCH
+
+# aarch64 cross toolchain: the linker and C compiler that ring / other -sys crates
+# need to produce arm64 objects. Harmless for the amd64 target (host gcc is used).
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      gcc-aarch64-linux-gnu libc6-dev-arm64-cross \
+ && rm -rf /var/lib/apt/lists/*
+
+# Map Docker's TARGETARCH to the Rust target triple, install it, and record it.
+RUN case "$TARGETARCH" in \
+      amd64) echo x86_64-unknown-linux-gnu  > /rust-target ;; \
+      arm64) echo aarch64-unknown-linux-gnu > /rust-target ;; \
+      *) echo "unsupported TARGETARCH: $TARGETARCH" >&2; exit 1 ;; \
+    esac \
+ && rustup target add "$(cat /rust-target)"
+
 WORKDIR /build
 COPY rust ./rust
 COPY vendor ./vendor
-RUN cargo build --release --manifest-path ${WSDIR}/Cargo.toml -p ${PKG} \
- && cp ${WSDIR}/target/release/${PKG} /connector
 
+# Point the aarch64 target at its cross linker/compiler (ignored for amd64).
+ENV CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc \
+    CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc
+RUN TARGET="$(cat /rust-target)" \
+ && cargo build --release --target "$TARGET" \
+      --manifest-path ${WSDIR}/Cargo.toml -p ${PKG} \
+ && cp ${WSDIR}/target/${TARGET}/release/${PKG} /connector
+
+# No --platform here: the final image resolves to $TARGETPLATFORM, so the arm64
+# build pulls the arm64 distroless base and carries the arm64 binary.
 FROM gcr.io/distroless/cc-debian12:nonroot
-# Provenance labels: which connector, version, and the commit it was built from.
-ARG PKG
-ARG VERSION=""
-ARG REVISION=""
-LABEL org.opencontainers.image.title="ajar-connector-${PKG}" \
-      org.opencontainers.image.version="${VERSION}" \
-      org.opencontainers.image.revision="${REVISION}" \
-      org.opencontainers.image.source="https://github.com/promaka/ajar-connectors" \
-      org.opencontainers.image.licenses="Apache-2.0"
 COPY --from=build /connector /usr/local/bin/connector
 USER nonroot
 ENTRYPOINT ["/usr/local/bin/connector"]
