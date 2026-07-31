@@ -324,6 +324,9 @@ impl AsterixParser {
             .location(t.lat, t.lon, altitude_m)
             .payload(t.raw.clone())
             .metadata("track", track);
+        if let Some(ft) = t.alt_ft {
+            b = b.metadata("altitude_ft", format!("{ft:.0}")); // native feet (GeoPoint is metres)
+        }
         // Operator-asserted affiliation only — never a connector-invented default.
         if let Some(aff) = self.enrichment.affiliation.as_deref() {
             b = b.attribute("affiliation", aff);

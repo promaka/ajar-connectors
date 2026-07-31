@@ -101,9 +101,9 @@ pub struct AircraftState {
     pub ground_speed: Option<f64>,
     /// Track angle, degrees (MSG,2 / MSG,4).
     pub track: Option<f64>,
-    /// Vertical rate, m/s positive up (MSG,4).
+    /// Vertical rate, native ft/min (MSG,4); emitted as m/s + kept in metadata.
     pub vertical_speed: Option<f64>,
-    /// Barometric altitude, metres (most message types).
+    /// Barometric altitude, native feet (most types); located in metres.
     pub altitude: Option<f64>,
     /// On-ground flag (SBS field 21).
     pub on_ground: Option<bool>,
@@ -249,7 +249,7 @@ impl AdsbParser {
                 s.callsign = Some(cs.trim().to_string());
             }
             if let Some(a) = num(&parts, 11) {
-                s.altitude = Some(a * FT_TO_M);
+                s.altitude = Some(a); // native feet
             }
             if let Some(gs) = num(&parts, 12) {
                 s.ground_speed = Some(gs);
@@ -258,8 +258,7 @@ impl AdsbParser {
                 s.track = Some(t);
             }
             if let Some(vr) = num(&parts, 16) {
-                let mps = vr * FTMIN_TO_MPS;
-                s.vertical_speed = Some(if mps == 0.0 { 0.0 } else { mps });
+                s.vertical_speed = Some(vr); // native ft/min; converted at emit
             }
             if let Some(sq) = field(&parts, 17) {
                 s.squawk = Some(sq.to_string());
@@ -288,7 +287,7 @@ impl AdsbParser {
                     msg_type: tx.expect("matched above"),
                     lat,
                     lon,
-                    alt_m: state.altitude.unwrap_or(0.0),
+                    alt_m: state.altitude.map(|ft| ft * FT_TO_M).unwrap_or(0.0),
                     state,
                     raw,
                     truncated,
@@ -338,7 +337,16 @@ impl AdsbParser {
             b = b.metadata("speed_kn", format!("{kn:.1}"));
         }
         attr!("course", s.track.map(|v| format!("{v:.1}"))); // deg, course over ground
-        attr!("vertical_rate", s.vertical_speed.map(|v| format!("{v:.1}"))); // m/s, signed
+        // Governed vertical_rate is m/s; keep native ft/min in metadata (ADR-0019).
+        if let Some(ftmin) = s.vertical_speed {
+            let mps = ftmin * FTMIN_TO_MPS;
+            b = b.attribute("vertical_rate", format!("{:.1}", if mps == 0.0 { 0.0 } else { mps }));
+            b = b.metadata("vertical_rate_ftmin", format!("{ftmin:.0}"));
+        }
+        // Altitude is located in metres (GeoPoint); keep native feet in metadata.
+        if let Some(ft) = s.altitude {
+            b = b.metadata("altitude_ft", format!("{ft:.0}"));
+        }
         attr!("squawk", s.squawk.clone().filter(|q| !q.is_empty()));
         attr!(
             "on_ground",
@@ -486,6 +494,7 @@ mod tests {
         assert_eq!(attr_of(&ev, "course"), Some("270.0"));
         // -1024 ft/min = -5.2 m/s (descending).
         assert_eq!(attr_of(&ev, "vertical_rate"), Some("-5.2"));
+        assert_eq!(meta_of(&ev, "vertical_rate_ftmin"), Some("-1024"));
     }
 
     #[test]
