@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: Apache-2.0
+[package]
+name = "ajar-klv"
+description = "Ajar ingress connector for STANAG 4609 / MISB ST 0601 UAS Datalink Local Set (KLV) metadata."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[[bin]]
+name = "ajar-klv"
+path = "src/main.rs"
+
+[dependencies]
+ajar-connector.workspace = true
+ajar-connector-common.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+anyhow.workspace = true
+time = { version = "0.3", features = ["formatting"] }
