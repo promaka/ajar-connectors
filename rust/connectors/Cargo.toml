@@ -18,6 +18,7 @@ members = [
     "asterix",
     "adsb",
     "generic",
+    "klv",
     "tak-egress",
 ]
 

@@ -1,0 +1,33 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Example STANAG 4609 / MISB ST 0601 (KLV) ingress config. Copy, adjust, and run:
+#   ajar-klv ./klv.toml
+#
+# Consumes the UAS Datalink Local Set that full-motion-imagery platforms (UAS,
+# ISR pods, gimbals) emit as KLV metadata. The connector decodes the common
+# platform tags (time, tail number, heading/pitch/roll, sensor lat/lon/alt) and
+# seals the ENTIRE raw KLV set into the signed Event.payload, so the ~100 ST 0601
+# tags it does not yet map are never lost. Each platform is its own track: the
+# tail number (or platform designation) is emitted as the stable source_uid.
+#
+# Framing: one KLV set per frame. Point a datagram transport (each UDP packet is
+# one set) or a length-delimited stream at the metadata source.
+
+source_id = "uas-klv-1"
+nats_url = "nats://127.0.0.1:4222"
+subject_prefix = "ajar.ingest"
+signing_key_path = "/etc/ajar/uas-klv-1.key"
+
+# Motion-imagery metadata carries no affiliation of its own; stamp one for the
+# COP (e.g. "friendly" for own-force UAS).
+default_affiliation = "friendly"
+
+[transport]
+# A metadata extractor commonly forwards each KLV set as one UDP datagram.
+kind = "udp"
+bind = "0.0.0.0:15004"
+
+# ...or read length-delimited sets pushed over TCP:
+#   kind = "tcp-server"
+#   bind = "0.0.0.0:15004"
+#   framing = "length-delimited"
