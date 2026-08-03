@@ -13,6 +13,17 @@ Two version lines are tracked independently (see COMPATIBILITY.md):
 
 ## [Unreleased]
 
+### Added
+- `ajar-klv` connector for STANAG 4609 / MISB ST 0601 (KLV) UAS motion-imagery
+  metadata: decodes the platform tags (time, tail number, heading/pitch/roll,
+  sensor position), validates the ST 0601 checksum fail-closed, and seals the
+  entire raw KLV set into the signed `Event.payload` so unmapped tags are never
+  lost. It also serves as the reference binary-format connector.
+- `AGENTS.md`: a connector-authoring spec (the `FrameParser` contract, the
+  losslessness / canonical-units / `source_uid` rules, which connector to copy,
+  and the verify steps) so a connector for a new format can be added — by a person
+  or a coding agent — by following one document.
+
 ## [0.1.0] - 2026-06-24
 
 ### Added
