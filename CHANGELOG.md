@@ -19,6 +19,12 @@ Two version lines are tracked independently (see COMPATIBILITY.md):
   sensor position), validates the ST 0601 checksum fail-closed, and seals the
   entire raw KLV set into the signed `Event.payload` so unmapped tags are never
   lost. It also serves as the reference binary-format connector.
+- `ajar-gmti` connector for STANAG 4607 (NATO GMTI) ground moving-target radar:
+  decodes the Dwell segment via its existence mask (sensor geometry, dwell area,
+  per-target position and radial velocity) and emits one event per detection,
+  sealing the raw dwell segment into the payload. `source_uid` is unique per
+  detection (GMTI carries no persistent track id). A second reference binary
+  connector, showing the existence-mask / segmented-packet pattern.
 - `AGENTS.md`: a connector-authoring spec (the `FrameParser` contract, the
   losslessness / canonical-units / `source_uid` rules, which connector to copy,
   and the verify steps) so a connector for a new format can be added — by a person

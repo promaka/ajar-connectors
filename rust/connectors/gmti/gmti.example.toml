@@ -1,0 +1,41 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Example STANAG 4607 (NATO GMTI) ingress config. Copy, adjust, and run:
+#   ajar-gmti ./gmti.toml
+#
+# Consumes GMTI packets from a ground moving-target radar. The connector decodes
+# the Dwell segment (sensor geometry, dwell area, and each target report's
+# position + radial velocity) and emits one event per moving-target detection.
+# The entire raw dwell segment is sealed into every target event's Event.payload,
+# so any field it does not map — and any other segment type — is preserved.
+#
+# GMTI target reports are un-associated DETECTIONS (the format carries no
+# persistent track id), so source_uid is unique per detection, not a track:
+#   <platform>:<job_id>:<dwell_index>:<mti_report_index>
+# Downstream fusion/tracking associates detections across dwells.
+#
+# Framing: one GMTI packet per frame. Point a datagram transport (each UDP packet
+# is one GMTI packet) or a length-delimited stream at the radar's output.
+
+source_id = "gmti-radar-1"
+nats_url = "nats://127.0.0.1:4222"
+subject_prefix = "ajar.ingest"
+signing_key_path = "/etc/ajar/gmti-radar-1.key"
+
+# GMTI carries no affiliation of its own; stamp one for the COP (moving-target
+# detections are often "unknown" or "suspect" pending correlation).
+default_affiliation = "unknown"
+
+# NOTE: the emitted entity type is `mim:ground-track`. If your Core ontology names
+# ground moving-target detections differently, change the one `entity_type`
+# constant in src/gmti.rs to match.
+
+[transport]
+# A GMTI feed commonly forwards each packet as one UDP datagram.
+kind = "udp"
+bind = "0.0.0.0:15005"
+
+# ...or read length-delimited packets pushed over TCP:
+#   kind = "tcp-server"
+#   bind = "0.0.0.0:15005"
+#   framing = "length-delimited"
