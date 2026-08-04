@@ -16,7 +16,7 @@ ajar-connector.workspace = true
 # `ring`: selects the rustls crypto provider — REQUIRED for TLS/mTLS to NATS.
 # (default-features=false drops async-nats's heavy jetstream/kv/service defaults,
 # but that also drops the provider, so we re-add just `ring`.)
-async-nats = { version = "0.49", default-features = false, features = ["ring"] }
+async-nats = { version = "0.50", default-features = false, features = ["ring"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "io-util", "io-std"] }
 bytes = "1"
 serde = { version = "1", features = ["derive"] }
