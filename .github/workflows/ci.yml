@@ -39,6 +39,7 @@ jobs:
         with:
           workspaces: |
             rust
+            rust/connectors
             rust/examples
       - name: Format
         run: cargo fmt --all -- --check
@@ -61,6 +62,18 @@ jobs:
       - name: Examples — synthetic-radar dry-run (no infra)
         working-directory: rust/examples
         run: cargo run -p synthetic-radar -- --dry-run --ticks 2
+      # Connectors are a separate workspace (transport-heavy deps) AND the shipped
+      # artifact — build, lint, and test them on every change so a break here can
+      # never reach a release image.
+      - name: Connectors — fmt
+        working-directory: rust/connectors
+        run: cargo fmt --all -- --check
+      - name: Connectors — clippy
+        working-directory: rust/connectors
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Connectors — test
+        working-directory: rust/connectors
+        run: cargo test --workspace
 
   go:
     name: gofmt + vet + test + conformance
