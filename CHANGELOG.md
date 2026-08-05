@@ -13,6 +13,22 @@ Two version lines are tracked independently (see COMPATIBILITY.md):
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-08-05
+
+### Fixed
+- Align `ed25519-dalek` across the SDK and connector workspaces (both 3.x). A
+  dependency bump had moved the SDK to 3.0 while the connectors stayed at 2.x, so a
+  fresh-resolve build (the release image) pulled two incompatible majors and the
+  `SigningKey` types no longer matched.
+
+### Changed
+- CI now builds, lints, and tests the `rust/connectors` workspace on every change
+  (it previously built only the SDK and `examples` workspaces), so a connector
+  break can no longer reach a release image undetected.
+- Dependabot now tracks all three cargo workspaces (`rust`, `rust/connectors`,
+  `rust/examples`) so dependency bumps stay aligned across them.
+
+
 ## [0.2.0] - 2026-08-05
 
 ### Added

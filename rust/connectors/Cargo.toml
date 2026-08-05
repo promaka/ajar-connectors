@@ -24,7 +24,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 rust-version = "1.74"
 license = "Apache-2.0"
@@ -39,7 +39,7 @@ ajar-connector-common = { path = "common" }
 async-nats = { version = "0.49", default-features = false, features = ["ring"] }
 # The seal signs with the connector's own Ed25519 key; the SDK takes the dalek
 # type directly, so we hold the key in the same type it expects.
-ed25519-dalek = "2"
+ed25519-dalek = "3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "time", "signal", "io-util", "io-std", "fs", "process"] }
 bytes = "1"
 # Multicast needs SO_REUSEADDR/REUSEPORT so a connector can share a group with
