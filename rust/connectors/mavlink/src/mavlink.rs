@@ -310,13 +310,16 @@ impl MavParser {
 
     /// Carry one raw frame forward on `sysid`'s buffer, counting any drop.
     fn carry(&self, sysid: u8, raw: &[u8]) {
-        let dropped = self
-            .vehicles
-            .lock()
-            .expect("vehicle mutex")
-            .entry(sysid)
-            .or_default()
-            .push_raw(raw);
+        let mut vehicles = self.vehicles.lock().expect("vehicle mutex");
+        if !vehicles.contains_key(&sysid) {
+            // First frame from this system id. Log it so an operator multiplexing
+            // several vehicles on one stream can check the count against how many
+            // airframes they expect: two vehicles that both kept the autopilot
+            // default SYSID_THISMAV=1 are indistinguishable here and merge into one
+            // track with their raw frames mixed.
+            tracing::info!(sysid, "mavlink: first frame from a new system id");
+        }
+        let dropped = vehicles.entry(sysid).or_default().push_raw(raw);
         if dropped > 0 {
             self.dropped.fetch_add(dropped, Ordering::Relaxed);
             tracing::warn!(dropped, sysid, "mavlink: carry-forward buffer over cap");

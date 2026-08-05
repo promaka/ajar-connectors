@@ -6,6 +6,13 @@
 # A second vehicle feed is a second copy of this file with a different source_id,
 # key, and bind — no rebuild. Multiple vehicles on one stream are kept distinct
 # by their MAVLink system id (carried as `mav_sysid` metadata on every event).
+#
+# IMPORTANT: vehicles sharing one stream must each have a UNIQUE MAVLink system id
+# (SYSID_THISMAV). ArduPilot and PX4 both default it to 1, so two airframes nobody
+# reconfigured will both report sysid 1 — they merge into a single track and their
+# raw frames mix in the payload, and the connector cannot tell them apart. On first
+# sight of each system id the connector logs it; check that count against how many
+# airframes you expect.
 
 source_id = "uav-flight-1"
 nats_url = "nats://127.0.0.1:4222"
