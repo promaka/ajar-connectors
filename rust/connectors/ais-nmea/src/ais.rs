@@ -21,6 +21,7 @@ use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use ajar_connector::{Event, EventBuilder};
 use ajar_connector_common::{Enrichment, FrameParser, ParseError};
@@ -212,7 +213,32 @@ impl CarryCache {
     }
 }
 
-/// One in-progress multi-fragment sentence, keyed by its sequential message id.
+/// Reassembly key for a multi-fragment sentence.
+///
+/// The AIS sequential message id (`seq`) is only 0–9 and is chosen per-transmitter,
+/// so it is **not** unique across vessels. Keying reassembly on `seq` alone lets an
+/// interleaved multipart message from another vessel splice its fragment into this
+/// one's payload — which, once the raw is sealed into a signed event, means another
+/// vessel's bytes in a provenance record. We therefore key on the talker/formatter
+/// (`fields[0]`, distinguishes receivers) and the radio channel (`fields[4]`) as
+/// well. This removes cross-receiver and cross-channel collisions; the residual —
+/// two vessels on the same receiver *and* channel that pick the same `seq` within
+/// the reassembly window — is inherent to AIS (fragments carry no vessel id) and is
+/// bounded by the TTL sweep below.
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct ReasmKey {
+    talker: String,
+    channel: String,
+    seq: u8,
+}
+
+/// How long a partial reassembly may sit before it is discarded. AIS fragments of
+/// one message arrive milliseconds apart, so anything older is an orphan (a lost
+/// fragment); dropping it stops a much-later, unrelated fragment from completing
+/// it. Deterministic decode is unaffected — only orphan eviction is time-based.
+const REASM_TTL: Duration = Duration::from_secs(10);
+
+/// One in-progress multi-fragment sentence.
 struct Pending {
     total: u8,
     next: u8,
@@ -220,6 +246,8 @@ struct Pending {
     /// The raw sentence bytes of each fragment seen so far, so every contributing
     /// fragment reaches the payload once the message is reassembled and routed.
     raws: Vec<Vec<u8>>,
+    /// When the first fragment arrived — drives the TTL sweep.
+    first_seen: Instant,
 }
 
 /// Normalizes AIS for one connector identity. Holds the fragment-reassembly buffer
@@ -228,7 +256,7 @@ struct Pending {
 pub struct AisParser {
     source_id: String,
     enrichment: Enrichment,
-    pending: Mutex<HashMap<u8, Pending>>,
+    pending: Mutex<HashMap<ReasmKey, Pending>>,
     identities: Mutex<IdentityCache>,
     /// Per-MMSI raw sentences awaiting the vessel's next position emit.
     carry: Mutex<CarryCache>,
@@ -285,24 +313,36 @@ impl AisParser {
         }
 
         // Multi-fragment: accumulate in order, decode when the last arrives. The
-        // fill bits belong to the final fragment.
+        // fill bits belong to the final fragment. Keyed on (talker, channel, seq)
+        // so an interleaved multipart message from another vessel cannot splice its
+        // fragment into this one's (and thus into a signed payload).
+        let key = ReasmKey {
+            talker: fields[0].to_string(),
+            channel: fields[4].to_string(),
+            seq,
+        };
+        let now = Instant::now();
         let mut pending = self.pending.lock().expect("reassembly mutex");
+        // Discard orphaned partials so a lost fragment can never be completed later
+        // by an unrelated vessel that reuses the same key. This also bounds memory.
+        pending.retain(|_, p| now.duration_since(p.first_seen) < REASM_TTL);
         if frag_num == 1 {
             pending.insert(
-                seq,
+                key.clone(),
                 Pending {
                     total: frag_count,
                     next: 1,
                     payload: String::new(),
                     raws: Vec::new(),
+                    first_seen: now,
                 },
             );
         }
         let done = {
-            let entry = match pending.get_mut(&seq) {
+            let entry = match pending.get_mut(&key) {
                 Some(e) if e.total == frag_count && e.next == frag_num => e,
                 _ => {
-                    pending.remove(&seq);
+                    pending.remove(&key);
                     return Ok(None);
                 }
             };
@@ -312,7 +352,7 @@ impl AisParser {
             frag_num == frag_count
         };
         if done {
-            let full = pending.remove(&seq).expect("entry present");
+            let full = pending.remove(&key).expect("entry present");
             drop(pending);
             let bits = Bits::from_payload(&full.payload, fill)?;
             return self.decode(&bits, full.raws);
@@ -849,6 +889,34 @@ mod tests {
         assert_eq!(pos.ship_type, Some("passenger"));
         assert_eq!(pos.imo, Some(439303422));
         assert!((pos.sog.unwrap() - 10.0).abs() < 1e-6);
+    }
+
+    /// Append the correct NMEA `*HH` checksum to a sentence body (for crafting
+    /// interleaving fixtures).
+    fn with_checksum(body: &str) -> Vec<u8> {
+        let cs = body[1..].bytes().fold(0u8, |a, b| a ^ b);
+        format!("{body}*{cs:02X}").into_bytes()
+    }
+
+    #[test]
+    fn interleaved_multipart_on_same_seq_do_not_contaminate() {
+        // MMSI 603916439's type-5 static arrives as two fragments on channel A,
+        // seq 0. Between them, an UNRELATED multipart from another transmission
+        // arrives with the SAME seq 0 but on channel B. Keyed on seq alone, the
+        // decoy would overwrite the partial and be completed by T5B, splicing the
+        // wrong bytes into the reassembly (and, post-payload, into a signed event).
+        // Keyed on (talker, channel, seq) the two stay separate.
+        let p = parser();
+        let decoy = with_checksum("!AIVDO,2,1,0,B,1234567890,0");
+        assert_eq!(p.parse_sentence(T5A).unwrap(), None); // A frag 1/2 -> key (AIVDO,A,0)
+        assert_eq!(p.parse_sentence(&decoy).unwrap(), None); // B frag 1/2 -> key (AIVDO,B,0)
+        assert_eq!(p.parse_sentence(T5B).unwrap(), None); // A frag 2/2 -> completes T5A
+                                                          // The static identity for 603916439 was reassembled correctly (not spliced
+                                                          // from the decoy), so a later position for that MMSI is enriched as expected.
+        let pos = p.parse_sentence(POS_ARCO).unwrap().unwrap();
+        assert_eq!(pos.mmsi, 603916439);
+        assert_eq!(pos.name.as_deref(), Some("ARCO AVON"));
+        assert_eq!(pos.callsign.as_deref(), Some("ZA83R"));
     }
 
     #[test]
