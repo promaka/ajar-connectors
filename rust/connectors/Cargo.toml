@@ -19,6 +19,7 @@ members = [
     "adsb",
     "generic",
     "klv",
+    "gmti",
     "tak-egress",
 ]
 
