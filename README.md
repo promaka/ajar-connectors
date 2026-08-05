@@ -1,7 +1,11 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # ajar-connectors
 
-The vendor-facing SDK for building **connectors** to [Ajar](https://github.com/promaka/ajar),
+[![ci](https://github.com/promaka/ajar-connectors/actions/workflows/ci.yml/badge.svg)](https://github.com/promaka/ajar-connectors/actions/workflows/ci.yml)
+[![image](https://github.com/promaka/ajar-connectors/actions/workflows/image.yml/badge.svg)](https://github.com/promaka/ajar-connectors/actions/workflows/image.yml)
+[![deploy](https://github.com/promaka/ajar-connectors/actions/workflows/helm.yml/badge.svg)](https://github.com/promaka/ajar-connectors/actions/workflows/helm.yml)
+
+The vendor-facing SDK for building **connectors** to **Ajar**,
 the sovereign defence integration & governance plane.
 
 A connector turns a vendor or legacy system's native data into Ajar's canonical,
