@@ -14,7 +14,6 @@ signing_key_path = "/etc/ajar/acme-sensor-1.key"
 
 # Feeds mapped generically usually carry no affiliation; stamp one for the COP.
 # default_affiliation = "friendly"
-# governed_attributes = ["affiliation"]
 
 [transport]
 kind = "tcp-client"

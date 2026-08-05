@@ -28,6 +28,13 @@ pub type ParseError = Box<dyn std::error::Error + Send + Sync>;
 /// a drop.
 pub trait FrameParser: Send + Sync + 'static {
     fn parse(&self, frame: &[u8]) -> Result<Vec<Event>, ParseError>;
+
+    /// Extra named counters this parser publishes on `/metrics` — e.g. carry-forward
+    /// frames dropped when a per-entity buffer overflows. Default: none. Names
+    /// follow Prometheus conventions (`*_total` for monotonic counters).
+    fn counters(&self) -> Vec<(&'static str, Arc<AtomicU64>)> {
+        Vec::new()
+    }
 }
 
 /// A source of native frames (a UDP socket, a TCP stream, a serial port). The
@@ -77,7 +84,7 @@ pub async fn run(
     );
 
     let metrics = Arc::new(Metrics::default());
-    health::spawn(metrics.clone());
+    health::spawn(metrics.clone(), parser.counters());
 
     let client = nats::connect(&cfg.nats_url)
         .await

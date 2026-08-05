@@ -41,16 +41,7 @@ fn parser() -> MavParser {
     // Governed mode: a deployment that declared its ontology.
     MavParser::new(
         "uav-flight-1",
-        Enrichment::governing([
-            "affiliation",
-            "speed",
-            "heading",
-            "course",
-            "vehicle_type",
-            "status",
-            "armed",
-        ])
-        .with_affiliation("friendly"),
+        Enrichment::default().with_affiliation("friendly"),
     )
 }
 

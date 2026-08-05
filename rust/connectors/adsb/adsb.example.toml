@@ -19,11 +19,6 @@ signing_key_path = "/etc/ajar/adsb-tower-1.key"
 # Stamp one for the COP (usually "neutral"; "civil" if your ontology declares it).
 default_affiliation = "neutral"
 
-# Attribute keys the deployment's ontology declares -> ride governed; all others
-# ride as metadata (always accepted). Empty/omitted is the safe default.
-# See ../ATTRIBUTES.md for the standard set.
-# governed_attributes = ["affiliation", "callsign", "speed", "course", "vertical_speed", "squawk", "on_ground"]
-
 [transport]
 # Point at the receiver's SBS-1 output (dump1090 / readsb default port 30003).
 kind = "tcp-client"

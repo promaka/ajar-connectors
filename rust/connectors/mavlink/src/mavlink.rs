@@ -31,14 +31,18 @@
 //! MAVLink orders a message's fields on the wire by decreasing type size; the
 //! offsets below follow that layout and are verified against constructed frames.
 
-use std::collections::HashMap;
-use std::sync::Mutex;
+use std::collections::{HashMap, VecDeque};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 use ajar_connector::{Event, EventBuilder};
-use ajar_connector_common::{Enrichment, FrameParser, ParseError, Tactical};
+use ajar_connector_common::{Enrichment, FrameParser, ParseError};
 
-/// 1 metre/second in knots.
-const MPS_TO_KNOTS: f64 = 1.943_844;
+/// Per-vehicle cap on raw frames carried forward before the next emit, and their
+/// total bytes. A vehicle streaming telemetry but never a position must cost
+/// bounded memory: past the cap the oldest pending frame is dropped, never the event.
+const MAX_PENDING_FRAMES: usize = 128;
+const MAX_PENDING_BYTES: usize = 32 * 1024;
 
 /// Why a MAVLink frame could not be turned into a position.
 #[derive(Debug, PartialEq, Eq)]
@@ -86,7 +90,7 @@ pub struct VehicleState {
     pub pitch: Option<f64>,
     pub yaw: Option<f64>,
     // VFR_HUD (74)
-    /// Airspeed, knots (distinct from GPS ground speed).
+    /// Airspeed, m/s (distinct from GPS ground speed).
     pub airspeed: Option<f64>,
     /// Throttle, percent.
     pub throttle: Option<u16>,
@@ -120,20 +124,69 @@ pub struct MavPosition {
     pub heading: Option<f64>,
     /// Course over ground, degrees (GPS_RAW_INT).
     pub course: Option<f64>,
-    /// Ground speed, knots.
+    /// Ground speed, m/s.
     pub sog: Option<f64>,
     /// Vertical speed, m/s positive up (GLOBAL_POSITION_INT).
     pub vertical_speed: Option<f64>,
     /// Latest known non-positional telemetry for this system id.
     pub state: VehicleState,
+    /// Every raw MAVLink frame that contributed to this event since the last
+    /// emit — the position frame plus cached telemetry frames (heartbeat,
+    /// attitude, battery, …) — concatenated verbatim into the signed `payload`.
+    pub raw: Vec<u8>,
+    /// True if the per-vehicle buffer dropped frames over the cap before this emit.
+    pub truncated: bool,
 }
 
 /// Normalizes MAVLink for one connector identity, caching per–system-id
 /// telemetry across messages.
+/// One vehicle: its latest parsed telemetry, plus the raw frames received since
+/// its last emitted event (carried forward so non-position frames are not lost).
+#[derive(Default)]
+struct Vehicle {
+    state: VehicleState,
+    pending: VecDeque<Vec<u8>>,
+    pending_bytes: usize,
+    dropped_since_emit: bool,
+}
+
+impl Vehicle {
+    /// Remember one raw frame, dropping the oldest past the cap; returns # dropped.
+    fn push_raw(&mut self, raw: &[u8]) -> u64 {
+        self.pending.push_back(raw.to_vec());
+        self.pending_bytes += raw.len();
+        let mut dropped = 0;
+        while self.pending.len() > MAX_PENDING_FRAMES || self.pending_bytes > MAX_PENDING_BYTES {
+            match self.pending.pop_front() {
+                Some(old) => {
+                    self.pending_bytes -= old.len();
+                    self.dropped_since_emit = true;
+                    dropped += 1;
+                }
+                None => break,
+            }
+        }
+        dropped
+    }
+
+    /// Concatenate all pending frames (MAVLink frames self-delimit — a re-parser
+    /// walks them by their length field), reporting whether any were dropped.
+    fn drain_payload(&mut self) -> (Vec<u8>, bool) {
+        let mut out = Vec::with_capacity(self.pending_bytes);
+        for f in self.pending.drain(..) {
+            out.extend_from_slice(&f);
+        }
+        self.pending_bytes = 0;
+        (out, std::mem::take(&mut self.dropped_since_emit))
+    }
+}
+
 pub struct MavParser {
     source_id: String,
     enrichment: Enrichment,
-    vehicles: Mutex<HashMap<u8, VehicleState>>,
+    vehicles: Mutex<HashMap<u8, Vehicle>>,
+    /// Carry-forward frames dropped over the per-vehicle cap, since start.
+    dropped: Arc<AtomicU64>,
 }
 
 /// CRC_EXTRA and full (untruncated) payload length for the messages we decode.
@@ -156,6 +209,7 @@ impl MavParser {
             source_id: source_id.into(),
             enrichment,
             vehicles: Mutex::new(HashMap::new()),
+            dropped: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -188,8 +242,12 @@ impl MavParser {
             return Err(MavError::Truncated);
         }
 
+        let msg_end = crc_start + 2;
         let Some((crc_extra, full_len)) = spec(msg_id) else {
-            return Ok(None); // valid framing, message we do not map
+            // Valid framing, a message we do not map: carry the raw frame forward
+            // (a future parser may understand it), emit nothing.
+            self.carry(sysid, &frame[..msg_end]);
+            return Ok(None);
         };
 
         // CRC covers everything from just after the magic through the payload,
@@ -198,6 +256,9 @@ impl MavParser {
         if crc(&frame[1..crc_start], crc_extra) != given {
             return Err(MavError::BadCrc);
         }
+
+        // CRC-valid: carry this raw frame forward for the vehicle.
+        self.carry(sysid, &frame[..msg_end]);
 
         // v2 truncates trailing zero bytes; zero-extend to the full payload.
         let mut payload = vec![0u8; full_len];
@@ -235,7 +296,7 @@ impl MavParser {
     /// Apply `f` to this system id's cached state (creating it on first sight).
     fn mutate(&self, sysid: u8, f: impl FnOnce(&mut VehicleState)) {
         let mut vehicles = self.vehicles.lock().expect("vehicle mutex");
-        f(vehicles.entry(sysid).or_default());
+        f(&mut vehicles.entry(sysid).or_default().state);
     }
 
     fn snapshot(&self, sysid: u8) -> VehicleState {
@@ -243,8 +304,36 @@ impl MavParser {
             .lock()
             .expect("vehicle mutex")
             .get(&sysid)
-            .cloned()
+            .map(|v| v.state.clone())
             .unwrap_or_default()
+    }
+
+    /// Carry one raw frame forward on `sysid`'s buffer, counting any drop.
+    fn carry(&self, sysid: u8, raw: &[u8]) {
+        let mut vehicles = self.vehicles.lock().expect("vehicle mutex");
+        if !vehicles.contains_key(&sysid) {
+            // First frame from this system id. Log it so an operator multiplexing
+            // several vehicles on one stream can check the count against how many
+            // airframes they expect: two vehicles that both kept the autopilot
+            // default SYSID_THISMAV=1 are indistinguishable here and merge into one
+            // track with their raw frames mixed.
+            tracing::info!(sysid, "mavlink: first frame from a new system id");
+        }
+        let dropped = vehicles.entry(sysid).or_default().push_raw(raw);
+        if dropped > 0 {
+            self.dropped.fetch_add(dropped, Ordering::Relaxed);
+            tracing::warn!(dropped, sysid, "mavlink: carry-forward buffer over cap");
+        }
+    }
+
+    /// Drain `sysid`'s carried frames into one payload, with the truncated flag.
+    fn drain(&self, sysid: u8) -> (Vec<u8>, bool) {
+        self.vehicles
+            .lock()
+            .expect("vehicle mutex")
+            .entry(sysid)
+            .or_default()
+            .drain_payload()
     }
 
     /// GLOBAL_POSITION_INT (msg 33): position, altitudes, ground/vertical speed
@@ -253,9 +342,10 @@ impl MavParser {
         let vx = i16le(p, 20) as f64;
         let vy = i16le(p, 22) as f64;
         let vz = i16le(p, 24) as f64; // positive down, cm/s
-        let sog = Some((vx * vx + vy * vy).sqrt() / 100.0 * MPS_TO_KNOTS);
+        let sog = Some((vx * vx + vy * vy).sqrt() / 100.0);
         let climb = -vz / 100.0;
         let hdg = u16le(p, 26);
+        let (raw, truncated) = self.drain(sysid);
         MavPosition {
             sysid,
             msg_id: 33,
@@ -269,6 +359,8 @@ impl MavParser {
             // Normalize IEEE negative zero so a level aircraft reads "0.0".
             vertical_speed: Some(if climb == 0.0 { 0.0 } else { climb }),
             state: self.snapshot(sysid),
+            raw,
+            truncated,
         }
     }
 
@@ -285,6 +377,7 @@ impl MavParser {
             s.gps_sats = (sats != u8::MAX).then_some(sats);
             s.gps_hdop = (eph != u16::MAX).then_some(eph as f64 / 100.0);
         });
+        let (raw, truncated) = self.drain(sysid);
         MavPosition {
             sysid,
             msg_id: 24,
@@ -294,38 +387,46 @@ impl MavParser {
             relative_alt_m: None,
             heading: None,
             course: (cog != u16::MAX).then_some(cog as f64 / 100.0),
-            sog: (vel != u16::MAX).then_some(vel as f64 / 100.0 * MPS_TO_KNOTS),
+            sog: (vel != u16::MAX).then_some(vel as f64 / 100.0),
             vertical_speed: None,
             state: self.snapshot(sysid),
+            raw,
+            truncated,
         }
     }
 
     fn base_builder(&self, p: &MavPosition) -> EventBuilder {
-        let affiliation = self.enrichment.affiliation.as_deref().unwrap_or("unknown");
         let s = &p.state;
 
-        // System id is the stable per-airframe identity: emit it as source_uid
-        // (Core's track key) and as mav_sysid. Identifiers ride metadata.
+        // The raw MAVLink frames are preserved verbatim in the signed payload;
+        // system id is the stable identity (source_uid = track key; mav_sysid).
         let mut b = EventBuilder::new(self.source_id.clone(), "mim:aircraft")
             .new_id()
             .location(p.lat, p.lon, p.alt_m)
+            .payload(p.raw.clone())
             .metadata("source_uid", p.sysid.to_string())
-            .metadata("mav_sysid", p.sysid.to_string())
-            .tactical(&self.enrichment, "affiliation", affiliation);
+            .metadata("mav_sysid", p.sysid.to_string());
+        if p.truncated {
+            b = b.metadata("payload_truncated", "true");
+        }
+        // Operator-asserted affiliation only — never a connector-invented default.
+        if let Some(aff) = self.enrichment.affiliation.as_deref() {
+            b = b.attribute("affiliation", aff);
+        }
 
-        // Governance-routed tactical attributes: emit only what is present.
+        // Parse every field into attributes; Core demotes undeclared keys.
         macro_rules! attr {
             ($key:expr, $val:expr) => {
                 if let Some(v) = $val {
-                    b = b.tactical(&self.enrichment, $key, v);
+                    b = b.attribute($key, v);
                 }
             };
         }
-        attr!("speed", p.sog.map(|v| format!("{v:.1}"))); // knots
+        attr!("speed", p.sog.map(|v| format!("{v:.1}"))); // m/s
         attr!("heading", p.heading.map(|v| format!("{v:.1}"))); // deg true
         attr!("course", p.course.map(|v| format!("{v:.1}"))); // deg
         attr!(
-            "vertical_speed",
+            "vertical_rate",
             p.vertical_speed.or(s.climb).map(|v| format!("{v:.1}"))
         ); // m/s
         attr!(
@@ -339,7 +440,7 @@ impl MavParser {
         attr!("roll", s.roll.map(|v| format!("{v:.1}"))); // deg
         attr!("pitch", s.pitch.map(|v| format!("{v:.1}"))); // deg
         attr!("yaw", s.yaw.map(|v| format!("{v:.1}"))); // deg
-        attr!("airspeed", s.airspeed.map(|v| format!("{v:.1}"))); // knots
+        attr!("airspeed", s.airspeed.map(|v| format!("{v:.1}"))); // m/s (ungoverned)
         attr!("throttle", s.throttle.map(|v| v.to_string())); // %
         attr!(
             "battery_voltage",
@@ -349,10 +450,7 @@ impl MavParser {
             "battery_current",
             s.battery_current.map(|v| format!("{v:.2}"))
         ); // A
-        attr!(
-            "battery_remaining",
-            s.battery_remaining.map(|v| v.to_string())
-        ); // %
+        attr!("battery", s.battery_remaining.map(|v| v.to_string())); // %
         attr!(
             "battery_consumed",
             s.battery_consumed_mah.map(|v| v.to_string())
@@ -394,6 +492,10 @@ impl FrameParser for MavParser {
             Some(pos) => Ok(vec![self.to_event_now(&pos).map_err(box_err)?]),
             None => Ok(Vec::new()),
         }
+    }
+
+    fn counters(&self) -> Vec<(&'static str, Arc<AtomicU64>)> {
+        vec![("connector_dropped_carryforward_total", self.dropped.clone())]
     }
 }
 
@@ -444,7 +546,7 @@ fn attitude(s: &mut VehicleState, p: &[u8]) {
 
 /// VFR_HUD (msg 74): airspeed, throttle, climb rate.
 fn vfr_hud(s: &mut VehicleState, p: &[u8]) {
-    s.airspeed = Some(f32le(p, 0) as f64 * MPS_TO_KNOTS);
+    s.airspeed = Some(f32le(p, 0) as f64);
     s.climb = Some(f32le(p, 12) as f64);
     s.throttle = Some(u16le(p, 18));
 }
@@ -591,37 +693,10 @@ mod tests {
         MavParser::new("uav-flight-1", Enrichment::default())
     }
 
-    const GOVERNED: [&str; 24] = [
-        "affiliation",
-        "speed",
-        "heading",
-        "course",
-        "vertical_speed",
-        "relative_altitude",
-        "vehicle_type",
-        "status",
-        "armed",
-        "mode",
-        "roll",
-        "pitch",
-        "yaw",
-        "airspeed",
-        "throttle",
-        "battery_voltage",
-        "battery_current",
-        "battery_remaining",
-        "battery_consumed",
-        "battery_temp",
-        "cpu_load",
-        "gps_fix",
-        "gps_satellites",
-        "gps_hdop",
-    ];
-
     fn governed() -> MavParser {
         MavParser::new(
             "uav-flight-1",
-            Enrichment::governing(GOVERNED).with_affiliation("friendly"),
+            Enrichment::default().with_affiliation("friendly"),
         )
     }
 
@@ -677,7 +752,7 @@ mod tests {
         assert!((p.lat - 47.397742).abs() < 1e-6);
         assert!((p.alt_m - 500.0).abs() < 1e-6);
         assert!((p.heading.unwrap() - 90.0).abs() < 1e-6);
-        assert!((p.sog.unwrap() - 19.44).abs() < 0.01); // 10 m/s in knots
+        assert!((p.sog.unwrap() - 10.0).abs() < 0.01); // 10 m/s
     }
 
     #[test]
@@ -773,16 +848,16 @@ mod tests {
         put_i32(&mut gps, 16, 500_000);
         gps[28] = 3;
         let pos = p.parse_frame(&frame(24, &gps)).unwrap().unwrap();
-        assert!((pos.state.airspeed.unwrap() - 20.0 * MPS_TO_KNOTS).abs() < 0.1);
+        assert!((pos.state.airspeed.unwrap() - 20.0).abs() < 0.1);
         let ev = p.to_event_at(&pos, "2026-06-10T08:00:00Z").unwrap();
         assert_eq!(attr_of(&ev, "throttle"), Some("55"));
-        assert_eq!(attr_of(&ev, "vertical_speed"), Some("2.5")); // VFR climb fallback
+        assert_eq!(attr_of(&ev, "vertical_rate"), Some("2.5")); // VFR climb fallback
 
         // A GLOBAL_POSITION_INT carries its own (level) vertical speed, clean of
         // negative zero, and it wins over the cached VFR value.
         let gpi = p.parse_frame(&bytes(GPI)).unwrap().unwrap();
         let ev2 = p.to_event_at(&gpi, "2026-06-10T08:00:00Z").unwrap();
-        assert_eq!(attr_of(&ev2, "vertical_speed"), Some("0.0"));
+        assert_eq!(attr_of(&ev2, "vertical_rate"), Some("0.0"));
     }
 
     #[test]
@@ -873,11 +948,30 @@ mod tests {
     }
 
     #[test]
-    fn default_mode_routes_tactical_to_metadata() {
-        let pos = parser().parse_frame(&bytes(GPI)).unwrap().unwrap();
-        let ev = parser().to_event_at(&pos, "2026-06-10T08:00:00Z").unwrap();
-        assert!(ev.metadata.iter().any(|m| m.key == "affiliation"));
+    fn absent_affiliation_not_invented_and_raw_carried() {
+        // Default mode: no operator affiliation -> none invented; and the raw
+        // frame is preserved verbatim in the signed payload.
+        let p = parser();
+        let pos = p.parse_frame(&bytes(GPI)).unwrap().unwrap();
+        let ev = p.to_event_at(&pos, "2026-06-10T08:00:00Z").unwrap();
         assert!(!ev.attributes.iter().any(|a| a.key == "affiliation"));
+        assert!(!ev.metadata.iter().any(|m| m.key == "affiliation"));
+        assert_eq!(ev.payload, bytes(GPI));
+    }
+
+    #[test]
+    fn carries_cache_only_frames_forward_into_payload() {
+        // A HEARTBEAT emits nothing; its raw must ride into the next position
+        // event's payload, concatenated with the position frame (self-delimiting).
+        let p = governed();
+        assert_eq!(p.parse_frame(&bytes(HEARTBEAT)).unwrap(), None);
+        let pos = p.parse_frame(&bytes(GPI)).unwrap().unwrap();
+        let ev = p.to_event_at(&pos, "2026-06-10T08:00:00Z").unwrap();
+        let mut want = bytes(HEARTBEAT);
+        want.extend_from_slice(&bytes(GPI));
+        assert_eq!(ev.payload, want);
+        // The correlated heartbeat state still surfaces as an attribute.
+        assert_eq!(attr_of(&ev, "vehicle_type"), Some("multirotor"));
     }
 
     #[test]

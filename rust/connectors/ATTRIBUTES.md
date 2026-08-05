@@ -1,73 +1,64 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
-# Tactical attribute reference
+# Attributes: what connectors emit, and where the schema lives
 
-Every connector extracts the tactical attributes an operating picture needs and
-routes each one **per key**: a key listed in the connector config's
-`governed_attributes` rides as a **governed attribute** (type-validated and
-correlated by Core); every other key rides as **metadata** (always accepted,
-surfaced to the C2, not validated). One undeclared key can therefore never cost a
-whole track — the safe default (`governed_attributes = []`) routes everything to
-metadata and works against any deployment.
+## The ontology is authoritative — this file is not
 
-Native identifiers (CoT uid, MMSI, IMO, MAVLink system id, ASTERIX track/ICAO)
-are **always metadata**, never governed and never the event id (the id is a fresh
-UUIDv7). Confidence is the event's first-class `confidence` field and needs no
-declaration.
+The governed attribute set — canonical **names, units, and bounds** — is defined by
+**Core's signed ontology manifest**, not by this document. A hand-maintained copy
+here would drift the moment Core bumps the ontology, and the people most likely to
+act on a stale copy (operators writing `generic` mappings) are exactly the ones we
+must not mislead.
 
-## The standard set, per connector
+Dump the current, authoritative set from Core:
 
-This is the exact list to declare in the deployment's ontology (Core ships the
-same set pre-declared in its ontology seed). Once declared, put the keys in
-`governed_attributes` in the connector's config:
-
-| Connector | Entity type(s) | Governed-attribute keys |
-|-----------|----------------|-------------------------|
-| tak-cot | `mim:aircraft`, `mim:vessel`, `x:cot:*` | `affiliation`, `callsign` |
-| ais-nmea | `mim:vessel` | `affiliation`, `speed`, `course`, `heading`, `rate_of_turn`, `nav_status`, `vessel_type`, `vessel_name`, `callsign` |
-| mavlink | `mim:aircraft` | `affiliation`, `speed`, `heading`, `course`, `vertical_speed`, `relative_altitude`, `vehicle_type`, `status`, `armed`, `mode`, `roll`, `pitch`, `yaw`, `airspeed`, `throttle`, `battery_voltage`, `battery_current`, `battery_remaining`, `battery_consumed`, `battery_temp`, `cpu_load`, `gps_fix`, `gps_satellites`, `gps_hdop` |
-| asterix | `mim:aircraft` | `affiliation`, `speed`, `course`, `squawk`, `callsign`, `aircraft_type` |
-| adsb | `mim:aircraft` | `affiliation`, `callsign`, `speed`, `course`, `vertical_speed`, `squawk`, `on_ground` |
-| generic | per mapping | `affiliation`, plus whatever the operator maps in `[mapping.attributes]` |
-
-## Key semantics and units
-
-| Key | Meaning | Values / unit |
-|-----|---------|---------------|
-| `affiliation` | force identity | `friendly` \| `hostile` \| `neutral` \| `unknown` (CoT derives it from the type; the other feeds carry none, so set `default_affiliation` in config) |
-| `callsign` | callsign / flight identity | free text as broadcast |
-| `speed` | speed over ground | knots, 1 decimal |
-| `course` | course over ground / track angle | degrees, 1 decimal |
-| `heading` | true heading | degrees |
-| `rate_of_turn` | rate of turn (AIS class A) | degrees/minute |
-| `nav_status` | AIS navigation status | `under-way-using-engine`, `at-anchor`, `engaged-in-fishing`, … |
-| `vessel_type` | AIS ship-type category | `cargo`, `tanker`, `fishing`, `military-ops`, … |
-| `vessel_name` | vessel name from AIS static data | free text |
-| `vehicle_type` | MAVLink vehicle category | `fixed-wing`, `multirotor`, `helicopter`, `vtol`, … |
-| `status` | MAVLink system status | `active`, `standby`, `critical`, `emergency`, … |
-| `armed` | MAVLink armed state | `true` \| `false` |
-| `mode` | MAVLink coarse flight mode | `auto`, `guided`, `stabilize`, `manual` (autopilot-specific detail rides `custom_mode` metadata) |
-| `vertical_speed` | climb rate, positive up | m/s, 1 decimal |
-| `relative_altitude` | altitude above home | metres, 1 decimal |
-| `roll` / `pitch` / `yaw` | attitude (ATTITUDE msg) | degrees, 1 decimal (`yaw` normalised 0–360) |
-| `airspeed` | indicated airspeed (VFR_HUD) | knots, 1 decimal |
-| `throttle` | throttle setting (VFR_HUD) | percent |
-| `battery_voltage` / `battery_current` | pack voltage / current | volts (2 dp) / amps (2 dp) |
-| `battery_remaining` | charge remaining | percent |
-| `battery_consumed` | charge consumed | mAh |
-| `battery_temp` | battery temperature | degrees C, 1 decimal |
-| `cpu_load` | autopilot CPU load | percent |
-| `gps_fix` | GPS fix quality | `no-fix`, `2d`, `3d`, `dgps`, `rtk-float`, `rtk-fixed`, … |
-| `gps_satellites` | satellites visible | count |
-| `gps_hdop` | horizontal dilution of precision | unitless, 2 decimals |
-| `squawk` | Mode 3/A code | four octal digits (e.g. `7700`) |
-| `aircraft_type` | ADS-B emitter category | `light`, `heavy`, `rotorcraft`, `uav`, … |
-| `on_ground` | ADS-B on-ground flag | `true` \| `false` |
-
-## Config example
-
-```toml
-# Declared in this deployment's ontology -> ride governed; the rest -> metadata.
-governed_attributes = ["affiliation", "callsign", "speed", "course"]
-# Feeds that carry no affiliation get this one (e.g. own-force UAS).
-default_affiliation = "friendly"
+```sh
+ajar export-ontology ontology.json
 ```
+
+That manifest is the single source of truth for which keys are governed and in
+what unit and bounds. Everything below is *connector behaviour*, which is stable
+and independent of any particular ontology version.
+
+## How a connector emits
+
+A connector does not decide what is valuable:
+
+1. **Raw frame → `Event.payload`, verbatim.** Nothing the parser does not yet map
+   is lost; a future ontology can re-extract from the stored raw. (For connectors
+   that correlate across frames, the payload carries every contributing frame; if a
+   bounded buffer overflowed, the event is marked `payload_truncated`.)
+2. **Every decoded field → an attribute.** The connector does not gate on the
+   ontology. Core's ingest **demotes any undeclared key to quarantine metadata**
+   (`demote_to_quarantine`) — so a field the ontology has not declared is never
+   rejected and never lost, just ungoverned. A later ontology change promotes it
+   with no connector change.
+3. **Native identifiers** (CoT uid, MMSI, ICAO, MAVLink sysid, ASTERIX track) ride
+   as metadata / `source_uid`, never the event id (always a fresh UUIDv7).
+   Confidence is the event's first-class `confidence` field.
+
+## Units are the connector's job — and the trap to avoid
+
+Governed attributes are declared in **specific units**. A value in the wrong unit
+usually still passes bounds validation and is then **silently wrong**: knots into an
+m/s `speed` is off by ~1.94×; feet/minute into an m/s `vertical_rate` by ~197×; and
+feet into the metres `GeoPoint` altitude is unvalidated entirely. So each connector:
+
+- **normalises to the declared unit** (speeds → m/s, vertical rate → m/s, altitude →
+  metres, …), and
+- **keeps the native value in metadata** — `speed_kn`, `vertical_rate_ftmin`,
+  `altitude_ft` — per ADR-0019, so nothing is lost and the conversion is auditable.
+
+`heading` and `course` are **distinct**: `heading` is where the platform points,
+`course` is its track over the ground. CoT `<track course>` and a GPS course map to
+`course`; a MAVLink `hdg` maps to `heading`. Do not cross them — it misdraws the
+direction tick.
+
+## Per-connector notes
+
+The specific keys a connector currently emits live in that connector's `src` and
+README; whether a given key is *governed* is answered by the manifest above, not
+restated here. In brief: `tak-cot`, `ais-nmea`, `mavlink`, `asterix`, and `adsb`
+decode a standard's position and tactical fields; `generic` emits exactly what its
+`[mapping]` block names — so a `generic` operator must use the manifest's canonical
+names and units (e.g. `speed` in m/s, `frequency_hz` in Hz), or the value simply
+rides as ungoverned metadata.

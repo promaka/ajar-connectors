@@ -9,7 +9,7 @@
 use std::collections::BTreeMap;
 
 use ajar_connector::{Event, EventBuilder};
-use ajar_connector_common::{Enrichment, FrameParser, ParseError, Tactical};
+use ajar_connector_common::{Enrichment, FrameParser, ParseError};
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
@@ -93,7 +93,11 @@ impl GenericParser {
         let rec = self.record(frame)?;
         let m = &self.mapping;
 
-        let mut b = EventBuilder::new(self.source_id.clone(), m.entity_type.clone()).new_id();
+        // The raw record is preserved verbatim in the signed payload, so a field
+        // the mapping does not cover is never lost.
+        let mut b = EventBuilder::new(self.source_id.clone(), m.entity_type.clone())
+            .new_id()
+            .payload(frame.to_vec());
 
         // Observation time: mapped field (converted to RFC 3339) or receipt time.
         b = match &m.timestamp_field {
@@ -141,7 +145,7 @@ impl GenericParser {
         // A configured default affiliation, so a generic feed reads consistently
         // on the COP alongside the format-specific connectors.
         if let Some(aff) = &self.enrichment.affiliation {
-            b = b.tactical(&self.enrichment, "affiliation", aff.clone());
+            b = b.attribute("affiliation", aff.clone());
         }
 
         // Explicitly-mapped governed attributes and ungoverned metadata.
@@ -242,7 +246,7 @@ mod tests {
             confidence_field = "quality"
             "#,
         );
-        let enrichment = Enrichment::governing(["affiliation"]).with_affiliation("friendly");
+        let enrichment = Enrichment::default().with_affiliation("friendly");
         let ev = GenericParser::new("gen-1", m, enrichment)
             .to_event(br#"{"ts":"2026-06-10T08:00:00Z","quality":87}"#)
             .unwrap();

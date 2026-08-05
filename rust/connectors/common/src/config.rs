@@ -32,16 +32,6 @@ pub struct Config {
     /// connector's default, so nothing is silently dropped.
     #[serde(default)]
     pub entity_map: std::collections::HashMap<String, String>,
-    /// Tactical attribute keys the deployment's ontology declares for this
-    /// connector's entity types. A key listed here rides as a **governed**
-    /// attribute (type-validated, correlated); every other tactical key rides as
-    /// **metadata** (always accepted, surfaced to the C2). Per-attribute, so one
-    /// undeclared key can never reject a whole track. Empty (the default) routes
-    /// everything to metadata — the safe plug-and-play posture. Each connector's
-    /// README lists its standard keys; Core ships the same set pre-declared in
-    /// its ontology seed.
-    #[serde(default)]
-    pub governed_attributes: Vec<String>,
     /// Force-identity affiliation for feeds that carry none (AIS, MAVLink, civil
     /// ADS-B). E.g. `"friendly"` for own-force UAS, `"neutral"` for civil traffic.
     /// Connectors whose wire format encodes affiliation (CoT) derive it and ignore
@@ -50,30 +40,18 @@ pub struct Config {
     pub default_affiliation: Option<String>,
 }
 
-/// The enrichment settings a connector needs, distilled from [`Config`].
+/// The enrichment a connector applies, distilled from [`Config`]. Connectors emit
+/// every decoded field as an attribute and Core's signed ontology governs which
+/// are kept, so the only enrichment left is the operator-asserted affiliation for
+/// feeds (AIS, MAVLink, civil ADS-B) that carry none of their own.
 #[derive(Debug, Clone, Default)]
 pub struct Enrichment {
-    /// Attribute keys declared in the deployment's ontology: these ride governed,
-    /// all others ride as metadata.
-    pub governed: std::collections::HashSet<String>,
-    /// Affiliation to stamp on feeds that carry none (`None` → `unknown`).
+    /// Affiliation to stamp on feeds that carry none (`None` → not asserted, so
+    /// the connector emits no affiliation rather than inventing one).
     pub affiliation: Option<String>,
 }
 
 impl Enrichment {
-    /// An enrichment that governs the given attribute keys (test/deployment
-    /// convenience).
-    pub fn governing<I, S>(keys: I) -> Self
-    where
-        I: IntoIterator<Item = S>,
-        S: Into<String>,
-    {
-        Enrichment {
-            governed: keys.into_iter().map(Into::into).collect(),
-            affiliation: None,
-        }
-    }
-
     /// Sets the default affiliation (builder-style convenience).
     pub fn with_affiliation(mut self, affiliation: impl Into<String>) -> Self {
         self.affiliation = Some(affiliation.into());
@@ -85,29 +63,7 @@ impl Config {
     /// The enrichment settings for a connector built from this config.
     pub fn enrichment(&self) -> Enrichment {
         Enrichment {
-            governed: self.governed_attributes.iter().cloned().collect(),
             affiliation: self.default_affiliation.clone(),
-        }
-    }
-}
-
-/// Routes one tactical attribute **per key**: declared in the deployment's
-/// ontology → governed attribute; undeclared → metadata. Every connector treats
-/// the choice identically, and one undeclared key can never cost the whole event.
-/// Native identifiers (MMSI, ICAO, system id, …) are NOT tactical — they always
-/// go to metadata directly.
-pub trait Tactical {
-    /// Add `key`/`value` as a governed attribute if `enrichment` declares it,
-    /// else as metadata.
-    fn tactical(self, enrichment: &Enrichment, key: &str, value: impl Into<String>) -> Self;
-}
-
-impl Tactical for ajar_connector::EventBuilder {
-    fn tactical(self, enrichment: &Enrichment, key: &str, value: impl Into<String>) -> Self {
-        if enrichment.governed.contains(key) {
-            self.attribute(key, value)
-        } else {
-            self.metadata(key, value)
         }
     }
 }

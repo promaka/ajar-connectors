@@ -18,10 +18,17 @@
 //! All field offsets below are verified against the `pyais` reference decoder.
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::collections::VecDeque;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use ajar_connector::{Event, EventBuilder};
-use ajar_connector_common::{Enrichment, FrameParser, ParseError, Tactical};
+use ajar_connector_common::{Enrichment, FrameParser, ParseError};
+
+/// 1 knot in metres/second. The governed `speed` attribute is m/s; AIS speed over
+/// ground is knots, so normalise (ADR-0019) and keep the native knots in metadata.
+const KNOTS_TO_MPS: f64 = 0.514_444;
 
 /// Why an AIS sentence could not be turned into a position. Counted and logged
 /// with the reason; never silently swallowed.
@@ -86,6 +93,14 @@ pub struct AisPosition {
     pub callsign: Option<String>,
     /// IMO number, from static data.
     pub imo: Option<u32>,
+    /// Every raw NMEA sentence that contributed to this event — the position
+    /// sentence(s) plus any static/unmapped sentences for this MMSI that arrived
+    /// since the last emit — newline-delimited, carried verbatim into the signed
+    /// `payload` so nothing (including fields we do not yet decode) is lost.
+    pub raw: Vec<u8>,
+    /// True if the per-MMSI carry-forward buffer dropped one or more sentences
+    /// before this emit (over the cap); the event marks itself `payload_truncated`.
+    pub truncated: bool,
 }
 
 /// The identity a vessel advertises in its static messages, cached by MMSI.
@@ -134,11 +149,105 @@ impl IdentityCache {
     }
 }
 
-/// One in-progress multi-fragment sentence, keyed by its sequential message id.
+/// Per-MMSI cap on raw NMEA sentences carried forward before the next emit, and
+/// on their total bytes. A feed streaming static/unmapped sentences for a vessel
+/// that never reports a position must cost bounded memory: past the cap the oldest
+/// pending sentence is dropped (with a warning), never the whole event.
+const MAX_PENDING_FRAMES: usize = 64;
+const MAX_PENDING_BYTES: usize = 16 * 1024;
+
+/// One vessel's raw sentences received since its last emitted event — static
+/// (types 5/24) and unmapped messages carried forward so their bytes reach the
+/// signed payload of the next position for that MMSI.
+#[derive(Default)]
+struct Carry {
+    pending: VecDeque<Vec<u8>>,
+    pending_bytes: usize,
+    /// Set when a pending sentence was dropped over the cap since the last emit;
+    /// cleared on drain. Drives the event's `payload_truncated` marker.
+    dropped_since_emit: bool,
+}
+
+impl Carry {
+    /// Remember one raw sentence, dropping the oldest pending sentence(s) past the
+    /// cap. Returns how many were dropped (for the metric).
+    fn push_raw(&mut self, raw: &[u8]) -> u64 {
+        self.pending.push_back(raw.to_vec());
+        self.pending_bytes += raw.len();
+        let mut dropped = 0;
+        while self.pending.len() > MAX_PENDING_FRAMES || self.pending_bytes > MAX_PENDING_BYTES {
+            match self.pending.pop_front() {
+                Some(old) => {
+                    self.pending_bytes -= old.len();
+                    self.dropped_since_emit = true;
+                    dropped += 1;
+                }
+                None => break,
+            }
+        }
+        dropped
+    }
+}
+
+/// A bounded MMSI → [`Carry`] cache with FIFO eviction of whole vessels. Bounded
+/// for the same reason as the identity cache: MMSI is attacker-controllable.
+#[derive(Default)]
+struct CarryCache {
+    map: HashMap<u32, Carry>,
+    order: VecDeque<u32>,
+}
+
+impl CarryCache {
+    /// The carry buffer for `mmsi`, creating it (and evicting the oldest vessel if
+    /// at capacity) on first sight.
+    fn entry(&mut self, mmsi: u32) -> &mut Carry {
+        if !self.map.contains_key(&mmsi) {
+            if self.order.len() >= MAX_IDENTITIES {
+                if let Some(old) = self.order.pop_front() {
+                    self.map.remove(&old);
+                }
+            }
+            self.order.push_back(mmsi);
+        }
+        self.map.entry(mmsi).or_default()
+    }
+}
+
+/// Reassembly key for a multi-fragment sentence.
+///
+/// The AIS sequential message id (`seq`) is only 0–9 and is chosen per-transmitter,
+/// so it is **not** unique across vessels. Keying reassembly on `seq` alone lets an
+/// interleaved multipart message from another vessel splice its fragment into this
+/// one's payload — which, once the raw is sealed into a signed event, means another
+/// vessel's bytes in a provenance record. We therefore key on the talker/formatter
+/// (`fields[0]`, distinguishes receivers) and the radio channel (`fields[4]`) as
+/// well. This removes cross-receiver and cross-channel collisions; the residual —
+/// two vessels on the same receiver *and* channel that pick the same `seq` within
+/// the reassembly window — is inherent to AIS (fragments carry no vessel id) and is
+/// bounded by the TTL sweep below.
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct ReasmKey {
+    talker: String,
+    channel: String,
+    seq: u8,
+}
+
+/// How long a partial reassembly may sit before it is discarded. AIS fragments of
+/// one message arrive milliseconds apart, so anything older is an orphan (a lost
+/// fragment); dropping it stops a much-later, unrelated fragment from completing
+/// it. Deterministic decode is unaffected — only orphan eviction is time-based.
+const REASM_TTL: Duration = Duration::from_secs(10);
+
+/// One in-progress multi-fragment sentence.
 struct Pending {
     total: u8,
     next: u8,
     payload: String,
+    /// The raw sentence bytes of each fragment seen so far, so every contributing
+    /// fragment reaches the payload once the message is reassembled and routed.
+    raws: Vec<Vec<u8>>,
+    /// When the first fragment arrived — drives the TTL sweep.
+    first_seen: Instant,
 }
 
 /// Normalizes AIS for one connector identity. Holds the fragment-reassembly buffer
@@ -147,8 +256,12 @@ struct Pending {
 pub struct AisParser {
     source_id: String,
     enrichment: Enrichment,
-    pending: Mutex<HashMap<u8, Pending>>,
+    pending: Mutex<HashMap<ReasmKey, Pending>>,
     identities: Mutex<IdentityCache>,
+    /// Per-MMSI raw sentences awaiting the vessel's next position emit.
+    carry: Mutex<CarryCache>,
+    /// Carry-forward sentences dropped over the per-MMSI cap, since start.
+    dropped: Arc<AtomicU64>,
 }
 
 impl AisParser {
@@ -158,6 +271,8 @@ impl AisParser {
             enrichment,
             pending: Mutex::new(HashMap::new()),
             identities: Mutex::new(IdentityCache::default()),
+            carry: Mutex::new(CarryCache::default()),
+            dropped: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -171,6 +286,9 @@ impl AisParser {
             return Err(AisError::NotNmea);
         }
         verify_checksum(s)?;
+        // The verbatim (whitespace-trimmed) sentence, carried into the payload of
+        // whatever position event this message contributes to.
+        let raw = s.as_bytes().to_vec();
 
         let star = s.find('*').unwrap_or(s.len());
         let fields: Vec<&str> = s[1..star].split(',').collect();
@@ -191,74 +309,131 @@ impl AisParser {
 
         if frag_count == 1 {
             let bits = Bits::from_payload(payload, fill)?;
-            return self.decode(&bits);
+            return self.decode(&bits, vec![raw]);
         }
 
         // Multi-fragment: accumulate in order, decode when the last arrives. The
-        // fill bits belong to the final fragment.
+        // fill bits belong to the final fragment. Keyed on (talker, channel, seq)
+        // so an interleaved multipart message from another vessel cannot splice its
+        // fragment into this one's (and thus into a signed payload).
+        let key = ReasmKey {
+            talker: fields[0].to_string(),
+            channel: fields[4].to_string(),
+            seq,
+        };
+        let now = Instant::now();
         let mut pending = self.pending.lock().expect("reassembly mutex");
+        // Discard orphaned partials so a lost fragment can never be completed later
+        // by an unrelated vessel that reuses the same key. This also bounds memory.
+        pending.retain(|_, p| now.duration_since(p.first_seen) < REASM_TTL);
         if frag_num == 1 {
             pending.insert(
-                seq,
+                key.clone(),
                 Pending {
                     total: frag_count,
                     next: 1,
                     payload: String::new(),
+                    raws: Vec::new(),
+                    first_seen: now,
                 },
             );
         }
         let done = {
-            let entry = match pending.get_mut(&seq) {
+            let entry = match pending.get_mut(&key) {
                 Some(e) if e.total == frag_count && e.next == frag_num => e,
                 _ => {
-                    pending.remove(&seq);
+                    pending.remove(&key);
                     return Ok(None);
                 }
             };
             entry.payload.push_str(payload);
+            entry.raws.push(raw);
             entry.next += 1;
             frag_num == frag_count
         };
         if done {
-            let full = pending.remove(&seq).expect("entry present").payload;
+            let full = pending.remove(&key).expect("entry present");
             drop(pending);
-            let bits = Bits::from_payload(&full, fill)?;
-            return self.decode(&bits);
+            let bits = Bits::from_payload(&full.payload, fill)?;
+            return self.decode(&bits, full.raws);
         }
         Ok(None)
     }
 
-    fn decode(&self, bits: &Bits) -> Result<Option<AisPosition>, AisError> {
+    fn decode(&self, bits: &Bits, raws: Vec<Vec<u8>>) -> Result<Option<AisPosition>, AisError> {
         if bits.total() < 38 {
             return Err(AisError::Truncated);
         }
         let msg_type = bits.u(0, 6) as u8;
         let mmsi = bits.u(8, 30) as u32;
 
-        match msg_type {
-            1..=3 => Ok(Some(self.position(bits, msg_type, mmsi, ClassA))),
-            18 => Ok(Some(self.position(
-                bits,
-                msg_type,
-                mmsi,
-                ClassB { extended: false },
-            ))),
-            19 => Ok(Some(self.position(
-                bits,
-                msg_type,
-                mmsi,
-                ClassB { extended: true },
-            ))),
+        let layout = match msg_type {
+            1..=3 => Some(ClassA),
+            18 => Some(ClassB { extended: false }),
+            19 => Some(ClassB { extended: true }),
             5 => {
                 self.static_class_a(bits, mmsi);
-                Ok(None)
+                None
             }
             24 => {
                 self.static_class_b(bits, mmsi);
+                None
+            }
+            _ => None, // a valid AIS message, just not one we map
+        };
+
+        match layout {
+            Some(layout) => {
+                // A position emits: drain every sentence carried for this MMSI
+                // since its last emit and append this message's own sentence(s),
+                // so the signed payload holds all contributing frames verbatim.
+                let mut pos = self.position(bits, msg_type, mmsi, layout);
+                let (raw, truncated) = self.carry_drain(mmsi, raws);
+                pos.raw = raw;
+                pos.truncated = truncated;
+                Ok(Some(pos))
+            }
+            // Static/unmapped: no event, but carry the raw sentence(s) forward so
+            // their bytes reach the next position event for this vessel.
+            None => {
+                self.carry_push(mmsi, &raws);
                 Ok(None)
             }
-            _ => Ok(None), // a valid AIS message, just not one we map
         }
+    }
+
+    /// Buffer raw sentences for a vessel that produced no event, bounding the
+    /// per-MMSI buffer and counting any dropped over the cap.
+    fn carry_push(&self, mmsi: u32, raws: &[Vec<u8>]) {
+        let mut cache = self.carry.lock().expect("carry mutex");
+        let entry = cache.entry(mmsi);
+        for raw in raws {
+            let dropped = entry.push_raw(raw);
+            if dropped > 0 {
+                self.dropped.fetch_add(dropped, Ordering::Relaxed);
+                tracing::warn!(dropped, mmsi, "ais: carry-forward buffer over cap");
+            }
+        }
+    }
+
+    /// Drain the carried sentences for `mmsi`, append this position's own
+    /// sentence(s), and newline-join them into the payload (a re-parse splits on
+    /// `\n`). Also reports whether any carried sentence was dropped over the cap.
+    fn carry_drain(&self, mmsi: u32, position_raws: Vec<Vec<u8>>) -> (Vec<u8>, bool) {
+        let mut cache = self.carry.lock().expect("carry mutex");
+        let entry = cache.entry(mmsi);
+        let mut frames: Vec<Vec<u8>> = entry.pending.drain(..).collect();
+        entry.pending_bytes = 0;
+        let truncated = std::mem::take(&mut entry.dropped_since_emit);
+        frames.extend(position_raws);
+        let mut out = Vec::new();
+        for (i, f) in frames.iter().enumerate() {
+            if i > 0 {
+                out.push(b'\n');
+            }
+            out.extend_from_slice(f);
+        }
+        (out, truncated)
     }
 
     /// Decode a position report of the given layout and enrich it with the
@@ -304,6 +479,9 @@ impl AisParser {
             name: None,
             callsign: None,
             imo: None,
+            // Filled by `decode` once the carry-forward buffer is drained.
+            raw: Vec::new(),
+            truncated: false,
         };
 
         // Type 19 carries identity inline; fold it into the cache too.
@@ -385,44 +563,61 @@ impl AisParser {
     }
 
     fn base_builder(&self, p: &AisPosition) -> EventBuilder {
-        let affiliation = self.enrichment.affiliation.as_deref().unwrap_or("unknown");
-
-        // Identifiers (MMSI, IMO) are always metadata; tactical fields follow the
-        // configured mode.
+        // Every raw sentence that produced this event is preserved verbatim in the
+        // signed payload (newline-delimited) — nothing the parser does not yet map
+        // is lost. MMSI is the stable identity (source_uid = track key; `mmsi` =
+        // native); IMO stays a native identifier in metadata.
         let mut b = EventBuilder::new(self.source_id.clone(), "mim:vessel")
             .new_id()
-            .metadata("mmsi", p.mmsi.to_string())
-            .tactical(&self.enrichment, "affiliation", affiliation);
+            .payload(p.raw.clone())
+            .metadata("source_uid", p.mmsi.to_string())
+            .metadata("mmsi", p.mmsi.to_string());
         if let (Some(lat), Some(lon)) = (p.lat, p.lon) {
             b = b.location(lat, lon, 0.0);
         }
-        if let Some(sog) = p.sog {
-            b = b.tactical(&self.enrichment, "speed", format!("{sog:.1}")); // knots
-        }
-        if let Some(cog) = p.cog {
-            b = b.tactical(&self.enrichment, "course", format!("{cog:.1}")); // degrees
-        }
-        if let Some(h) = p.heading {
-            b = b.tactical(&self.enrichment, "heading", format!("{h:.0}")); // degrees true
-        }
-        if let Some(rot) = p.rot {
-            b = b.tactical(&self.enrichment, "rate_of_turn", format!("{rot:.1}"));
-            // deg/min
-        }
-        if let Some(ns) = p.nav_status {
-            b = b.tactical(&self.enrichment, "nav_status", ns);
-        }
-        if let Some(vt) = p.ship_type {
-            b = b.tactical(&self.enrichment, "vessel_type", vt);
-        }
-        if let Some(name) = &p.name {
-            b = b.tactical(&self.enrichment, "vessel_name", name.clone());
-        }
-        if let Some(cs) = &p.callsign {
-            b = b.tactical(&self.enrichment, "callsign", cs.clone());
-        }
         if let Some(imo) = p.imo {
             b = b.metadata("imo", imo.to_string());
+        }
+
+        // If the carry-forward buffer dropped sentences, the payload is incomplete
+        // — say so, so a re-parser never mistakes it for the full set of frames.
+        if p.truncated {
+            b = b.metadata("payload_truncated", "true");
+        }
+
+        // Parse every field into attributes; Core auto-demotes undeclared keys.
+        // Affiliation is only ever the operator's explicit assertion — never a
+        // connector-invented default (AIS carries none of its own).
+        if let Some(aff) = self.enrichment.affiliation.as_deref() {
+            b = b.attribute("affiliation", aff);
+        }
+        // Governed `speed` is m/s; keep the native knots in metadata (ADR-0019).
+        if let Some(kn) = p.sog {
+            b = b.attribute("speed", format!("{:.2}", kn * KNOTS_TO_MPS));
+            b = b.metadata("speed_kn", format!("{kn:.1}"));
+        }
+        // course (track over ground) and heading (where the bow points) are
+        // distinct — do not cross them.
+        if let Some(cog) = p.cog {
+            b = b.attribute("course", format!("{cog:.1}")); // degrees
+        }
+        if let Some(h) = p.heading {
+            b = b.attribute("heading", format!("{h:.0}")); // degrees true
+        }
+        if let Some(rot) = p.rot {
+            b = b.attribute("rate_of_turn", format!("{rot:.1}")); // deg/min
+        }
+        if let Some(ns) = p.nav_status {
+            b = b.attribute("nav_status", ns);
+        }
+        if let Some(vt) = p.ship_type {
+            b = b.attribute("vessel_type", vt);
+        }
+        if let Some(name) = &p.name {
+            b = b.attribute("vessel_name", name.clone());
+        }
+        if let Some(cs) = &p.callsign {
+            b = b.attribute("callsign", cs.clone());
         }
         b
     }
@@ -452,6 +647,10 @@ impl FrameParser for AisParser {
             Some(pos) => Ok(vec![self.to_event_now(&pos).map_err(box_err)?]),
             None => Ok(Vec::new()),
         }
+    }
+
+    fn counters(&self) -> Vec<(&'static str, Arc<AtomicU64>)> {
+        vec![("connector_dropped_carryforward_total", self.dropped.clone())]
     }
 }
 
@@ -643,22 +842,25 @@ mod tests {
         AisParser::new("ais-coast-1", Enrichment::default())
     }
 
-    fn governed() -> AisParser {
+    /// A parser with an operator-asserted affiliation (own the COP's neutral fill).
+    fn configured() -> AisParser {
         AisParser::new(
             "ais-coast-1",
-            Enrichment::governing([
-                "affiliation",
-                "speed",
-                "course",
-                "heading",
-                "rate_of_turn",
-                "nav_status",
-                "vessel_type",
-                "vessel_name",
-                "callsign",
-            ])
-            .with_affiliation("neutral"),
+            Enrichment::default().with_affiliation("neutral"),
         )
+    }
+
+    fn attr_of<'a>(ev: &'a Event, k: &str) -> Option<&'a str> {
+        ev.attributes
+            .iter()
+            .find(|a| a.key == k)
+            .map(|a| a.value.as_str())
+    }
+    fn meta_of<'a>(ev: &'a Event, k: &str) -> Option<&'a str> {
+        ev.metadata
+            .iter()
+            .find(|m| m.key == k)
+            .map(|m| m.value.as_str())
     }
 
     #[test]
@@ -689,37 +891,102 @@ mod tests {
         assert!((pos.sog.unwrap() - 10.0).abs() < 1e-6);
     }
 
+    /// Append the correct NMEA `*HH` checksum to a sentence body (for crafting
+    /// interleaving fixtures).
+    fn with_checksum(body: &str) -> Vec<u8> {
+        let cs = body[1..].bytes().fold(0u8, |a, b| a ^ b);
+        format!("{body}*{cs:02X}").into_bytes()
+    }
+
     #[test]
-    fn governed_event_carries_tactical_attributes() {
-        let p = governed();
+    fn interleaved_multipart_on_same_seq_do_not_contaminate() {
+        // MMSI 603916439's type-5 static arrives as two fragments on channel A,
+        // seq 0. Between them, an UNRELATED multipart from another transmission
+        // arrives with the SAME seq 0 but on channel B. Keyed on seq alone, the
+        // decoy would overwrite the partial and be completed by T5B, splicing the
+        // wrong bytes into the reassembly (and, post-payload, into a signed event).
+        // Keyed on (talker, channel, seq) the two stay separate.
+        let p = parser();
+        let decoy = with_checksum("!AIVDO,2,1,0,B,1234567890,0");
+        assert_eq!(p.parse_sentence(T5A).unwrap(), None); // A frag 1/2 -> key (AIVDO,A,0)
+        assert_eq!(p.parse_sentence(&decoy).unwrap(), None); // B frag 1/2 -> key (AIVDO,B,0)
+        assert_eq!(p.parse_sentence(T5B).unwrap(), None); // A frag 2/2 -> completes T5A
+                                                          // The static identity for 603916439 was reassembled correctly (not spliced
+                                                          // from the decoy), so a later position for that MMSI is enriched as expected.
+        let pos = p.parse_sentence(POS_ARCO).unwrap().unwrap();
+        assert_eq!(pos.mmsi, 603916439);
+        assert_eq!(pos.name.as_deref(), Some("ARCO AVON"));
+        assert_eq!(pos.callsign.as_deref(), Some("ZA83R"));
+    }
+
+    #[test]
+    fn event_carries_canonical_attributes_and_native_units() {
+        let p = configured();
         p.parse_sentence(T5A).unwrap();
         p.parse_sentence(T5B).unwrap();
         let pos = p.parse_sentence(POS_ARCO).unwrap().unwrap();
         let ev = p.to_event_at(&pos, "2026-06-10T08:00:00Z").unwrap();
-        let attr = |k: &str| {
-            ev.attributes
-                .iter()
-                .find(|a| a.key == k)
-                .map(|a| a.value.as_str())
-        };
-        assert_eq!(attr("affiliation"), Some("neutral"));
-        assert_eq!(attr("speed"), Some("10.0"));
-        assert_eq!(attr("vessel_name"), Some("ARCO AVON"));
-        assert_eq!(attr("vessel_type"), Some("passenger"));
-        // MMSI/IMO are identifiers -> always metadata.
-        assert!(ev
-            .metadata
-            .iter()
-            .any(|m| m.key == "mmsi" && m.value == "603916439"));
+        assert_eq!(attr_of(&ev, "affiliation"), Some("neutral"));
+        // Governed `speed` is m/s (10 kn * 0.514444); native knots kept in metadata.
+        assert_eq!(attr_of(&ev, "speed"), Some("5.14"));
+        assert_eq!(meta_of(&ev, "speed_kn"), Some("10.0"));
+        assert_eq!(attr_of(&ev, "vessel_name"), Some("ARCO AVON"));
+        assert_eq!(attr_of(&ev, "vessel_type"), Some("passenger"));
+        // MMSI is the stable track identity (source_uid) and native id; IMO native.
+        assert_eq!(meta_of(&ev, "source_uid"), Some("603916439"));
+        assert_eq!(meta_of(&ev, "mmsi"), Some("603916439"));
         assert!(ev.metadata.iter().any(|m| m.key == "imo"));
     }
 
     #[test]
-    fn default_mode_routes_tactical_to_metadata() {
-        let pos = parser().parse_sentence(T1).unwrap().unwrap();
-        let ev = parser().to_event_at(&pos, "2026-06-10T08:00:00Z").unwrap();
-        assert!(ev.metadata.iter().any(|m| m.key == "affiliation"));
+    fn absent_affiliation_is_not_invented_and_raw_is_preserved() {
+        // Default mode: no operator affiliation -> none is invented (absent stays
+        // absent), and the raw sentence is preserved verbatim in the signed payload.
+        let p = parser();
+        let pos = p.parse_sentence(T1).unwrap().unwrap();
+        let ev = p.to_event_at(&pos, "2026-06-10T08:00:00Z").unwrap();
         assert!(!ev.attributes.iter().any(|a| a.key == "affiliation"));
+        assert!(!ev.metadata.iter().any(|m| m.key == "affiliation"));
+        assert_eq!(ev.payload.as_slice(), T1);
+    }
+
+    #[test]
+    fn carries_static_frames_forward_into_payload() {
+        // The two static fragments (types 5) do not emit; their raw must ride into
+        // the next position event's payload, newline-joined with the position line.
+        let p = configured();
+        assert_eq!(p.parse_sentence(T5A).unwrap(), None);
+        assert_eq!(p.parse_sentence(T5B).unwrap(), None);
+        let pos = p.parse_sentence(POS_ARCO).unwrap().unwrap();
+        assert!(!pos.truncated);
+        let ev = p.to_event_at(&pos, "2026-06-10T08:00:00Z").unwrap();
+        let t5a = std::str::from_utf8(T5A).unwrap();
+        let t5b = std::str::from_utf8(T5B).unwrap();
+        let arco = std::str::from_utf8(POS_ARCO).unwrap();
+        assert_eq!(
+            ev.payload.as_slice(),
+            format!("{t5a}\n{t5b}\n{arco}").as_bytes()
+        );
+        // Attached once: the NEXT position for this MMSI carries only its own line.
+        let pos2 = p.parse_sentence(POS_ARCO).unwrap().unwrap();
+        let ev2 = p.to_event_at(&pos2, "2026-06-10T08:00:00Z").unwrap();
+        assert_eq!(ev2.payload.as_slice(), POS_ARCO);
+    }
+
+    #[test]
+    fn over_cap_drops_oldest_and_marks_payload_truncated() {
+        // Flood one MMSI's carry buffer with complete static messages (2 raws each)
+        // past the frame cap, then emit a position for that MMSI.
+        let p = configured();
+        for _ in 0..(MAX_PENDING_FRAMES) {
+            p.parse_sentence(T5A).unwrap();
+            p.parse_sentence(T5B).unwrap(); // completes -> carries T5A,T5B (2 raws)
+        }
+        let pos = p.parse_sentence(POS_ARCO).unwrap().unwrap();
+        assert!(pos.truncated);
+        let ev = p.to_event_at(&pos, "2026-06-10T08:00:00Z").unwrap();
+        assert_eq!(meta_of(&ev, "payload_truncated"), Some("true"));
+        assert!(p.counters()[0].1.load(Ordering::Relaxed) >= 1);
     }
 
     #[test]

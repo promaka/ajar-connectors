@@ -59,9 +59,9 @@ pub fn spawn_counters(counters: Vec<(&'static str, Arc<AtomicU64>)>) {
     });
 }
 
-/// The ingest runtime's standard counters.
-pub(crate) fn spawn(metrics: Arc<Metrics>) {
-    spawn_counters(vec![
+/// The ingest runtime's standard counters, plus any the parser publishes.
+pub(crate) fn spawn(metrics: Arc<Metrics>, extra: Vec<(&'static str, Arc<AtomicU64>)>) {
+    let mut counters = vec![
         ("connector_received_total", metrics.received.clone()),
         ("connector_published_total", metrics.published.clone()),
         ("connector_rejected_total", metrics.rejected.clone()),
@@ -69,5 +69,7 @@ pub(crate) fn spawn(metrics: Arc<Metrics>) {
             "connector_dropped_backpressure_total",
             metrics.dropped_backpressure.clone(),
         ),
-    ]);
+    ];
+    counters.extend(extra);
+    spawn_counters(counters);
 }

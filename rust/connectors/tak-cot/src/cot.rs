@@ -9,7 +9,7 @@
 use std::collections::HashMap;
 
 use ajar_connector::{Event, EventBuilder};
-use ajar_connector_common::{Enrichment, FrameParser, ParseError, Tactical};
+use ajar_connector_common::{Enrichment, FrameParser, ParseError};
 use quick_xml::events::Event as XmlEvent;
 use quick_xml::Reader;
 
@@ -43,19 +43,19 @@ impl std::error::Error for CotError {}
 pub struct CotParser {
     source_id: String,
     overrides: HashMap<String, String>,
-    enrichment: Enrichment,
 }
 
 impl CotParser {
     pub fn new(
         source_id: impl Into<String>,
         overrides: HashMap<String, String>,
-        enrichment: Enrichment,
+        // CoT encodes affiliation in the event type, so this connector derives it
+        // from the wire and needs no enrichment; the arg is kept for API uniformity.
+        _enrichment: Enrichment,
     ) -> Self {
         Self {
             source_id: source_id.into(),
             overrides,
-            enrichment,
         }
     }
 
@@ -164,11 +164,12 @@ impl CotParser {
         // in metadata (never the id).
         let mut builder = EventBuilder::new(self.source_id.clone(), self.map_type(&cot_type))
             .new_id()
+            .payload(native.to_vec())
             .timestamp(time)
             .metadata("source_uid", uid)
-            .tactical(&self.enrichment, "affiliation", affiliation(&cot_type));
+            .attribute("affiliation", affiliation(&cot_type));
         if let Some(callsign) = callsign {
-            builder = builder.tactical(&self.enrichment, "callsign", callsign);
+            builder = builder.attribute("callsign", callsign);
         }
         if let Some(confidence) = confidence {
             builder = builder.confidence(confidence);
@@ -241,11 +242,7 @@ mod tests {
 
     /// Parser for a deployment that declared its ontology: governed mode.
     fn governed() -> CotParser {
-        CotParser::new(
-            "tak-field-1",
-            HashMap::new(),
-            Enrichment::governing(["affiliation", "callsign"]),
-        )
+        CotParser::new("tak-field-1", HashMap::new(), Enrichment::default())
     }
 
     /// Find a tactical value in whichever place the mode put it.
@@ -276,15 +273,14 @@ mod tests {
     }
 
     #[test]
-    fn default_mode_routes_tactical_to_metadata_governed_to_attributes() {
-        // Safe default: affiliation is metadata, never a governed attribute.
+    fn fields_are_attributes_and_raw_frame_is_preserved() {
+        // Affiliation is derived from the CoT type (real data, not a default) and
+        // rides as an attribute; Core demotes it if the ontology hasn't declared it.
         let ev = parser().to_event(SAMPLE.as_bytes()).unwrap();
-        assert!(ev.metadata.iter().any(|m| m.key == "affiliation"));
-        assert!(!ev.attributes.iter().any(|a| a.key == "affiliation"));
-        // Governed mode: affiliation is a governed attribute.
-        let ev = governed().to_event(SAMPLE.as_bytes()).unwrap();
         assert!(ev.attributes.iter().any(|a| a.key == "affiliation"));
         assert!(!ev.metadata.iter().any(|m| m.key == "affiliation"));
+        // The raw CoT frame is preserved verbatim in the signed payload.
+        assert_eq!(ev.payload.as_slice(), SAMPLE.as_bytes());
     }
 
     #[test]
