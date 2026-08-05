@@ -23,7 +23,7 @@ ajar-connector.workspace = true
 # `ring`: re-add ONLY the rustls crypto provider — REQUIRED for TLS/mTLS to NATS
 # (it ships in the defaults we dropped; without it, a TLS connect panics with
 # "Could not automatically determine the process-level CryptoProvider").
-async-nats = { version = "0.49", default-features = false, features = ["ring"] }
+async-nats = { version = "0.50", default-features = false, features = ["ring"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
 bytes = "1"
 # Accept the 64-char hex seed `ajar keygen` writes, not just 32 raw bytes.
