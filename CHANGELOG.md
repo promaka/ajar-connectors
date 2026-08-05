@@ -13,22 +13,52 @@ Two version lines are tracked independently (see COMPATIBILITY.md):
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-08-05
+
 ### Added
-- `ajar-klv` connector for STANAG 4609 / MISB ST 0601 (KLV) UAS motion-imagery
-  metadata: decodes the platform tags (time, tail number, heading/pitch/roll,
-  sensor position), validates the ST 0601 checksum fail-closed, and seals the
-  entire raw KLV set into the signed `Event.payload` so unmapped tags are never
-  lost. It also serves as the reference binary-format connector.
-- `ajar-gmti` connector for STANAG 4607 (NATO GMTI) ground moving-target radar:
-  decodes the Dwell segment via its existence mask (sensor geometry, dwell area,
-  per-target position and radial velocity) and emits one event per detection,
-  sealing the raw dwell segment into the payload. `source_uid` is unique per
-  detection (GMTI carries no persistent track id). A second reference binary
-  connector, showing the existence-mask / segmented-packet pattern.
-- `AGENTS.md`: a connector-authoring spec (the `FrameParser` contract, the
-  losslessness / canonical-units / `source_uid` rules, which connector to copy,
-  and the verify steps) so a connector for a new format can be added — by a person
-  or a coding agent — by following one document.
+- **Raw-payload losslessness.** Every inbound connector seals the raw wire frame(s)
+  that produced an event verbatim into the signed `Event.payload`, so a field the
+  parser does not yet map is never lost. Correlating connectors (`adsb`, `mavlink`,
+  `ais-nmea`) carry non-emitting frames forward per entity into the next event they
+  contribute to — bounded (drop-oldest over cap), with a `payload_truncated` marker
+  and a `connector_dropped_carryforward_total` metric.
+- `ajar-klv` connector — STANAG 4609 / MISB ST 0601 (KLV) UAS motion-imagery
+  metadata. Decodes the platform tags, validates the ST 0601 checksum fail-closed,
+  and seals the whole raw KLV set into the payload. The reference tag-length-value
+  binary connector.
+- `ajar-gmti` connector — STANAG 4607 (NATO GMTI) ground moving-target radar.
+  Decodes the Dwell segment via its existence mask (sensor geometry, dwell area,
+  per-target position and radial velocity), one event per detection, with the raw
+  dwell segment sealed in the payload. `source_uid` is unique per detection (GMTI
+  carries no persistent track id). The reference existence-mask / segmented-packet
+  binary connector.
+- `AGENTS.md` — a connector-authoring spec (the `FrameParser` contract, the
+  losslessness / canonical-units / `source_uid` rules, which connector to copy, and
+  the verify steps) so a connector for a new format can be added, by a person or a
+  coding agent, by following one document.
+
+### Changed
+- **Canonical units (ADR-0019).** Speeds normalise to m/s, vertical rate to m/s,
+  altitude to metres, with the native value kept in metadata (`speed_kn`,
+  `vertical_rate_ftmin`, `altitude_ft`). Every decoded field is emitted as an
+  attribute and Core's signed ontology governs which are kept, so the per-connector
+  `governed_attributes` / Tactical mechanism is removed. `ATTRIBUTES.md` now points
+  at Core's ontology manifest rather than restating it.
+- Connector images cross-compile arm64 (`aarch64-unknown-linux-gnu`) on the native
+  amd64 runner instead of emulating under QEMU, so arm64 (AWS Graviton, Raspberry
+  Pi) builds at native speed.
+
+### Fixed
+- **AIS multi-fragment reassembly** is keyed on `(talker, channel, seq)`, not the
+  sequential message id alone. An interleaved multipart message from another vessel
+  can no longer splice its fragment into another vessel's reassembly — and, with the
+  raw now sealed into a signed event, into its provenance record. Orphaned partials
+  are discarded on a TTL sweep so a lost fragment cannot be completed later by an
+  unrelated vessel.
+- **MAVLink** logs each system id on first sight, and the example config documents
+  the unique-`SYSID_THISMAV` requirement, so two vehicles that both kept the
+  autopilot default (sysid 1) are visible to the operator rather than silently
+  merged into one track.
 
 ## [0.1.0] - 2026-06-24
 
