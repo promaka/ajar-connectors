@@ -48,7 +48,7 @@ canonical `Event`s. That is the whole contract.
 
 - **Binary / bit-packed** (STANAG, TLV, framed records): copy **`klv`** (MISB ST
   0601, tag-length-value) for a tag-based format, **`gmti`** (STANAG 4607) for an
-  existence-mask / segmented-packet format, or **`asterix`** (EUROCONTROL CAT021).
+  existence-mask / segmented-packet format, or **`asterix`** (EUROCONTROL CAT021/048/062 — FSPEC + compound items).
 - **Line/text records** (JSON, CSV, NMEA-like): copy **`ais-nmea`**, or use the
   config-driven **`generic`** connector with no new code at all if the feed is
   newline JSON/CSV.
