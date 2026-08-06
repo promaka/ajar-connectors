@@ -13,6 +13,21 @@ Two version lines are tracked independently (see COMPATIBILITY.md):
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-08-06
+
+### Added
+- **STANAG 4676** (NATO ISR Tracking Standard, AEDP-12 Edition B) ingress
+  connector (`ajar-stanag4676`) — the fused **track layer** above raw ISR
+  detections, complementing `ajar-gmti`. Decodes `nitsRoot` track messages into one
+  canonical event per track point: the Base64-encoded track UUID becomes
+  `source_uid`; WGS-84 `<dynamics>` position yields the fix, with ground speed and
+  course derived from the native degrees-per-second velocity vector; point time is
+  reconstructed from `baseTime + relTime × relTimeIncrement`; segment status maps to
+  new/update/coast/drop; STANAG 1241 identity drives affiliation (conservatively);
+  and the STANAG 4774 confidentiality label rides as the event's policy tag. Matches
+  on local element names so any namespace prefix decodes identically. The field
+  model is cross-checked against the `bradh/jim` Edition-B reference implementation.
+
 ## [0.3.0] - 2026-08-06
 
 ### Added

@@ -1,0 +1,39 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Example STANAG 4676 (NATO ISR Tracking) ingress config. Copy, adjust, and run:
+#   ajar-stanag4676 ./stanag4676.toml
+#
+# This connector decodes the fused TRACK layer (nitsRoot -> track -> segment -> tp)
+# into one canonical event per track point. It complements ajar-gmti, which ingests
+# the raw un-associated detections: GMTI gives dots, 4676 gives tracks with a stable
+# id for the same object over time.
+
+source_id = "isr-tracker-1"
+nats_url = "nats://127.0.0.1:4222"
+subject_prefix = "ajar.ingest"
+signing_key_path = "/etc/ajar/isr-tracker-1.key"
+
+# 4676 carries a STANAG 1241 identity, so affiliation is derived from the wire
+# (FRIEND/HOSTILE/NEUTRAL). This default is only used when a track's identity is
+# absent or ambiguous (ASSUMED_FRIEND / SUSPECT / UNKNOWN).
+# default_affiliation = "unknown"
+
+# Optional: map a 4676 `environment` to an Ajar entity type. The built-ins are
+# AIR -> mim:aircraft, SURFACE -> mim:vessel, LAND -> mim:ground; SUB-SURFACE and
+# SPACE ride under a vendor namespace. Override any of them here.
+# [entity_map]
+# AIR = "mim:drone"
+
+[transport]
+# A 4676 message is a whole XML document, so the transport must deliver ONE
+# complete message per frame. Length-delimited framing (2-byte length prefix per
+# message) is the clean stream integration:
+kind = "tcp-server"
+bind = "0.0.0.0:4676"
+framing = "length-delimited"
+
+# Alternatively, over a line transport when the producer emits one compact,
+# single-line message per line:
+# [transport]
+# kind = "file"
+# path = "/var/spool/isr/tracks.xml"
