@@ -23,5 +23,8 @@ LABEL org.opencontainers.image.title="ajar connector (reference image)" \
       org.opencontainers.image.licenses="Apache-2.0" \
       ajar.reference-only="true"
 COPY --from=build /build/rust/examples/target/release/synthetic-radar /usr/local/bin/connector
-USER nonroot
+# Numeric uid (distroless nonroot = 65532) so the runtime can verify it is not
+# root — matches the chart's securityContext runAsUser and satisfies hadolint
+# DL3066.
+USER 65532:65532
 ENTRYPOINT ["/usr/local/bin/connector"]
