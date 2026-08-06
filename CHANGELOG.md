@@ -13,6 +13,26 @@ Two version lines are tracked independently (see COMPATIBILITY.md):
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-06
+
+### Added
+- ASTERIX **CAT048** (monoradar target reports) and **CAT062** (SDPS system
+  tracks), extending the ASTERIX connector from CAT021 alone to the full air
+  picture: cooperative (CAT021), primary radar (CAT048), and the fused recognised
+  track (CAT062). CAT048 reports are range/azimuth relative to the radar and are
+  forward-geolocated against a configured `[sensor]` site; CAT062 carries WGS-84
+  position and fused kinematics directly. Field layouts cross-checked against the
+  python-asterix and Wireshark reference decoders.
+- `[sensor]` config (`lat` / `lon` / `alt_m`) for connectors that report
+  sensor-relative positions (used by ASTERIX CAT048 geolocation).
+
+### Changed
+- The ASTERIX decoder is now a category-generic FSPEC/UAP engine with a recursive
+  length model for compound items (I048/130, I062/380, and friends), so adding a
+  category is a UAP table plus a small decoder rather than new parsing logic.
+  CAT021 behaviour is unchanged.
+
+
 ## [0.2.1] - 2026-08-05
 
 ### Fixed

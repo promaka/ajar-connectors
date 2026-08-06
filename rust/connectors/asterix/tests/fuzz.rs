@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
-//! The block decoder walks attacker-influenced length fields, so its one absolute
-//! obligation is to never panic: random bytes, blocks that lie about their length,
-//! FSPECs that reference every UAP item — all must return `Ok` or a typed error.
+//! The ASTERIX decoder walks attacker-influenced FSPEC bitmaps, compound primary
+//! bitmaps, and REP/Explicit length fields, so its one absolute obligation is to
+//! never panic: random bytes, blocks that lie about their length, and FSPECs that
+//! reference every UAP item must all return `Ok` or a typed error.
 
 use ajar_asterix::AsterixParser;
 use ajar_connector_common::Enrichment;
@@ -19,12 +20,16 @@ proptest! {
         let _ = parser().parse_block(&bytes);
     }
 
-    /// CAT021-shaped blocks with an arbitrary declared length and body must never
-    /// panic — this exercises the record walk and every UAP length path.
+    /// A real category byte, an arbitrary declared length, and a random record
+    /// body — exercises the FSPEC walk, compound bitmaps, and every length model
+    /// across CAT021/048/062. Must never panic.
     #[test]
-    fn cat021_shaped_input_never_panics(body in proptest::collection::vec(any::<u8>(), 0..400)) {
+    fn category_shaped_input_never_panics(
+        cat in prop::sample::select(vec![21u8, 48, 62]),
+        body in proptest::collection::vec(any::<u8>(), 0..400),
+    ) {
         let len = (body.len() + 3) as u16;
-        let mut block = vec![21u8, (len >> 8) as u8, len as u8];
+        let mut block = vec![cat, (len >> 8) as u8, len as u8];
         block.extend_from_slice(&body);
         let _ = parser().parse_block(&block);
     }

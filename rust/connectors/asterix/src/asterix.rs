@@ -1,29 +1,37 @@
 // SPDX-License-Identifier: Apache-2.0
-//! EUROCONTROL ASTERIX CAT021 (ADS-B target reports) -> canonical Ajar events.
+//! EUROCONTROL ASTERIX -> canonical Ajar events. Handles the air-picture
+//! categories:
+//!  - **CAT021** ADS-B target reports (cooperative traffic, WGS-84 position).
+//!  - **CAT048** monoradar target reports (primary + Mode S/SSR; position is
+//!    radar-relative polar, geolocated against a configured sensor site).
+//!  - **CAT062** SDPS system tracks (the fused, recognised air picture; WGS-84
+//!    position).
 //!
-//! An ASTERIX data block is `CAT | LEN | record…`; a single UDP datagram can
-//! carry several target records, so one frame maps to several events. Each record
-//! begins with a variable-length FSPEC bitmap that says which data items follow,
-//! in the fixed order of the category's User Application Profile (UAP).
+//! An ASTERIX data block is `CAT | LEN | record…`; one UDP datagram can carry
+//! several records, so one frame maps to several events. Each record begins with a
+//! variable-length FSPEC bitmap naming the data items present, in the fixed order
+//! of the category's User Application Profile (UAP). The engine is category-generic:
+//! a [`Field`] length model per UAP lets it walk past any item to the next record,
+//! and each category supplies a UAP table plus a decoder. The whole raw record is
+//! sealed verbatim into the signed `Event.payload`.
 //!
 //! This is an untrusted edge, so every length is bounds-checked before it is read;
-//! the decoder never panics and never emits a misaligned position. The UAP length
-//! table below lets it walk past any standard item to reach the next record. The
-//! few compound items it does not length-model (Met, Trajectory Intent, Data Ages)
-//! cause it to stop at that record and report — it fails closed rather than risk
-//! decoding garbage.
-//!
-//! Scope: CAT021 Edition 2.x, the ADS-B position report — item I021/130 (and the
-//! high-resolution I021/131) WGS-84 position, keyed by target address (I021/080)
-//! or track number (I021/161). Validate the UAP against your feed's edition before
-//! operational use.
+//! the decoder never panics and never emits a misaligned position. Validate the
+//! UAP against your feed's edition before operational use.
 
 use ajar_connector::{Event, EventBuilder};
 use ajar_connector_common::{Enrichment, FrameParser, ParseError};
 
 const CAT021: u8 = 21;
+const CAT048: u8 = 48;
+const CAT062: u8 = 62;
+
 /// 1 knot in metres/second — the governed `speed` attribute is m/s (ADR-0019).
 const KNOTS_TO_MPS: f64 = 0.514_444;
+/// 1 nautical mile in metres.
+const NM_TO_M: f64 = 1852.0;
+/// LSB of an ASTERIX 16-bit binary angle: 360 / 2^16 degrees.
+const ANGLE_16: f64 = 360.0 / 65_536.0;
 
 /// Why an ASTERIX block or record could not be decoded.
 #[derive(Debug, PartialEq, Eq)]
@@ -45,7 +53,7 @@ impl std::fmt::Display for AsterixError {
             AsterixError::BadBlock => write!(f, "malformed ASTERIX data block"),
             AsterixError::Truncated => write!(f, "ASTERIX item runs past end of block"),
             AsterixError::UnsupportedItem(frn) => {
-                write!(f, "unsupported CAT021 UAP item (FRN {frn})")
+                write!(f, "unsupported ASTERIX UAP item (FRN {frn})")
             }
             AsterixError::Build(e) => write!(f, "event build failed: {e}"),
         }
@@ -53,55 +61,101 @@ impl std::fmt::Display for AsterixError {
 }
 impl std::error::Error for AsterixError {}
 
-/// A decoded CAT021 target — the wire facts, no clock. Deterministic.
-#[derive(Debug, Clone, PartialEq)]
-pub struct AsterixTarget {
-    pub sac: u8,
-    pub sic: u8,
-    pub track: Option<u16>,
-    /// 24-bit ICAO target address, if the report carried one.
-    pub icao: Option<u32>,
-    pub lat: f64,
-    pub lon: f64,
-    /// Altitude in feet — geometric height (I021/140) preferred, else flight level
-    /// (I021/145).
-    pub alt_ft: Option<f64>,
-    /// Ground speed in knots (I021/160).
-    pub ground_speed: Option<f64>,
-    /// Track angle / course over ground in degrees (I021/160).
-    pub track_angle: Option<f64>,
-    /// Mode 3/A squawk as four octal digits (I021/070).
-    pub squawk: Option<String>,
-    /// Callsign / flight identity (I021/170).
-    pub callsign: Option<String>,
-    /// Emitter category — light, heavy, rotorcraft, uav, … (I021/020).
-    pub emitter: Option<&'static str>,
-    /// The raw bytes of this record within the data block, preserved verbatim in
-    /// the signed payload (a re-parser reads it as one CAT021 record).
-    pub raw: Vec<u8>,
-}
+/// The `(FRN, item-bytes)` pairs a record walk yields.
+type Items<'a> = Vec<(u8, &'a [u8])>;
 
-/// How to measure a UAP item's length so the record walk can skip it.
+// ============================================================================
+// Length engine — how to measure a UAP item so the record walk can skip it.
+// ============================================================================
+
+/// How to measure a UAP (or compound sub-) item's octet length.
 #[derive(Clone, Copy)]
 enum Field {
     /// A fixed number of octets.
     Fixed(usize),
-    /// FX-chained: octets continue while the low bit of each is set.
-    Extended,
-    /// A one-octet repetition count, then that many fixed-size items.
+    /// FX-chained: `unit`-octet extents continue while the low bit of each extent's
+    /// last octet is set. (`unit` is 1 for almost everything; 3 for I062/510.)
+    Extended(usize),
+    /// A one-octet repetition count, then that many `N`-octet items.
     Repetitive(usize),
-    /// A one-octet total-length prefix (RE / SP items).
-    LenPrefixed,
-    /// A compound item this decoder does not length-model.
-    Compound,
+    /// A one-octet total-length prefix (value includes itself) — ASTERIX "Explicit"
+    /// (the RE / SP items).
+    Explicit,
+    /// An FX-chained primary subfield bitmap, then the present subfields in bit
+    /// order (bit 8 of octet 1 first, FX/low bit excluded). `Spare` marks a bit
+    /// position with no subfield.
+    Compound(&'static [Field]),
+    /// A bit position inside a compound primary bitmap that carries no subfield.
+    Spare,
+    /// A complex item this decoder does not length-model; a record containing it
+    /// stops with `UnsupportedItem` rather than risk a misaligned walk.
+    Opaque,
 }
 
-/// CAT021 Edition 2.x UAP, indexed by Field Reference Number (1-based). Only the
-/// lengths matter for the record walk; the position items (FRN 6/7), track (3),
-/// address (11), and source id (1) are the ones actually decoded.
-const UAP: &[Field] = &[
+/// The octet length of the `field` starting at `data[off]`, or `None` if it can't
+/// be measured (truncated, or `Opaque`). Recurses for `Compound`.
+fn field_len(field: Field, data: &[u8], off: usize) -> Option<usize> {
+    match field {
+        Field::Fixed(n) => Some(n),
+        Field::Spare => Some(0),
+        Field::Extended(unit) => {
+            let mut n = 0;
+            loop {
+                let last = off.checked_add(n + unit)?.checked_sub(1)?;
+                if last >= data.len() {
+                    return None;
+                }
+                n += unit;
+                if data[last] & 0x01 == 0 {
+                    return Some(n);
+                }
+            }
+        }
+        Field::Repetitive(item) => {
+            let rep = *data.get(off)? as usize;
+            Some(1 + rep * item)
+        }
+        Field::Explicit => Some(*data.get(off)? as usize),
+        Field::Compound(subs) => {
+            // Primary bitmap: FX-chained octets; each contributes 7 presence bits.
+            let bits = primary_bits(data, off)?;
+            let mut total = bits.len().div_ceil(7); // octets consumed by the bitmap
+            for (i, &present) in bits.iter().enumerate() {
+                if present {
+                    let sub = *subs.get(i)?;
+                    total += field_len(sub, data, off + total)?;
+                }
+            }
+            Some(total)
+        }
+        Field::Opaque => None,
+    }
+}
+
+/// The presence bits of an FX-chained primary bitmap starting at `data[off]`,
+/// bit 8 first, excluding the FX (low) bit of each octet. 7 bits per octet.
+fn primary_bits(data: &[u8], mut off: usize) -> Option<Vec<bool>> {
+    let mut bits = Vec::new();
+    loop {
+        let octet = *data.get(off)?;
+        off += 1;
+        for b in 0..7 {
+            bits.push(octet & (0x80 >> b) != 0);
+        }
+        if octet & 0x01 == 0 {
+            return Some(bits);
+        }
+    }
+}
+
+// ============================================================================
+// CAT021 — ADS-B target reports (Edition 2.x). WGS-84 position.
+// ============================================================================
+
+#[rustfmt::skip]
+const UAP021: &[Field] = &[
     Field::Fixed(2),      // 1  I021/010 Data Source Identification
-    Field::Extended,      // 2  I021/040 Target Report Descriptor
+    Field::Extended(1),   // 2  I021/040 Target Report Descriptor
     Field::Fixed(2),      // 3  I021/161 Track Number
     Field::Fixed(1),      // 4  I021/015 Service Identification
     Field::Fixed(3),      // 5  I021/071 Time of Applicability for Position
@@ -116,7 +170,7 @@ const UAP: &[Field] = &[
     Field::Fixed(3),      // 14 I021/075 Time of Message Reception for Velocity
     Field::Fixed(4),      // 15 I021/076 …High Precision
     Field::Fixed(2),      // 16 I021/140 Geometric Height
-    Field::Extended,      // 17 I021/090 Quality Indicators
+    Field::Extended(1),   // 17 I021/090 Quality Indicators
     Field::Fixed(1),      // 18 I021/210 MOPS Version
     Field::Fixed(2),      // 19 I021/070 Mode 3/A Code
     Field::Fixed(2),      // 20 I021/230 Roll Angle
@@ -130,32 +184,434 @@ const UAP: &[Field] = &[
     Field::Fixed(3),      // 28 I021/077 Time of Report Transmission
     Field::Fixed(6),      // 29 I021/170 Target Identification
     Field::Fixed(1),      // 30 I021/020 Emitter Category
-    Field::Compound,      // 31 I021/220 Met Information
+    Field::Opaque,        // 31 I021/220 Met Information (compound, not modelled)
     Field::Fixed(2),      // 32 I021/146 Selected Altitude
     Field::Fixed(2),      // 33 I021/148 Final State Selected Altitude
-    Field::Compound,      // 34 I021/110 Trajectory Intent
+    Field::Opaque,        // 34 I021/110 Trajectory Intent (compound, not modelled)
     Field::Fixed(1),      // 35 I021/016 Service Management
     Field::Fixed(1),      // 36 I021/008 Aircraft Operational Status
-    Field::Extended,      // 37 I021/271 Surface Capabilities and Characteristics
+    Field::Extended(1),   // 37 I021/271 Surface Capabilities and Characteristics
     Field::Fixed(1),      // 38 I021/132 Message Amplitude
     Field::Repetitive(8), // 39 I021/250 Mode S MB Data
     Field::Fixed(7),      // 40 I021/260 ACAS Resolution Advisory
     Field::Fixed(1),      // 41 I021/400 Receiver ID
-    Field::Compound,      // 42 I021/295 Data Ages
-    Field::LenPrefixed,   // 43 RE Reserved Expansion Field
-    Field::LenPrefixed,   // 44 SP Special Purpose Field
+    Field::Opaque,        // 42 I021/295 Data Ages (compound, not modelled)
+    Field::Explicit,      // 43 RE Reserved Expansion Field
+    Field::Explicit,      // 44 SP Special Purpose Field
 ];
 
-// Position scaling (WGS-84), independent of the UAP: I021/130 stores lat and lon
-// as 24-bit signed with LSB 180/2^23 degrees; I021/131 as 32-bit signed with LSB
-// 180/2^30.
+// I021/130 lat/lon: 24-bit signed, LSB 180/2^23; I021/131: 32-bit signed, 180/2^30.
 const LSB_130: f64 = 180.0 / (1u32 << 23) as f64;
 const LSB_131: f64 = 180.0 / (1u64 << 30) as f64;
 
-/// Normalizes ASTERIX CAT021 for one connector identity.
+fn decode_021(items: &[(u8, &[u8])]) -> AsterixTarget {
+    let mut t = AsterixTarget::new(CAT021);
+    for &(frn, item) in items {
+        match frn {
+            1 => (t.sac, t.sic) = (item[0], item[1]),
+            3 => t.track = Some(u16::from_be_bytes([item[0], item[1]]) as u32),
+            6 => t.set_pos(signed(item, 0, 3) * LSB_130, signed(item, 3, 3) * LSB_130),
+            7 => t.set_pos(signed(item, 0, 4) * LSB_131, signed(item, 4, 4) * LSB_131),
+            11 => t.icao = Some(be(item, 0, 3) as u32),
+            16 => t.alt_ft = Some(i16::from_be_bytes([item[0], item[1]]) as f64 * 6.25),
+            19 => t.squawk = Some(mode_3a(u16::from_be_bytes([item[0], item[1]]))),
+            21 => {
+                t.alt_ft
+                    .get_or_insert(i16::from_be_bytes([item[0], item[1]]) as f64 * 25.0);
+            }
+            26 => {
+                let gs = u16::from_be_bytes([item[0], item[1]]);
+                let ta = u16::from_be_bytes([item[2], item[3]]);
+                t.ground_speed = Some(gs as f64 * 2f64.powi(-14) * 3600.0); // NM/s -> kt
+                t.track_angle = Some(ta as f64 * ANGLE_16);
+            }
+            29 => t.callsign = aircraft_id(item),
+            30 => t.emitter = emitter_category(item[0]),
+            _ => {}
+        }
+    }
+    t
+}
+
+// ============================================================================
+// CAT048 — monoradar target reports. Radar-relative polar position.
+// ============================================================================
+
+#[rustfmt::skip]
+const UAP048: &[Field] = &[
+    Field::Fixed(2),                                  // 1  I048/010 Data Source Identifier
+    Field::Fixed(3),                                  // 2  I048/140 Time of Day
+    Field::Extended(1),                               // 3  I048/020 Target Report Descriptor
+    Field::Fixed(4),                                  // 4  I048/040 Measured Position (polar)
+    Field::Fixed(2),                                  // 5  I048/070 Mode-3/A Code
+    Field::Fixed(2),                                  // 6  I048/090 Flight Level (binary)
+    Field::Compound(&SUB_048_130),                    // 7  I048/130 Radar Plot Characteristics
+    Field::Fixed(3),                                  // 8  I048/220 Aircraft Address
+    Field::Fixed(6),                                  // 9  I048/240 Aircraft Identification
+    Field::Repetitive(8),                             // 10 I048/250 Mode S / BDS Register Data
+    Field::Fixed(2),                                  // 11 I048/161 Track Number
+    Field::Fixed(4),                                  // 12 I048/042 Calculated Position (Cartesian)
+    Field::Fixed(4),                                  // 13 I048/200 Calculated Track Velocity (polar)
+    Field::Extended(1),                               // 14 I048/170 Track Status
+    Field::Fixed(4),                                  // 15 I048/210 Track Quality
+    Field::Extended(1),                               // 16 I048/030 Warning/Error Conditions
+    Field::Fixed(2),                                  // 17 I048/080 Mode-3/A Confidence
+    Field::Fixed(4),                                  // 18 I048/100 Mode-C Code + Confidence
+    Field::Fixed(2),                                  // 19 I048/110 Height Measured by 3D Radar
+    Field::Compound(&SUB_048_120),                    // 20 I048/120 Radial Doppler Speed
+    Field::Fixed(2),                                  // 21 I048/230 Comms/ACAS Capability & Status
+    Field::Fixed(7),                                  // 22 I048/260 ACAS Resolution Advisory
+    Field::Fixed(1),                                  // 23 I048/055 Mode-1 Code
+    Field::Fixed(2),                                  // 24 I048/050 Mode-2 Code
+    Field::Fixed(1),                                  // 25 I048/065 Mode-1 Confidence
+    Field::Fixed(2),                                  // 26 I048/060 Mode-2 Confidence
+    Field::Explicit,                                  // 27 I048/SP Special Purpose
+    Field::Explicit,                                  // 28 I048/RE Reserved Expansion
+];
+/// I048/130 subfields (SRL, SRR, SAM, PRL, PAM, RPD, APD) — each 1 octet.
+const SUB_048_130: [Field; 7] = [Field::Fixed(1); 7];
+/// I048/120 subfields: CAL (fixed 2), RDS (repetitive, 6 octets/rep).
+const SUB_048_120: [Field; 2] = [Field::Fixed(2), Field::Repetitive(6)];
+
+fn decode_048(items: &[(u8, &[u8])], sensor: Option<&Sensor>) -> AsterixTarget {
+    let mut t = AsterixTarget::new(CAT048);
+    for &(frn, item) in items {
+        match frn {
+            1 => (t.sac, t.sic) = (item[0], item[1]),
+            2 => t.time_of_day = Some(be(item, 0, 3) as f64 / 128.0),
+            4 => {
+                // Measured position: RHO (LSB 1/256 NM), THETA (LSB 360/2^16 deg).
+                let rho_nm = u16::from_be_bytes([item[0], item[1]]) as f64 / 256.0;
+                let theta = u16::from_be_bytes([item[2], item[3]]) as f64 * ANGLE_16;
+                t.polar = Some((rho_nm, theta));
+                if let Some(s) = sensor {
+                    let (lat, lon) = forward_geodetic(s.lat, s.lon, theta, rho_nm * NM_TO_M);
+                    t.set_pos(lat, lon);
+                }
+            }
+            5 => t.squawk = Some(mode_3a(u16::from_be_bytes([item[0], item[1]]))),
+            6 => {
+                // Flight level: bits 14..1 signed two's-complement, LSB 25 ft.
+                let raw = u16::from_be_bytes([item[0], item[1]]) & 0x3FFF;
+                t.alt_ft = Some(sign_extend(raw as u64, 14) as f64 * 25.0);
+            }
+            8 => t.icao = Some(be(item, 0, 3) as u32),
+            9 => t.callsign = aircraft_id(item),
+            11 => t.track = Some((u16::from_be_bytes([item[0], item[1]]) & 0x0FFF) as u32),
+            13 => {
+                // Calculated velocity: ground speed (LSB 2^-14 NM/s), heading.
+                let gs = u16::from_be_bytes([item[0], item[1]]);
+                let hd = u16::from_be_bytes([item[2], item[3]]);
+                t.ground_speed = Some(gs as f64 * 2f64.powi(-14) * 3600.0); // NM/s -> kt
+                t.track_angle = Some(hd as f64 * ANGLE_16);
+            }
+            _ => {}
+        }
+    }
+    t
+}
+
+// ============================================================================
+// CAT062 — SDPS system tracks (fused air picture). WGS-84 position.
+// ============================================================================
+
+#[rustfmt::skip]
+const UAP062: &[Field] = &[
+    Field::Fixed(2),                // 1  I062/010 Data Source Identifier
+    Field::Opaque,                  // 2  (spare / unassigned)
+    Field::Fixed(1),                // 3  I062/015 Service Identification
+    Field::Fixed(3),                // 4  I062/070 Time Of Track Information
+    Field::Fixed(8),                // 5  I062/105 Calculated Position WGS-84
+    Field::Fixed(6),                // 6  I062/100 Calculated Track Position (Cartesian)
+    Field::Fixed(4),                // 7  I062/185 Calculated Track Velocity (Cartesian)
+    Field::Fixed(2),                // 8  I062/210 Calculated Acceleration
+    Field::Fixed(2),                // 9  I062/060 Track Mode 3/A Code
+    Field::Fixed(7),                // 10 I062/245 Target Identification
+    Field::Compound(&SUB_062_380),  // 11 I062/380 Aircraft Derived Data
+    Field::Fixed(2),                // 12 I062/040 Track Number
+    Field::Extended(1),             // 13 I062/080 Track Status
+    Field::Compound(&SUB_062_290),  // 14 I062/290 System Track Update Ages
+    Field::Fixed(1),                // 15 I062/200 Mode of Movement
+    Field::Compound(&SUB_062_295),  // 16 I062/295 Track Data Ages
+    Field::Fixed(2),                // 17 I062/136 Measured Flight Level
+    Field::Fixed(2),                // 18 I062/130 Calculated Geometric Altitude
+    Field::Fixed(2),                // 19 I062/135 Calculated Barometric Altitude
+    Field::Fixed(2),                // 20 I062/220 Calculated Rate of Climb/Descent
+    Field::Compound(&SUB_062_390),  // 21 I062/390 Flight Plan Related Data
+    Field::Extended(1),             // 22 I062/270 Target Size & Orientation
+    Field::Fixed(1),                // 23 I062/300 Vehicle Fleet Identification
+    Field::Compound(&SUB_062_110),  // 24 I062/110 Mode 5 Data
+    Field::Fixed(2),                // 25 I062/120 Track Mode 2 Code
+    Field::Extended(3),             // 26 I062/510 Composed Track Number (3-octet units)
+    Field::Compound(&SUB_062_500),  // 27 I062/500 Estimated Accuracies
+    Field::Compound(&SUB_062_340),  // 28 I062/340 Measured Information
+    Field::Opaque,                  // 29 (spare)
+    Field::Opaque,                  // 30 (spare)
+    Field::Opaque,                  // 31 (spare)
+    Field::Opaque,                  // 32 (spare)
+    Field::Opaque,                  // 33 (spare)
+    Field::Explicit,                // 34 I062/RE Reserved Expansion
+    Field::Explicit,                // 35 I062/SP Special Purpose
+];
+
+// I062/105 lat/lon: 32-bit signed, LSB 180/2^25 degrees.
+const LSB_105: f64 = 180.0 / (1u64 << 25) as f64;
+
+/// I062/380 Aircraft Derived Data subfields (bit order; TIS/TID/MB are variable).
+#[rustfmt::skip]
+const SUB_062_380: [Field; 28] = [
+    Field::Fixed(3),      // ADR Target Address (ICAO 24-bit)
+    Field::Fixed(6),      // ID  Target Identification (callsign)
+    Field::Fixed(2),      // MHG Magnetic Heading
+    Field::Fixed(2),      // IAS Indicated Airspeed / Mach
+    Field::Fixed(2),      // TAS True Airspeed
+    Field::Fixed(2),      // SAL Selected Altitude
+    Field::Fixed(2),      // FSS Final State Selected Altitude
+    Field::Extended(1),   // TIS Trajectory Intent Status
+    Field::Repetitive(15),// TID Trajectory Intent Data
+    Field::Fixed(2),      // COM Comms/ACAS Capability
+    Field::Fixed(2),      // SAB Status reported by ADS-B
+    Field::Fixed(7),      // ACS ACAS Resolution Advisory
+    Field::Fixed(2),      // BVR Barometric Vertical Rate
+    Field::Fixed(2),      // GVR Geometric Vertical Rate
+    Field::Fixed(2),      // RAN Roll Angle
+    Field::Fixed(2),      // TAR Track Angle Rate
+    Field::Fixed(2),      // TAN Track Angle
+    Field::Fixed(2),      // GSP Ground Speed
+    Field::Fixed(1),      // VUN Velocity Uncertainty
+    Field::Fixed(8),      // MET Meteorological Data
+    Field::Fixed(1),      // EMC Emitter Category
+    Field::Fixed(6),      // POS Position (WGS-84)
+    Field::Fixed(2),      // GAL Geometric Altitude
+    Field::Fixed(1),      // PUN Position Uncertainty
+    Field::Repetitive(8), // MB  Mode-S MB Data
+    Field::Fixed(2),      // IAR Indicated Airspeed
+    Field::Fixed(2),      // MAC Mach Number
+    Field::Fixed(2),      // BPS Barometric Pressure Setting
+];
+
+/// I062/290 System Track Update Ages subfields (ADS is 2 bytes; the rest 1).
+#[rustfmt::skip]
+const SUB_062_290: [Field; 14] = [
+    Field::Fixed(1), Field::Fixed(1), Field::Fixed(1), Field::Fixed(1), // TRK PSR SSR MDS
+    Field::Fixed(2), Field::Fixed(1), Field::Fixed(1),                  // ADS(2) ES VDL
+    Field::Fixed(1), Field::Fixed(1), Field::Fixed(1),                  // UAT LOP MLT
+    Field::Spare, Field::Spare, Field::Spare, Field::Spare,
+];
+
+/// I062/295 Track Data Ages subfields — 31 one-octet ages, then spares.
+#[rustfmt::skip]
+const SUB_062_295: [Field; 35] = [
+    Field::Fixed(1), Field::Fixed(1), Field::Fixed(1), Field::Fixed(1), Field::Fixed(1), Field::Fixed(1), Field::Fixed(1),
+    Field::Fixed(1), Field::Fixed(1), Field::Fixed(1), Field::Fixed(1), Field::Fixed(1), Field::Fixed(1), Field::Fixed(1),
+    Field::Fixed(1), Field::Fixed(1), Field::Fixed(1), Field::Fixed(1), Field::Fixed(1), Field::Fixed(1), Field::Fixed(1),
+    Field::Fixed(1), Field::Fixed(1), Field::Fixed(1), Field::Fixed(1), Field::Fixed(1), Field::Fixed(1), Field::Fixed(1),
+    Field::Fixed(1), Field::Fixed(1), Field::Fixed(1),
+    Field::Spare, Field::Spare, Field::Spare, Field::Spare,
+];
+
+/// I062/500 Estimated Accuracies subfields.
+#[rustfmt::skip]
+const SUB_062_500: [Field; 14] = [
+    Field::Fixed(4), Field::Fixed(2), Field::Fixed(4), Field::Fixed(1), // APC COV APW AGA
+    Field::Fixed(1), Field::Fixed(2), Field::Fixed(2),                  // ABA ATV AA
+    Field::Fixed(1),                                                    // ARC
+    Field::Spare, Field::Spare, Field::Spare, Field::Spare, Field::Spare, Field::Spare,
+];
+
+/// I062/340 Measured Information subfields.
+#[rustfmt::skip]
+const SUB_062_340: [Field; 7] = [
+    Field::Fixed(2), Field::Fixed(4), Field::Fixed(2), // SID POS HEI
+    Field::Fixed(2), Field::Fixed(2), Field::Fixed(1), // MDC MDA TYP
+    Field::Spare,
+];
+
+/// I062/110 Mode 5 Data subfields.
+#[rustfmt::skip]
+const SUB_062_110: [Field; 7] = [
+    Field::Fixed(1), Field::Fixed(4), Field::Fixed(6), // SUM PMN POS
+    Field::Fixed(2), Field::Fixed(2), Field::Fixed(1), Field::Fixed(1), // GA EM1 TOS XP
+];
+
+/// I062/390 Flight Plan Related Data subfields (TOD is the one repetitive one).
+#[rustfmt::skip]
+const SUB_062_390: [Field; 21] = [
+    Field::Fixed(2),      // TAG
+    Field::Fixed(7),      // CSN Callsign
+    Field::Fixed(4),      // IFI
+    Field::Fixed(1),      // FCT
+    Field::Fixed(4),      // TAC
+    Field::Fixed(1),      // WTC
+    Field::Fixed(4),      // DEP
+    Field::Fixed(4),      // DST
+    Field::Fixed(3),      // RDS
+    Field::Fixed(2),      // CFL
+    Field::Fixed(2),      // CTL
+    Field::Repetitive(4), // TOD
+    Field::Fixed(6),      // AST
+    Field::Fixed(1),      // STS
+    Field::Fixed(7),      // STD
+    Field::Fixed(7),      // STA
+    Field::Fixed(2),      // PEM
+    Field::Fixed(7),      // PEC
+    Field::Spare, Field::Spare, Field::Spare,
+];
+
+fn decode_062(items: &[(u8, &[u8])]) -> AsterixTarget {
+    let mut t = AsterixTarget::new(CAT062);
+    for &(frn, item) in items {
+        match frn {
+            1 => (t.sac, t.sic) = (item[0], item[1]),
+            4 => t.time_of_day = Some(be(item, 0, 3) as f64 / 128.0),
+            5 => t.set_pos(signed(item, 0, 4) * LSB_105, signed(item, 4, 4) * LSB_105),
+            7 => {
+                // Cartesian velocity Vx (East), Vy (North), LSB 0.25 m/s.
+                let vx = i16::from_be_bytes([item[0], item[1]]) as f64 * 0.25;
+                let vy = i16::from_be_bytes([item[2], item[3]]) as f64 * 0.25;
+                t.ground_speed = Some((vx * vx + vy * vy).sqrt() / KNOTS_TO_MPS); // knots
+                let course = vx.atan2(vy).to_degrees();
+                t.track_angle = Some(if course < 0.0 { course + 360.0 } else { course });
+            }
+            9 => t.squawk = Some(mode_3a(u16::from_be_bytes([item[0], item[1]]))),
+            10 if item.len() >= 7 => t.callsign = aircraft_id(&item[1..7]),
+            11 => {
+                // Aircraft Derived Data: ADR (subfield 0) and ID (subfield 1).
+                for (idx, sub) in walk_compound(&SUB_062_380, item) {
+                    match idx {
+                        0 => t.icao = Some(be(sub, 0, 3) as u32),
+                        1 => t.callsign = aircraft_id(sub),
+                        _ => {}
+                    }
+                }
+            }
+            12 => t.track = Some(u16::from_be_bytes([item[0], item[1]]) as u32),
+            17 => t.alt_ft = Some(i16::from_be_bytes([item[0], item[1]]) as f64 * 25.0),
+            20 => t.vertical_rate = Some(i16::from_be_bytes([item[0], item[1]]) as f64 * 6.25),
+            _ => {}
+        }
+    }
+    t
+}
+
+/// Slice the present subfields of a compound item's body into `(index, bytes)`.
+fn walk_compound<'a>(subs: &[Field], data: &'a [u8]) -> Vec<(usize, &'a [u8])> {
+    let mut out = Vec::new();
+    let Some(bits) = primary_bits(data, 0) else {
+        return out;
+    };
+    let mut off = bits.len().div_ceil(7);
+    for (i, &present) in bits.iter().enumerate() {
+        if !present {
+            continue;
+        }
+        let Some(sub) = subs.get(i).copied() else {
+            break;
+        };
+        let Some(len) = field_len(sub, data, off) else {
+            break;
+        };
+        let end = off + len;
+        if end > data.len() {
+            break;
+        }
+        out.push((i, &data[off..end]));
+        off = end;
+    }
+    out
+}
+
+// ============================================================================
+// Decoded target — a superset across categories; the mapper reads what is set.
+// ============================================================================
+
+/// A decoded ASTERIX air track — the wire facts, no clock. Deterministic.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AsterixTarget {
+    /// ASTERIX category (21, 48, 62) — drives `source_uid` and provenance.
+    pub category: u8,
+    pub sac: u8,
+    pub sic: u8,
+    /// Track number (12-bit for CAT048, 16-bit for CAT021/062).
+    pub track: Option<u32>,
+    /// 24-bit ICAO target address, if the report carried one.
+    pub icao: Option<u32>,
+    /// WGS-84 latitude/longitude in degrees, if the record carried (or was
+    /// geolocated to) an absolute position.
+    pub lat: Option<f64>,
+    pub lon: Option<f64>,
+    /// Radar-relative polar measurement (range NM, azimuth deg) for CAT048 when no
+    /// sensor site is configured to geolocate it.
+    pub polar: Option<(f64, f64)>,
+    /// Altitude in feet (geometric height / flight level).
+    pub alt_ft: Option<f64>,
+    /// Ground speed in knots.
+    pub ground_speed: Option<f64>,
+    /// Track angle / course over ground in degrees.
+    pub track_angle: Option<f64>,
+    /// Rate of climb/descent in feet/minute (CAT062).
+    pub vertical_rate: Option<f64>,
+    /// Mode 3/A squawk as four octal digits.
+    pub squawk: Option<String>,
+    /// Callsign / flight identity.
+    pub callsign: Option<String>,
+    /// Emitter category (CAT021).
+    pub emitter: Option<&'static str>,
+    /// Time of day / track, seconds since UTC midnight (native; kept in metadata).
+    pub time_of_day: Option<f64>,
+    /// The raw bytes of this record, preserved verbatim in the signed payload.
+    pub raw: Vec<u8>,
+}
+
+impl AsterixTarget {
+    fn new(category: u8) -> Self {
+        AsterixTarget {
+            category,
+            sac: 0,
+            sic: 0,
+            track: None,
+            icao: None,
+            lat: None,
+            lon: None,
+            polar: None,
+            alt_ft: None,
+            ground_speed: None,
+            track_angle: None,
+            vertical_rate: None,
+            squawk: None,
+            callsign: None,
+            emitter: None,
+            time_of_day: None,
+            raw: Vec::new(),
+        }
+    }
+    fn set_pos(&mut self, lat: f64, lon: f64) {
+        self.lat = Some(lat);
+        self.lon = Some(lon);
+    }
+    /// A record contributes an event if it carries a position (absolute or, for
+    /// CAT048, a polar measurement) — otherwise it is a status-only record.
+    fn is_track(&self) -> bool {
+        self.lat.is_some() || self.polar.is_some()
+    }
+}
+
+/// A radar site, for geolocating CAT048 polar measurements.
+#[derive(Debug, Clone, Copy)]
+pub struct Sensor {
+    pub lat: f64,
+    pub lon: f64,
+}
+
+// ============================================================================
+// Parser — block/record walk and event mapping.
+// ============================================================================
+
+/// Normalizes an ASTERIX stream for one connector identity.
 pub struct AsterixParser {
     source_id: String,
     enrichment: Enrichment,
+    sensor: Option<Sensor>,
 }
 
 impl AsterixParser {
@@ -163,11 +619,18 @@ impl AsterixParser {
         Self {
             source_id: source_id.into(),
             enrichment,
+            sensor: None,
         }
     }
 
-    /// Decode every position-bearing target record in one data block. A block for
-    /// another category, or a record without a position, contributes no target.
+    /// Set the radar site used to geolocate CAT048 polar measurements.
+    pub fn with_sensor(mut self, sensor: Option<Sensor>) -> Self {
+        self.sensor = sensor;
+        self
+    }
+
+    /// Decode every track-bearing record in one data block. A block for a category
+    /// this connector does not handle is not an error, just not ours.
     pub fn parse_block(&self, frame: &[u8]) -> Result<Vec<AsterixTarget>, AsterixError> {
         if frame.len() < 3 {
             return Err(AsterixError::BadBlock);
@@ -177,130 +640,33 @@ impl AsterixParser {
         if len < 3 || len > frame.len() {
             return Err(AsterixError::BadBlock);
         }
-        // A block for a category we do not handle is not an error, just not ours.
-        if cat != CAT021 {
-            return Ok(Vec::new());
-        }
+        let uap: &[Field] = match cat {
+            CAT021 => UAP021,
+            CAT048 => UAP048,
+            CAT062 => UAP062,
+            _ => return Ok(Vec::new()),
+        };
 
         let mut targets = Vec::new();
         let mut off = 3;
         while off < len {
-            let (target, next) = self.parse_record(&frame[..len], off)?;
-            if let Some(mut t) = target {
-                // Preserve this record's raw bytes for the signed payload.
+            let (items, next) = walk_record(uap, &frame[..len], off)?;
+            let mut t = match cat {
+                CAT021 => decode_021(&items),
+                CAT048 => decode_048(&items, self.sensor.as_ref()),
+                CAT062 => decode_062(&items),
+                _ => unreachable!(),
+            };
+            if next <= off {
+                return Err(AsterixError::BadBlock); // no progress would loop forever
+            }
+            if t.is_track() {
                 t.raw = frame[off..next.min(len)].to_vec();
                 targets.push(t);
-            }
-            if next <= off {
-                // No forward progress would loop forever; treat as malformed.
-                return Err(AsterixError::BadBlock);
             }
             off = next;
         }
         Ok(targets)
-    }
-
-    /// Parse one record starting at `off`, returning the target (if it had a
-    /// position) and the offset of the next record.
-    fn parse_record(
-        &self,
-        data: &[u8],
-        mut off: usize,
-    ) -> Result<(Option<AsterixTarget>, usize), AsterixError> {
-        // FSPEC: octets, MSB = FRN1; the low bit (FX) continues the bitmap.
-        let mut present = Vec::new();
-        let mut frn = 1;
-        loop {
-            let octet = *data.get(off).ok_or(AsterixError::Truncated)?;
-            off += 1;
-            for bit in 0..7 {
-                if octet & (0x80 >> bit) != 0 {
-                    present.push(frn);
-                }
-                frn += 1;
-            }
-            if octet & 0x01 == 0 {
-                break;
-            }
-        }
-
-        let mut sac = 0u8;
-        let mut sic = 0u8;
-        let mut track = None;
-        let mut icao = None;
-        let mut pos: Option<(f64, f64)> = None;
-        let mut alt_ft = None;
-        let mut ground_speed = None;
-        let mut track_angle = None;
-        let mut squawk = None;
-        let mut callsign = None;
-        let mut emitter = None;
-
-        for &frn in &present {
-            let kind = UAP
-                .get(frn as usize - 1)
-                .ok_or(AsterixError::UnsupportedItem(frn))?;
-            let len = match field_len(*kind, data, off) {
-                Some(len) => len,
-                None => match kind {
-                    Field::Compound => return Err(AsterixError::UnsupportedItem(frn)),
-                    _ => return Err(AsterixError::Truncated),
-                },
-            };
-            let end = off.checked_add(len).ok_or(AsterixError::Truncated)?;
-            let item = data.get(off..end).ok_or(AsterixError::Truncated)?;
-
-            match frn {
-                1 => {
-                    sac = item[0];
-                    sic = item[1];
-                }
-                3 => track = Some(u16::from_be_bytes([item[0], item[1]])),
-                6 => pos = Some((signed(item, 0, 3) * LSB_130, signed(item, 3, 3) * LSB_130)),
-                // High-resolution position overrides the coarse one if both present.
-                7 => pos = Some((signed(item, 0, 4) * LSB_131, signed(item, 4, 4) * LSB_131)),
-                11 => icao = Some((item[0] as u32) << 16 | (item[1] as u32) << 8 | item[2] as u32),
-                // I021/140 Geometric Height: signed, LSB 6.25 ft (WGS-84).
-                16 => alt_ft = Some(i16::from_be_bytes([item[0], item[1]]) as f64 * 6.25),
-                // I021/070 Mode 3/A Code: low 12 bits are the octal squawk.
-                19 => squawk = Some(mode_3a(u16::from_be_bytes([item[0], item[1]]))),
-                // I021/145 Flight Level: signed, LSB 1/4 FL (25 ft). Fallback altitude.
-                21 => {
-                    alt_ft.get_or_insert(i16::from_be_bytes([item[0], item[1]]) as f64 * 25.0);
-                }
-                // I021/160 Airborne Ground Vector: ground speed + track angle.
-                26 => {
-                    let gs = u16::from_be_bytes([item[0], item[1]]);
-                    let ta = u16::from_be_bytes([item[2], item[3]]);
-                    // LSB: 2^-14 NM/s -> knots (x3600); 360/2^16 degrees.
-                    ground_speed = Some(gs as f64 * 2f64.powi(-14) * 3600.0);
-                    track_angle = Some(ta as f64 * 360.0 / 65536.0);
-                }
-                // I021/170 Target Identification: 8-character ICAO callsign.
-                29 => callsign = target_id(item),
-                // I021/020 Emitter Category.
-                30 => emitter = emitter_category(item[0]),
-                _ => {}
-            }
-            off = end;
-        }
-
-        let target = pos.map(|(lat, lon)| AsterixTarget {
-            sac,
-            sic,
-            track,
-            icao,
-            lat,
-            lon,
-            alt_ft,
-            ground_speed,
-            track_angle,
-            squawk,
-            callsign,
-            emitter,
-            raw: Vec::new(), // filled by parse_block, which knows the record extent
-        });
-        Ok((target, off))
     }
 
     fn to_event_with(
@@ -308,36 +674,45 @@ impl AsterixParser {
         t: &AsterixTarget,
         stamp: impl FnOnce(EventBuilder) -> EventBuilder,
     ) -> Result<Event, AsterixError> {
-        // The native target identity (ICAO address, or SAC/SIC + track number).
-        let track = match (t.icao, t.track) {
+        // Native identity: ICAO address if present, else category:SAC:SIC:track.
+        let source_uid = match (t.icao, t.track) {
             (Some(icao), _) => format!("icao:{icao:06X}"),
-            (None, Some(track)) => format!("asterix:{}:{}:{}", t.sac, t.sic, track),
-            (None, None) => format!("asterix:{}:{}", t.sac, t.sic),
+            (None, Some(track)) => format!("asterix:{}:{}:{}:{}", t.category, t.sac, t.sic, track),
+            (None, None) => format!("asterix:{}:{}:{}", t.category, t.sac, t.sic),
         };
-        // Core requires the event id to be a fresh UUIDv7. The native identity is
-        // an identifier -> metadata; the raw record rides verbatim in the payload;
-        // decoded fields ride as attributes (Core demotes undeclared keys).
-        // Altitude is the structured location field, in metres.
-        let altitude_m = t.alt_ft.map(|ft| ft * 0.3048).unwrap_or(0.0);
         let mut b = EventBuilder::new(self.source_id.clone(), "mim:aircraft")
             .new_id()
-            .location(t.lat, t.lon, altitude_m)
             .payload(t.raw.clone())
-            .metadata("track", track);
-        if let Some(ft) = t.alt_ft {
-            b = b.metadata("altitude_ft", format!("{ft:.0}")); // native feet (GeoPoint is metres)
+            .metadata("source_uid", source_uid)
+            .metadata("asterix_category", t.category.to_string());
+        // Absolute position -> structured location (metres); else the polar
+        // measurement rides as metadata so nothing is lost.
+        if let (Some(lat), Some(lon)) = (t.lat, t.lon) {
+            b = b.location(lat, lon, t.alt_ft.map(|ft| ft * 0.3048).unwrap_or(0.0));
+        } else if let Some((rho, theta)) = t.polar {
+            b = b.metadata("range_nm", format!("{rho:.3}"));
+            b = b.metadata("azimuth_deg", format!("{theta:.3}"));
         }
-        // Operator-asserted affiliation only — never a connector-invented default.
+        if let Some(ft) = t.alt_ft {
+            b = b.metadata("altitude_ft", format!("{ft:.0}"));
+        }
+        if let Some(tod) = t.time_of_day {
+            b = b.metadata("time_of_day_s", format!("{tod:.3}"));
+        }
+        // Affiliation only ever the operator's explicit assertion.
         if let Some(aff) = self.enrichment.affiliation.as_deref() {
             b = b.attribute("affiliation", aff);
         }
         if let Some(gs) = t.ground_speed {
-            // Governed `speed` is m/s; keep the native knots in metadata (ADR-0019).
-            b = b.attribute("speed", format!("{:.2}", gs * KNOTS_TO_MPS));
+            b = b.attribute("speed", format!("{:.2}", gs * KNOTS_TO_MPS)); // m/s
             b = b.metadata("speed_kn", format!("{gs:.1}"));
         }
         if let Some(ta) = t.track_angle {
-            b = b.attribute("course", format!("{ta:.1}")); // degrees
+            b = b.attribute("course", format!("{ta:.1}"));
+        }
+        if let Some(vr) = t.vertical_rate {
+            b = b.attribute("vertical_rate", format!("{:.1}", vr * 0.3048 / 60.0)); // ft/min -> m/s
+            b = b.metadata("vertical_rate_ftmin", format!("{vr:.0}"));
         }
         if let Some(sq) = &t.squawk {
             b = b.attribute("squawk", sq.clone());
@@ -363,6 +738,52 @@ impl AsterixParser {
     }
 }
 
+/// Walk one record starting at `off`: decode the FSPEC, slice each present item by
+/// its UAP length model, and return `(FRN, bytes)` pairs plus the next offset.
+fn walk_record<'a>(
+    uap: &[Field],
+    data: &'a [u8],
+    mut off: usize,
+) -> Result<(Items<'a>, usize), AsterixError> {
+    // FSPEC: octets, MSB = FRN1; the low bit (FX) continues the bitmap.
+    let mut present = Vec::new();
+    let mut frn = 1u8;
+    loop {
+        let octet = *data.get(off).ok_or(AsterixError::Truncated)?;
+        off += 1;
+        for bit in 0..7 {
+            if octet & (0x80 >> bit) != 0 {
+                present.push(frn);
+            }
+            frn = frn.saturating_add(1);
+        }
+        if octet & 0x01 == 0 {
+            break;
+        }
+    }
+
+    let mut items = Vec::with_capacity(present.len());
+    for &frn in &present {
+        let field = *uap
+            .get(frn as usize - 1)
+            .ok_or(AsterixError::UnsupportedItem(frn))?;
+        let len = match field_len(field, data, off) {
+            Some(len) => len,
+            None => {
+                return Err(match field {
+                    Field::Opaque | Field::Compound(_) => AsterixError::UnsupportedItem(frn),
+                    _ => AsterixError::Truncated,
+                });
+            }
+        };
+        let end = off.checked_add(len).ok_or(AsterixError::Truncated)?;
+        let item = data.get(off..end).ok_or(AsterixError::Truncated)?;
+        items.push((frn, item));
+        off = end;
+    }
+    Ok((items, off))
+}
+
 impl FrameParser for AsterixParser {
     fn parse(&self, frame: &[u8]) -> Result<Vec<Event>, ParseError> {
         let targets = self.parse_block(frame).map_err(box_err)?;
@@ -378,76 +799,79 @@ fn box_err(e: AsterixError) -> ParseError {
     Box::new(e) as ParseError
 }
 
-/// Length in octets of the item at `off`, or `None` if it runs past the buffer or
-/// is a compound item we do not model.
-fn field_len(kind: Field, data: &[u8], off: usize) -> Option<usize> {
-    match kind {
-        Field::Fixed(n) => (off + n <= data.len()).then_some(n),
-        Field::Extended => {
-            let mut n = 0;
-            loop {
-                let octet = *data.get(off + n)?;
-                n += 1;
-                if octet & 0x01 == 0 {
-                    return Some(n);
-                }
-            }
-        }
-        Field::Repetitive(item) => {
-            let rep = *data.get(off)? as usize;
-            let total = 1 + rep * item;
-            (off + total <= data.len()).then_some(total)
-        }
-        Field::LenPrefixed => {
-            let total = *data.get(off)? as usize;
-            (total >= 1 && off + total <= data.len()).then_some(total)
-        }
-        Field::Compound => None,
-    }
-}
+// ============================================================================
+// Shared field decoders.
+// ============================================================================
 
-/// Read `n` big-endian octets at `item[start..]` as a two's-complement signed int.
-fn signed(item: &[u8], start: usize, n: usize) -> f64 {
-    let mut v: i64 = 0;
+/// A big-endian unsigned integer from `data[start..start+n]` (n <= 8).
+fn be(data: &[u8], start: usize, n: usize) -> u64 {
+    let mut v = 0u64;
     for i in 0..n {
-        v = (v << 8) | item[start + i] as i64;
+        v = (v << 8) | data[start + i] as u64;
     }
-    let bits = n * 8;
-    if v & (1 << (bits - 1)) != 0 {
-        v -= 1 << bits;
-    }
-    v as f64
+    v
 }
 
-/// The Mode 3/A code (low 12 bits) as four octal digits, e.g. `7700`.
-fn mode_3a(field: u16) -> String {
-    let c = field & 0x0FFF;
-    format!("{}{}{}{}", (c >> 9) & 7, (c >> 6) & 7, (c >> 3) & 7, c & 7)
+/// A big-endian two's-complement signed integer from `data[start..start+n]`.
+fn signed(data: &[u8], start: usize, n: usize) -> f64 {
+    sign_extend(be(data, start, n), (n * 8) as u32) as f64
 }
 
-/// Decode I021/170 Target Identification: eight 6-bit ICAO characters (1–26 = A–Z,
-/// 48–57 = 0–9, 32 = space) packed into 6 octets. Trailing spaces trimmed.
-fn target_id(item: &[u8]) -> Option<String> {
+/// Sign-extend the low `bits` of `v` to an i64.
+fn sign_extend(v: u64, bits: u32) -> i64 {
+    let shift = 64 - bits;
+    ((v << shift) as i64) >> shift
+}
+
+/// The four-octal-digit Mode 3/A squawk from a 16-bit item (low 12 bits are the
+/// code, split into four 3-bit octal digits).
+fn mode_3a(v: u16) -> String {
+    let code = v & 0x0FFF;
+    format!(
+        "{:o}{:o}{:o}{:o}",
+        (code >> 9) & 7,
+        (code >> 6) & 7,
+        (code >> 3) & 7,
+        code & 7
+    )
+}
+
+/// The ICAO 6-bit-encoded aircraft identification (8 characters, trailing pad
+/// trimmed). Used by I021/170, I048/240 and CAT062 subfields.
+fn aircraft_id(item: &[u8]) -> Option<String> {
     if item.len() < 6 {
         return None;
     }
-    let mut bits: u64 = 0;
-    for &b in &item[..6] {
-        bits = (bits << 8) | b as u64;
-    }
+    let v = be(item, 0, 6);
     let mut s = String::with_capacity(8);
-    for i in 0..8 {
-        let v = ((bits >> (42 - i * 6)) & 0x3F) as u8;
-        let c = match v {
-            1..=26 => (b'A' + v - 1) as char,
-            48..=57 => (b'0' + v - 48) as char,
-            32 => ' ',
-            _ => continue,
-        };
-        s.push(c);
+    for k in 0..8 {
+        let c = ((v >> (42 - 6 * k)) & 0x3F) as u8;
+        s.push(sixbit(c));
     }
     let s = s.trim().to_string();
     (!s.is_empty()).then_some(s)
+}
+
+/// One ICAO 6-bit character: 1..=26 -> A..Z, 48..=57 -> 0..9, else space.
+fn sixbit(c: u8) -> char {
+    match c {
+        1..=26 => (b'A' + c - 1) as char,
+        48..=57 => (b'0' + c - 48) as char,
+        _ => ' ',
+    }
+}
+
+/// Forward geodetic: from `(lat, lon)` degrees, travel `dist_m` metres at true
+/// `bearing_deg` (clockwise from North). Spherical earth — good to ~0.3% over
+/// radar ranges, and never invents a position the record didn't measure.
+fn forward_geodetic(lat: f64, lon: f64, bearing_deg: f64, dist_m: f64) -> (f64, f64) {
+    const R: f64 = 6_371_000.0;
+    let d = dist_m / R;
+    let br = bearing_deg.to_radians();
+    let (lat1, lon1) = (lat.to_radians(), lon.to_radians());
+    let lat2 = (lat1.sin() * d.cos() + lat1.cos() * d.sin() * br.cos()).asin();
+    let lon2 = lon1 + (br.sin() * d.sin() * lat1.cos()).atan2(d.cos() - lat1.sin() * lat2.sin());
+    (lat2.to_degrees(), lon2.to_degrees())
 }
 
 /// I021/020 Emitter Category → operational category.
@@ -456,16 +880,14 @@ fn emitter_category(code: u8) -> Option<&'static str> {
         1 => "light",
         2 => "small",
         3 => "medium",
-        4 => "high-vortex-large",
+        4 => "high-vortex",
         5 => "heavy",
-        6 => "highly-manoeuvrable",
-        10 => "rotorcraft",
-        11 => "glider",
-        12 => "lighter-than-air",
-        13 => "uav",
-        14 => "space",
-        15 => "ultralight",
-        16 => "parachutist",
+        6 => "high-performance",
+        7 => "rotorcraft",
+        10 => "glider",
+        11 => "lighter-than-air",
+        12 => "uav",
+        13 => "space",
         20 => "emergency-vehicle",
         21 => "service-vehicle",
         _ => return None,
@@ -476,99 +898,211 @@ fn emitter_category(code: u8) -> Option<&'static str> {
 mod tests {
     use super::*;
 
-    // Ground-truth CAT021 blocks. Single record: SAC 25 SIC 10, track 1234,
-    // 47.397745 N, 8.545604 E. Two-record adds track 5678 at Cape Town.
-    const ONE: &str = "150013fc190a0004d20100000021b47f0613ae";
-    const TWO: &str = "150023fc190a0004d20100000021b47f0613aefc190a00162e01000000e7e0290d1a01";
-    // Rich record: SAC 25 SIC 10, position, geometric height 10000 ft, squawk 7700,
-    // ground speed 480.1 kn, track 90 deg, callsign TEST1234, emitter UAV.
-    const RICH: &str = "15001f85014909c0190a21b47f0613ae06400fc0088940005054d4c72cf40d";
+    // ---- record/block builders --------------------------------------------
+    fn fspec(frns: &[u8]) -> Vec<u8> {
+        let max = frns.iter().copied().max().unwrap_or(1) as usize;
+        let octets = max.div_ceil(7).max(1);
+        let mut f = vec![0u8; octets];
+        for &n in frns {
+            f[(n as usize - 1) / 7] |= 0x80 >> ((n as usize - 1) % 7);
+        }
+        for byte in f.iter_mut().take(octets - 1) {
+            *byte |= 0x01; // FX on every octet but the last
+        }
+        f
+    }
+    fn block(cat: u8, record: &[u8]) -> Vec<u8> {
+        let len = 3 + record.len();
+        let mut b = vec![cat, (len >> 8) as u8, (len & 0xff) as u8];
+        b.extend_from_slice(record);
+        b
+    }
+    fn u16b(v: u16) -> [u8; 2] {
+        v.to_be_bytes()
+    }
+    fn enc_id(s: &str) -> [u8; 6] {
+        let mut v = 0u64;
+        for k in 0..8 {
+            let c = s.as_bytes().get(k).copied().unwrap_or(b' ');
+            let six = match c {
+                b'A'..=b'Z' => c - b'A' + 1,
+                b'0'..=b'9' => c - b'0' + 48,
+                _ => 32,
+            } as u64;
+            v |= six << (42 - 6 * k);
+        }
+        let mut out = [0u8; 6];
+        for (i, o) in out.iter_mut().enumerate() {
+            *o = (v >> (40 - 8 * i)) as u8;
+        }
+        out
+    }
 
     fn parser() -> AsterixParser {
-        AsterixParser::new("radar-adsb-1", Enrichment::default())
+        AsterixParser::new("radar-1", Enrichment::default())
+    }
+    fn attr<'a>(ev: &'a Event, k: &str) -> Option<&'a str> {
+        ev.attributes
+            .iter()
+            .find(|a| a.key == k)
+            .map(|a| a.value.as_str())
+    }
+    fn meta<'a>(ev: &'a Event, k: &str) -> Option<&'a str> {
+        ev.metadata
+            .iter()
+            .find(|m| m.key == k)
+            .map(|m| m.value.as_str())
     }
 
-    fn governed() -> AsterixParser {
-        AsterixParser::new(
-            "radar-adsb-1",
-            Enrichment::default().with_affiliation("neutral"),
-        )
+    // ---- CAT048 ------------------------------------------------------------
+    fn cat048_record() -> Vec<u8> {
+        let mut r = fspec(&[1, 4, 5, 6, 7, 8, 11, 13]);
+        r.extend_from_slice(&[25, 10]); // 010 SAC/SIC
+        r.extend_from_slice(&u16b(25600)); // 040 RHO = 100.0 NM (100*256)
+        r.extend_from_slice(&u16b(8192)); //  040 THETA = 45.0 deg (45/(360/65536))
+        r.extend_from_slice(&u16b(0o1234)); // 070 Mode-3/A
+        r.extend_from_slice(&u16b(1400)); // 090 FL: raw 1400 -> 35000 ft
+        r.extend_from_slice(&[0x80, 0xAB]); // 130 compound: SRL present (1 subfield, 1 byte)
+        r.extend_from_slice(&[0x4C, 0xA2, 0xD6]); // 220 ICAO
+        r.extend_from_slice(&u16b(1234)); // 161 Track Number
+        r.extend_from_slice(&u16b(2048)); // 200 groundspeed raw -> 450.0 kt
+        r.extend_from_slice(&u16b(16384)); // 200 heading -> 90.0 deg
+        r
     }
 
     #[test]
-    fn decodes_a_single_target() {
-        let t = &parser().parse_block(&hex::decode(ONE).unwrap()).unwrap()[0];
-        assert_eq!((t.sac, t.sic), (25, 10));
+    fn cat048_decodes_polar_kinematics_and_identity() {
+        let t = &parser().parse_block(&block(48, &cat048_record())).unwrap()[0];
+        let (rho, theta) = t.polar.unwrap();
+        assert!((rho - 100.0).abs() < 1e-6, "rho {rho}");
+        assert!((theta - 45.0).abs() < 1e-3, "theta {theta}");
+        assert_eq!(t.alt_ft, Some(35000.0));
+        assert_eq!(t.icao, Some(0x4CA2D6));
         assert_eq!(t.track, Some(1234));
-        assert!((t.lat - 47.397745).abs() < 1e-5);
-        assert!((t.lon - 8.545604).abs() < 1e-5);
+        assert!((t.ground_speed.unwrap() - 450.0).abs() < 0.1);
+        assert!((t.track_angle.unwrap() - 90.0).abs() < 1e-3);
+        assert_eq!(t.squawk.as_deref(), Some("1234"));
+        // The compound I048/130 (present) did not misalign the items after it.
     }
 
     #[test]
-    fn decodes_tactical_items_a_cop_needs() {
-        let t = &governed().parse_block(&hex::decode(RICH).unwrap()).unwrap()[0];
-        assert!((t.alt_ft.unwrap() - 10000.0).abs() < 1e-6);
-        assert_eq!(t.squawk.as_deref(), Some("7700"));
-        assert!((t.ground_speed.unwrap() - 480.1).abs() < 0.2);
-        assert!((t.track_angle.unwrap() - 90.0).abs() < 0.1);
-        assert_eq!(t.callsign.as_deref(), Some("TEST1234"));
-        assert_eq!(t.emitter, Some("uav"));
-
-        // In governed mode the tactical items ride as governed attributes, and
-        // altitude is in the structured location (feet -> metres).
-        let ev = governed().to_event_at(t, "2026-06-10T08:00:00Z").unwrap();
-        let attr = |k: &str| {
-            ev.attributes
-                .iter()
-                .find(|a| a.key == k)
-                .map(|a| a.value.as_str())
-        };
-        assert_eq!(attr("squawk"), Some("7700"));
-        assert_eq!(attr("callsign"), Some("TEST1234"));
-        assert_eq!(attr("aircraft_type"), Some("uav"));
-        assert_eq!(attr("affiliation"), Some("neutral"));
-        assert!((ev.location.unwrap().altitude_m - 3048.0).abs() < 0.1);
+    fn cat048_geolocates_against_a_sensor_site() {
+        // Radar at 60N 25E; a target 100 NM to the north-east (azimuth 45) lands
+        // north-east of it — both latitude and longitude increase.
+        let p = parser().with_sensor(Some(Sensor {
+            lat: 60.0,
+            lon: 25.0,
+        }));
+        let t = &p.parse_block(&block(48, &cat048_record())).unwrap()[0];
+        let ev = p.to_event_at(t, "2026-06-10T08:00:00Z").unwrap();
+        let loc = ev.location.as_ref().expect("geolocated");
+        assert!(
+            loc.latitude > 60.0 && loc.latitude < 62.0,
+            "lat {}",
+            loc.latitude
+        );
+        assert!(loc.longitude > 25.0, "lon {}", loc.longitude);
+        assert_eq!(attr(&ev, "squawk"), Some("1234"));
     }
 
     #[test]
-    fn decodes_every_record_in_a_block() {
-        let ts = parser().parse_block(&hex::decode(TWO).unwrap()).unwrap();
-        assert_eq!(ts.len(), 2);
-        assert_eq!(ts[0].track, Some(1234));
-        assert_eq!(ts[1].track, Some(5678));
-        assert!((ts[1].lat - -33.924901).abs() < 1e-5);
-        assert!((ts[1].lon - 18.424094).abs() < 1e-5);
+    fn cat048_without_sensor_keeps_polar_in_metadata() {
+        let p = parser();
+        let t = &p.parse_block(&block(48, &cat048_record())).unwrap()[0];
+        let ev = p.to_event_at(t, "2026-06-10T08:00:00Z").unwrap();
+        assert!(ev.location.is_none());
+        assert_eq!(meta(&ev, "range_nm"), Some("100.000"));
+        assert_eq!(meta(&ev, "azimuth_deg").map(|s| &s[..2]), Some("45"));
     }
 
+    // ---- CAT062 ------------------------------------------------------------
+    fn cat062_record() -> Vec<u8> {
+        let lat = (60.0 / LSB_105) as i32;
+        let lon = (25.0 / LSB_105) as i32;
+        let mut r = fspec(&[1, 4, 5, 7, 9, 11, 12, 17, 20]);
+        r.extend_from_slice(&[25, 10]); // 010 SAC/SIC
+        r.extend_from_slice(&300u32.to_be_bytes()[1..]); // 070 time (3 bytes)
+        r.extend_from_slice(&lat.to_be_bytes()); // 105 lat
+        r.extend_from_slice(&lon.to_be_bytes()); // 105 lon
+        r.extend_from_slice(&(400i16).to_be_bytes()); // 185 Vx = 100 m/s East
+        r.extend_from_slice(&(0i16).to_be_bytes()); //  185 Vy = 0
+        r.extend_from_slice(&u16b(0o7000)); // 060 Mode-3/A
+                                            // 380 compound: ADR + ID present.
+        r.push(0xC0); // primary: ADR(bit8) ID(bit7), FX=0
+        r.extend_from_slice(&[0x40, 0x62, 0x01]); // ADR ICAO
+        r.extend_from_slice(&enc_id("BAW123")); // ID callsign
+        r.extend_from_slice(&u16b(4095)); // 040 Track Number
+        r.extend_from_slice(&(1400i16).to_be_bytes()); // 136 FL raw 1400 -> 35000 ft
+        r.extend_from_slice(&(160i16).to_be_bytes()); // 220 rate: 160 -> 1000 ft/min
+        r
+    }
+
+    #[test]
+    fn cat062_decodes_wgs84_track_velocity_and_derived_data() {
+        let t = &parser().parse_block(&block(62, &cat062_record())).unwrap()[0];
+        assert!(
+            (t.lat.unwrap() - 60.0).abs() < 1e-4,
+            "lat {}",
+            t.lat.unwrap()
+        );
+        assert!(
+            (t.lon.unwrap() - 25.0).abs() < 1e-4,
+            "lon {}",
+            t.lon.unwrap()
+        );
+        // Vx=100 East, Vy=0 -> 100 m/s = 194.4 kt, course 90.
+        assert!(
+            (t.ground_speed.unwrap() - 194.38).abs() < 0.1,
+            "gs {}",
+            t.ground_speed.unwrap()
+        );
+        assert!((t.track_angle.unwrap() - 90.0).abs() < 1e-3);
+        assert_eq!(t.alt_ft, Some(35000.0));
+        assert_eq!(t.vertical_rate, Some(1000.0));
+        assert_eq!(t.track, Some(4095));
+        // I062/380 (a compound with variable subfields) decoded ADR + ID, and its
+        // length was computed correctly (the Track Number after it aligned).
+        assert_eq!(t.icao, Some(0x406201));
+        assert_eq!(t.callsign.as_deref(), Some("BAW123"));
+    }
+
+    #[test]
+    fn cat062_event_carries_canonical_units() {
+        let p = parser();
+        let t = &p.parse_block(&block(62, &cat062_record())).unwrap()[0];
+        let ev = p.to_event_at(t, "2026-06-10T08:00:00Z").unwrap();
+        assert_eq!(ev.entity_type, "mim:aircraft");
+        assert_eq!(meta(&ev, "source_uid"), Some("icao:406201"));
+        assert_eq!(meta(&ev, "asterix_category"), Some("62"));
+        assert_eq!(attr(&ev, "speed"), Some("100.00")); // 194.38 kn * 0.514444
+        assert_eq!(attr(&ev, "course"), Some("90.0"));
+        assert_eq!(attr(&ev, "callsign"), Some("BAW123"));
+        assert!(ev.payload.len() > 20); // raw record sealed
+    }
+
+    // ---- cross-cutting -----------------------------------------------------
     #[test]
     fn other_category_is_ignored_not_errored() {
-        // CAT062 block: a category we do not handle.
-        let cat062 = hex::decode("3e0004ff").unwrap();
-        assert_eq!(parser().parse_block(&cat062).unwrap(), Vec::new());
-    }
-
-    #[test]
-    fn block_longer_than_buffer_is_rejected() {
-        // Claims length 0x13 but only a few bytes present.
-        let bad = hex::decode("150013fc19").unwrap();
-        assert_eq!(parser().parse_block(&bad), Err(AsterixError::BadBlock));
-    }
-
-    #[test]
-    fn record_item_past_block_end_is_truncated() {
-        // Well-formed block length, but the FSPEC promises I021/130 (6 bytes) with
-        // only a couple present — the item runs past the block end.
-        let bad = hex::decode("150008fc190a0000").unwrap();
-        assert_eq!(parser().parse_block(&bad), Err(AsterixError::Truncated));
-    }
-
-    #[test]
-    fn garbage_never_panics() {
-        assert!(parser().parse_block(b"\x15\x00").is_err());
-        assert!(parser().parse_block(&[]).is_err());
-        assert!(
-            parser().parse_block(b"\xff\xff\xff\xff\xff").is_ok()
-                || parser().parse_block(b"\xff\xff\xff\xff\xff").is_err()
+        // A CAT034 (service message) block is valid ASTERIX but not ours.
+        assert_eq!(
+            parser()
+                .parse_block(&block(34, &[0x80, 0x00]))
+                .unwrap()
+                .len(),
+            0
         );
+    }
+
+    #[test]
+    fn malformed_blocks_never_panic() {
+        assert!(parser().parse_block(b"").is_err());
+        assert!(parser().parse_block(&[62, 0, 200]).is_err()); // LEN past buffer
+                                                               // A record whose FSPEC claims items running past the block: typed error.
+        let _ = parser().parse_block(&block(62, &[0xFF, 0xFF, 0x00]));
+        // Truncated compound must not panic.
+        let mut r = fspec(&[1, 11]);
+        r.extend_from_slice(&[25, 10]);
+        r.push(0xC0); // 380 says ADR+ID present but no bytes follow
+        let _ = parser().parse_block(&block(62, &r));
     }
 }

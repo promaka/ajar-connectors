@@ -1,18 +1,32 @@
 # SPDX-License-Identifier: Apache-2.0
 #
-# Example ASTERIX CAT021 (ADS-B) ingress config. Copy, adjust, and run:
+# Example ASTERIX ingress config. Copy, adjust, and run:
 #   ajar-asterix ./asterix.toml
 #
-# A second radar/ADS-B feed is a second copy of this file with a different
-# source_id, key, and group — no rebuild.
+# One connector decodes whatever air-picture categories arrive on its feed:
+#   CAT021 ADS-B target reports (cooperative traffic, WGS-84 position)
+#   CAT048 monoradar target reports (primary + Mode S/SSR; range/azimuth position)
+#   CAT062 SDPS system tracks (the fused, recognised air picture; WGS-84 position)
+# Blocks of any other category ride past untouched. A second feed is a second copy
+# of this file with a different source_id, key, and group — no rebuild.
 
 source_id = "radar-adsb-1"
 nats_url = "nats://127.0.0.1:4222"
 subject_prefix = "ajar.ingest"
 signing_key_path = "/etc/ajar/radar-adsb-1.key"
 
-# ADS-B/radar picture: affiliation is assigned downstream; unknown by default.
+# The air picture carries no affiliation of its own; assign one for the COP.
 # default_affiliation = "unknown"
+
+# CAT048 only: monoradar reports are range/azimuth RELATIVE to the radar, so the
+# connector needs the radar's site to geolocate them onto the map. Set it to this
+# radar's position. Without it, CAT048 reports still flow — the range/azimuth ride
+# as metadata — but carry no absolute location. CAT021/CAT062 ignore this (their
+# positions are already WGS-84).
+# [sensor]
+# lat = 60.31
+# lon = 24.97
+# alt_m = 55.0
 
 [transport]
 # ASTERIX is usually distributed as UDP multicast on a surveillance LAN.

@@ -38,6 +38,26 @@ pub struct Config {
     /// this. Unset resolves to `unknown`.
     #[serde(default)]
     pub default_affiliation: Option<String>,
+    /// The sensor's own site, for feeds that report positions relative to it
+    /// (ASTERIX CAT048 monoradar reports are range/azimuth from the radar). A
+    /// connector that needs it geolocates against this; without it, the relative
+    /// measurement rides as metadata. Ignored by connectors that carry absolute
+    /// positions.
+    #[serde(default)]
+    pub sensor: Option<SensorSite>,
+}
+
+/// A sensor's fixed geodetic site (WGS-84), used to geolocate sensor-relative
+/// measurements. See [`Config::sensor`].
+#[derive(Debug, Clone, Copy, Deserialize)]
+pub struct SensorSite {
+    /// Latitude, degrees.
+    pub lat: f64,
+    /// Longitude, degrees.
+    pub lon: f64,
+    /// Height above the WGS-84 ellipsoid, metres (optional).
+    #[serde(default)]
+    pub alt_m: Option<f64>,
 }
 
 /// The enrichment a connector applies, distilled from [`Config`]. Connectors emit

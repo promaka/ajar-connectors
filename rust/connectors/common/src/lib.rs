@@ -47,7 +47,7 @@ pub mod rest;
 #[cfg(feature = "serial")]
 pub mod serial;
 
-pub use config::{Config, Enrichment, Framing, Transport};
+pub use config::{Config, Enrichment, Framing, SensorSite, Transport};
 pub use runtime::{run, FrameParser, FrameSource, ParseError};
 
 /// Open the transport named in config, boxed for [`run`]. This is the one line a
