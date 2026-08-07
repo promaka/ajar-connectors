@@ -32,7 +32,7 @@ hex.workspace = true
 async-trait.workspace = true
 # Feature-gated transport dependencies.
 tokio-serial = { version = "5", optional = true }
-rumqttc = { version = "0.24", optional = true }
+rumqttc = { version = "0.25", optional = true }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"], optional = true }
 
 [dev-dependencies]
