@@ -1,0 +1,33 @@
+# SPDX-License-Identifier: Apache-2.0
+[package]
+name = "ajar-stanag4676"
+description = "Ajar ingress connector for STANAG 4676 (NATO ISR Tracking Standard, AEDP-12 Edition B) track messages."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[[bin]]
+name = "ajar-stanag4676"
+path = "src/main.rs"
+
+[dependencies]
+ajar-connector.workspace = true
+ajar-connector-common.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+anyhow.workspace = true
+quick-xml = "0.36"
+time = { version = "0.3", features = ["parsing", "formatting"] }
+
+[dev-dependencies]
+ed25519-dalek.workspace = true
+sha2 = "0.10"
+hex.workspace = true
+serde_json = "1"
+proptest = "1"
+uuid = "1"

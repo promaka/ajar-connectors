@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 8b3d021c5c5f5231e736a1f51d477c03d079dd645d8de0860bf35348b162c61d # shrinks to uid = "", cs = "WGS_84", pos = "", vel = "", status = "INITIATING", identity = "FRIEND", rel = -379486195200001
