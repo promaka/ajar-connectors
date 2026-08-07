@@ -48,7 +48,7 @@ canonical `Event`s. That is the whole contract.
 
 - **Binary / bit-packed** (STANAG, TLV, framed records): copy **`klv`** (MISB ST
   0601, tag-length-value) for a tag-based format, **`gmti`** (STANAG 4607) for an
-  existence-mask / segmented-packet format, or **`asterix`** (EUROCONTROL CAT021/048/062 — FSPEC + compound items).
+  existence-mask / segmented-packet format, **`asterix`** (EUROCONTROL CAT021/048/062 — FSPEC + compound items), or **`stanag4586`** (NATO UAS Control DLI — fixed-field big-endian wrapper + checksum, multi-message datagram).
 - **XML** (situational-awareness / track feeds): copy **`tak-cot`** (Cursor-on-Target)
   for a flat attribute form, or **`stanag4676`** (NATO ISR Tracking — nested
   nitsRoot/track/segment/tp, namespace-prefix-agnostic, one event per track point).
