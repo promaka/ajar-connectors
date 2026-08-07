@@ -13,6 +13,24 @@ Two version lines are tracked independently (see COMPATIBILITY.md):
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-08-07
+
+### Added
+- **STANAG 4586** (NATO UAS Control) telemetry-ingest connector
+  (`ajar-stanag4586`) — ingests the Data Link Interface (DLI) vehicle-state reports
+  that `ajar-mavlink` complements for small/commercial UAS. (4586 spans UCS control
+  Levels of Interoperability 1–5; this connector ingests telemetry, it does not
+  command vehicles.) Parses the fixed-field big-endian message wrapper (validating
+  each message's checksum fail-closed and bounds-checking a multi-message datagram),
+  and decodes Message #101 Inertial States into a canonical track: WGS-84 position
+  from the radian lat/lon, ground speed and course from the North/East/Down velocity
+  vector, climb-positive vertical rate, and heading (from yaw) kept distinct from
+  course. The vehicle id becomes `source_uid`; the raw message is sealed verbatim.
+  The message model is implemented from the public NATO UNCLASSIFIED STANAG 4586
+  Edition 2 field tables; an open reference implementation was consulted only to
+  disambiguate the wrapper length — no code was copied (it is GPL-licensed) and its
+  native-endian packing was not followed.
+
 ## [0.4.0] - 2026-08-06
 
 ### Added
