@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Example STANAG 4586 (NATO UAS Control) ingress config. Copy, adjust, and run:
+#   ajar-stanag4586 ./stanag4586.toml
+#
+# Decodes the Data Link Interface (DLI) messages from a vehicle-specific module
+# (VSM) / ground station into canonical Ajar tracks. This covers the larger
+# tactical / MALE UAS that speak 4586 for NATO interoperability; ajar-mavlink
+# covers the small / commercial-derived UAS.
+
+source_id = "uas-vsm-1"
+nats_url = "nats://127.0.0.1:4222"
+subject_prefix = "ajar.ingest"
+signing_key_path = "/etc/ajar/uas-vsm-1.key"
+
+# 4586 carries no affiliation; assert one for the COP. Own-force UAS are typically
+# friendly.
+default_affiliation = "friendly"
+
+# Optional: the entity type decoded vehicles map to (default: mim:drone).
+# [entity_map]
+# default = "mim:aircraft"
+
+[transport]
+# The DLI is typically UDP between the VSM and the control system. Point the VSM's
+# DLI output at this bind (or use udp-multicast if it multicasts).
+kind = "udp"
+bind = "0.0.0.0:4586"
