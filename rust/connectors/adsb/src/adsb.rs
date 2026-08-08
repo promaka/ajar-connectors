@@ -309,7 +309,10 @@ impl AdsbParser {
             .location(p.lat, p.lon, p.alt_m)
             .payload(p.raw.clone())
             .metadata("source_uid", p.icao.clone())
-            .metadata("icao", p.icao.clone());
+            .metadata("icao", p.icao.clone())
+            // The ICAO address is the airframe's stable track key — the governed
+            // correlation key a consumer keys on (`track_id`), not just provenance.
+            .attribute("track_id", p.icao.clone());
 
         // If the carry-forward buffer dropped lines, the payload is incomplete —
         // say so, so a re-parser never mistakes it for the full set of frames.
@@ -451,6 +454,7 @@ mod tests {
         let p = parser().parse_line(AIRBORNE.as_bytes()).unwrap().unwrap();
         let ev = parser().to_event_at(&p, "2026-06-10T08:00:00Z").unwrap();
         assert_eq!(meta_of(&ev, "source_uid"), Some("4CA2D6"));
+        assert_eq!(attr_of(&ev, "track_id"), Some("4CA2D6")); // governed correlation key
         assert_eq!(meta_of(&ev, "icao"), Some("4CA2D6"));
     }
 

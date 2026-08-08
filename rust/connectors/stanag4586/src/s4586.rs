@@ -215,6 +215,9 @@ impl S4586Parser {
             .payload(raw.to_vec())
             .location(s.lat_deg, s.lon_deg, s.altitude_m)
             .metadata("source_uid", format!("s4586:vehicle:{}", s.vehicle_id))
+            // The vehicle id is the stable track key — the governed correlation key a
+            // consumer keys on (`track_id`), not just provenance metadata.
+            .attribute("track_id", s.vehicle_id.to_string())
             .metadata("cucs_id", s.cucs_id.to_string())
             .metadata("altitude_type", altitude_type(s.altitude_type))
             .attribute("speed", format!("{speed:.2}"))
@@ -380,6 +383,7 @@ mod tests {
 
         assert_eq!(ev.entity_type, "mim:drone");
         assert_eq!(tactical(ev, "source_uid"), Some("s4586:vehicle:7"));
+        assert_eq!(tactical(ev, "track_id"), Some("7")); // governed correlation key
         let loc = ev.location.as_ref().unwrap();
         assert!((loc.latitude - 26.3).abs() < 1e-6, "lat {}", loc.latitude);
         assert!((loc.longitude - 50.6).abs() < 1e-6, "lon {}", loc.longitude);
