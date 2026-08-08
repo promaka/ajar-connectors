@@ -172,18 +172,27 @@ few lines of wiring.
 
 | Connector | Standard | What it feeds | Typical transport |
 |-----------|----------|---------------|-------------------|
-| [tak-cot](rust/connectors/tak-cot) | TAK / Cursor-on-Target | ground/air situational-awareness tracks | UDP multicast / unicast |
-| [ais-nmea](rust/connectors/ais-nmea) | AIS over NMEA 0183 | maritime vessel tracks | TCP client / UDP |
-| [mavlink](rust/connectors/mavlink) | MAVLink v1/v2 | UAS / drone telemetry | UDP |
-| [asterix](rust/connectors/asterix) | ASTERIX CAT021 | radar / ADS-B air tracks | UDP multicast |
+| [asterix](rust/connectors/asterix) | ASTERIX CAT021 / 048 / 062 | radar + ADS-B + fused air tracks | UDP multicast |
 | [adsb](rust/connectors/adsb) | ADS-B (SBS-1 / BaseStation) | cooperative aircraft tracks | TCP client |
+| [ais-nmea](rust/connectors/ais-nmea) | AIS over NMEA 0183 | maritime vessel tracks | TCP client / UDP |
+| [gmti](rust/connectors/gmti) | STANAG 4607 (NATO GMTI) | ground moving-target detections | file / TCP / UDP |
+| [klv](rust/connectors/klv) | STANAG 4609 / MISB ST 0601 (KLV) | FMV platform / sensor metadata | UDP / file |
+| [stanag4676](rust/connectors/stanag4676) | STANAG 4676 (NATO ISR Tracking) | fused ISR tracks | TCP / file |
+| [mavlink](rust/connectors/mavlink) | MAVLink v1/v2 | small-UAS / drone telemetry | UDP / serial |
+| [stanag4586](rust/connectors/stanag4586) | STANAG 4586 (NATO UAS Control) | military UAS telemetry | UDP |
+| [tak-cot](rust/connectors/tak-cot) | TAK / Cursor-on-Target | ground/air situational-awareness tracks | UDP multicast / unicast |
 | [generic](rust/connectors/generic) | any flat JSON / CSV | the long tail — **no code, just a field mapping** | any of the below |
 | [tak-egress](rust/connectors/tak-egress) | TAK / CoT (**egress**) | governed COP tracks OUT to a TAK Server, verbatim | NATS → TLS 8089 |
 
-The first five map a standard's **position reports** onto Ajar tracks; each README
-states which message types/categories it covers. The **generic** connector needs
-no Rust at all — a `[mapping]` block in its config turns a JSON/CSV source into
-events. Extending coverage is additive.
+Each maps a standard's **position reports** (and, where present, identity and
+tactical fields) onto Ajar tracks; each connector's README states which message
+types/categories it covers. The **generic** connector needs no Rust at all — a
+`[mapping]` block in its config turns a JSON/CSV source into events. Extending
+coverage is additive.
+
+**Which connector for your kit?** See **[CONNECTORS.md](CONNECTORS.md)** — a
+catalogue of what each connector is for and the real systems that speak each format
+(radars, AIS transponders, autopilots, UAS ground stations, TAK devices, …).
 
 ### Transport is orthogonal to protocol
 

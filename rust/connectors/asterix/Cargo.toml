@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 [package]
 name = "ajar-asterix"
-description = "Ajar ingress connector for EUROCONTROL ASTERIX CAT021 (ADS-B) target reports."
+description = "Ajar ingress connector for EUROCONTROL ASTERIX CAT021 (ADS-B), CAT048 (monoradar) and CAT062 (system track) reports."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
