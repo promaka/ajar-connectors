@@ -5,9 +5,10 @@
 //! can watch the full governed path `connector -> NATS -> Core -> audit + egress`
 //! render live on the Vantage map.
 //!
-//! Each track follows a looping waypoint route and carries a **stable
-//! `source_uid`** (its native track key — a callsign / hull id), so Core mints a
-//! fresh event id per observation while the console trails one moving symbol.
+//! Each track follows a looping waypoint route and carries a stable identity so a
+//! consumer correlates observations into one track: a governed **`callsign`**
+//! (its native track key — a callsign / hull id) is the correlation key the console
+//! trails, and the same value rides in `source_uid` metadata for provenance.
 //! Domain-conveying `entity_type` (`mim:aircraft` / `mim:surface-vessel` /
 //! `mim:ground-vehicle`) drives correct symbology, and an `affiliation` attribute
 //! colours friend/hostile/neutral.
@@ -231,7 +232,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     eprintln!(
         "[synthetic-radar] source_id={source_id}  subject={subject}\n\
          [synthetic-radar] {n_tracks} tracks (air/surface/ground), target ~{rate_per_min:.0} records/min\n\
-         [synthetic-radar] canonical mim: types + stable source_uid + affiliation. Ctrl-C to stop."
+         [synthetic-radar] canonical mim: types + governed callsign (correlation key) + affiliation. Ctrl-C to stop."
     );
 
     let start = Instant::now();
@@ -243,9 +244,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
         for track in tracks.iter_mut() {
             track.advance();
 
-            // 1. normalize (synthesised). `affiliation` is a declared optional
-            //    attribute on these types (governed); `source_uid` is ungoverned
-            //    passthrough metadata — the stable per-track id the console trails.
+            // 1. normalize (synthesised). Every event carries the track's stable
+            //    identity so a consumer correlates observations into one track:
+            //    `callsign` (a governed attribute on the platform types) is the
+            //    human-readable id, and the same native key rides in `source_uid`
+            //    metadata for provenance. Without a governed identity a consumer sees
+            //    every observation as a new track.
             let event = EventBuilder::new(&source_id, track.domain.entity_type())
                 .new_id()
                 .now()
@@ -253,6 +257,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 .confidence(0.9)
                 .policy_tag("air-defence")
                 .attribute("affiliation", track.affiliation)
+                .attribute("callsign", &track.uid)
                 .metadata("source_uid", &track.uid)
                 .build()?;
 
