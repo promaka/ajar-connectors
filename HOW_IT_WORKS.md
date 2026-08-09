@@ -231,16 +231,27 @@ the sealed output with no infra, then point it at NATS.
 the exact same bytes.** This is the foundation of the whole trust model — if the
 bytes weren't deterministic, you couldn't sign them and have someone else verify.
 
-The canonical bytes are simply the **deterministic protobuf encoding** of the
-`Event` ([canonical.rs](rust/ajar-connector/src/canonical.rs)). Protobuf is a
-good fit because:
+The canonical bytes are the protobuf encoding of the `Event`
+([canonical.rs](rust/ajar-connector/src/canonical.rs)), constrained so that the
+encoding is fully determined by the values:
 
 - Field order in the wire format is determined by field *number*, not by source
   order.
 - proto3 omits fields at their default value (empty string, `0`, `0.0`, empty
   list) — so the encoding is fully determined by the values.
 - The contract has **no map fields** (maps are the one proto construct with
-  non-deterministic ordering), so the encoding is unambiguous.
+  unspecified ordering), so the encoding is unambiguous.
+
+**Those properties make canonicality achievable; the conformance gate is what
+makes it true.** Protobuf serialization is not canonical in general — the
+specification does not mandate a field order, and independent implementations may
+legitimately differ. The five SDKs here use five *different* encoders (prost, Go
+protobuf, libprotobuf, nanopb, Python protobuf), so their agreement is a tested
+result, not an inherited guarantee. The golden vectors in
+[`vendor/contract/vectors.json`](vendor/contract/vectors.json) are the
+specification of record: every SDK must reproduce the exact `v1` bytes and their
+SHA-256, or the release does not ship. Writing a sixth encoder? Validate against
+the vectors; do not assume your protobuf library agrees with ours.
 
 That leaves exactly one thing a human could get wrong: **the order of the
 `attributes` list.** Protobuf will faithfully encode whatever order you give it,
