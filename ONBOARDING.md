@@ -344,6 +344,25 @@ pip install "git+https://github.com/promaka/ajar-connectors.git@v0.1.0#subdirect
 cd python && pip install -e .
 ```
 
+> **Building for an air-gapped or accredited network?** None of the commands
+> above will run there — they all fetch from the public internet. Do the fetching
+> on a connected machine, then carry a self-contained bundle across:
+>
+> ```bash
+> # On a connected machine, at the tag you intend to ship:
+> git clone --depth 1 --branch v0.1.0 https://github.com/promaka/ajar-connectors
+> cd ajar-connectors
+> cargo vendor vendor-crates/          # Rust: full dependency closure
+> (cd go && go mod vendor)             # Go: full dependency closure
+> pip download ./python -d wheels/     # Python: wheels for the target platform
+> sha256sum -b $(git ls-files) > MANIFEST.sha256
+> ```
+>
+> Transfer the directory by whatever means your network permits, verify
+> `MANIFEST.sha256` on arrival, and build offline (`cargo build --offline`,
+> `go build -mod=vendor`, `pip install --no-index --find-links wheels/`). Pin the
+> tag, not a branch — the bundle is only reproducible if its source revision is.
+
 **C++** — build the CMake project, then link `ajar_connector` into your own
 build. See [cpp/README.md](cpp/README.md) for the full integration guide
 (including `find_package`); the quick build is:
