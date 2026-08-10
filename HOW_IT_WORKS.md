@@ -1,15 +1,13 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
-# How Ajar connectors work — a detailed explanation
+# How Ajar connectors work
 
-This document explains the *mechanics* of the connector system end to end: what
-a connector is, what it produces, why the bytes are shaped the way they are, how
-trust is established without a shared codebase, and how it all gets deployed.
+This document covers the mechanics of the connector system end to end: what a
+connector is, what it produces, why the bytes are shaped the way they are, how
+trust is established without a shared codebase, and how it gets deployed.
 
-If [ONBOARDING.md](ONBOARDING.md) is the "what do I type" guide, this is the
-"what is actually happening and why" guide. Read it once and the rest of the repo
-stops being mysterious.
+[ONBOARDING.md](ONBOARDING.md) covers what to type. This covers what is happening
+underneath and why.
 
----
 
 ## 1. The one-sentence model
 
@@ -19,14 +17,13 @@ stops being mysterious.
 > against a key you pre-registered, checks it against policy and an ontology, and
 > stores it.
 
-Everything below is an unpacking of that sentence.
+Everything below unpacks that sentence.
 
-The crucial design choice: **trust lives in the signature, not in the network
-path.** The connector and Core never talk directly and never share code. They
-agree on exactly two things: a **byte format** (the contract) and a **public
-key** (your identity). That's the entire trust surface.
+Trust lives in the signature rather than in the network path. The connector and
+Core never talk directly and never share code. They agree on two things: a byte
+format (the contract) and a public key (your identity). Nothing else about the
+path between them has to be trusted.
 
----
 
 ## 2. The four actors
 
@@ -47,19 +44,19 @@ key** (your identity). That's the entire trust surface.
 | **NATS** | whoever you agree on | nothing secret | a simple, fast message bus |
 | **Ajar Core** | the operator (at C2/hub) | your **public** key | verify → govern → store |
 
-The connector is the *only* piece you build. The SDK in this repo gives you the
-hard parts (canonical encoding, signing); you write ~15 lines that map one of
-your records into an event.
+The connector is the only piece you build. The SDK in this repo gives you the hard
+parts, canonical encoding and signing; you write roughly fifteen lines that map one
+of your records into an event.
 
-**Why NATS in the middle?** Because it decouples the two sides completely. The
-connector opens an *outbound* connection to NATS and publishes; Core opens an
-*outbound* connection to NATS and subscribes. Neither needs to know where the
-other is, neither needs an inbound firewall hole, and events survive a lossy or
-relayed link because authenticity rides in the signature, not the transport.
+NATS sits in the middle because it decouples the two sides. The connector opens an
+outbound connection to NATS and publishes; Core opens an outbound connection and
+subscribes. Neither needs to know where the other is, and neither needs an inbound
+firewall hole. Because authenticity travels in the signature rather than in the
+transport, an event stays verifiable across a relayed or degraded link, and across
+any number of intermediate hops.
 
----
 
-## 3. The data contract — the single source of truth
+## 3. The data contract: the single source of truth
 
 Everything hinges on one file: [vendor/contract/event.proto](vendor/contract/event.proto).
 It is a Protocol Buffers (proto3) schema, package `ajar.event.v1`. Every SDK in
@@ -83,21 +80,21 @@ which is why they're byte-compatible.
 | 11 | `attributes` | repeated `Attribute` | Type-specific key/value pairs (e.g. `heading=225`). **Must be sorted by key, unique.** |
 
 `GeoPoint` is `{ latitude, longitude, altitude_m }` (doubles; altitude in metres
-above the WGS84 ellipsoid). `Attribute` is `{ key, value }` — values are always
+above the WGS84 ellipsoid). `Attribute` is `{ key, value }`. Values are always
 strings; the ontology on Core's side checks they satisfy the declared
 datatype/unit/bounds.
 
 ### Two subtle but load-bearing rules
 
 1. **`received_at` is Core's, not yours.** The schema has it (field 10) but the
-   builder deliberately refuses to let you set it — it always writes empty
+   builder deliberately refuses to let you set it, and always writes empty
    ([builder.rs:180](rust/ajar-connector/src/builder.rs#L180)). Ordering and the
    audit chain follow Core's ingest clock plus a monotonic sequence, never the
    sender's `timestamp`. This is what makes a compromised or clock-skewed sensor
    unable to reorder history.
 
 2. **`attributes` must be sorted by `key` with no duplicate keys.** This is the
-   one canonical rule a connector author could violate by hand — and the SDK
+   one canonical rule a connector author could violate by hand, and the SDK
    enforces it for you (see §5). Core *rejects* any event whose attributes are
    unsorted or duplicated, because that would make the bytes non-canonical.
 
@@ -106,9 +103,9 @@ datatype/unit/bounds.
 `entity_type` must be namespaced, in one of two forms
 ([builder.rs:192-203](rust/ajar-connector/src/builder.rs#L192)):
 
-- `mim:<type>` — the standards base vocabulary (e.g. `mim:aircraft`). One colon,
+- `mim:<type>`, the standards base vocabulary (e.g. `mim:aircraft`). One colon,
   non-empty type.
-- `x:<vendor>:<type>` — a vendor extension (e.g. `x:acme:widget`). Exactly two
+- `x:<vendor>:<type>`, a vendor extension (e.g. `x:acme:widget`). Exactly two
   colons, both halves non-empty.
 
 The builder enforces this by default and rejects a bare `drone` with
@@ -116,9 +113,8 @@ The builder enforces this by default and rejects a bare `drone` with
 (`allow_unnamespaced_entity_type()`) for migrating legacy feeds, but production
 events should be namespaced so Core's ontology can resolve them.
 
----
 
-## 4. What a connector actually does — the four steps
+## 4. What a connector actually does: the four steps
 
 The whole connector is a loop of four steps. The SDK gives you 2–4; you write 1.
 
@@ -153,7 +149,7 @@ client.publish("ajar.ingest.acme-radar-1", sealed.into()).await?;
 The subject is always `ajar.ingest.<source_id>`. Steps 2–4 are copy-paste from
 the examples and never change. Step 1 is your integration.
 
-### Building it — exactly what to change, where
+### Building it: exactly what to change, where
 
 The fastest path is to **copy a template and edit two spots.** Concretely, using
 the Rust template ([rust/examples/connector-template/src/main.rs](rust/examples/connector-template/src/main.rs)):
@@ -196,14 +192,14 @@ fn to_event(source_id: &str, r: &MyRecord) -> Result<Event, BuildError> {
 
 **4. Swap the feed reader.** The template reads newline-delimited JSON from
 stdin. Replace that loop ([main.rs:76-83](rust/examples/connector-template/src/main.rs#L76))
-with your real source — a TCP socket, a serial port, a file tail, an API poll —
+with your real source: a TCP socket, a serial port, a file tail, an API poll.
 producing one `MyRecord` per iteration. Everything after that line
 (canonical-encode → seal → publish) stays exactly as is.
 
-**That's the whole edit.** You do **not** touch: `canonical_bytes()`, `seal()`,
-key loading, the NATS publish, or the subject derivation — those are the SDK and
-the boilerplate. If `to_event(...).build()` returns `Ok`, the event is canonical
-and correctly signed.
+Nothing else needs editing. Leave `canonical_bytes()`, `seal()`, key loading, the
+NATS publish and the subject derivation alone; they are the SDK and the
+boilerplate. If `to_event(...).build()` returns `Ok`, the event is canonical and
+correctly signed.
 
 **Where the edit points live per language:**
 
@@ -223,13 +219,12 @@ are §6–§7 below; the exact commands (`scripts/gen-connector-key.sh`, then bu
 [ONBOARDING.md §6–§7](ONBOARDING.md). **6. Run it** — `--dry-run` first to eyeball
 the sealed output with no infra, then point it at NATS.
 
----
 
-## 5. Step 2 deep-dive — canonical encoding (why the bytes are identical everywhere)
+## 5. Step 2 deep-dive: canonical encoding
 
-"Canonical" means: **given the same event, every correct implementation produces
-the exact same bytes.** This is the foundation of the whole trust model — if the
-bytes weren't deterministic, you couldn't sign them and have someone else verify.
+"Canonical" means that given the same event, every correct implementation produces
+the same bytes. Signing depends on it: if two implementations disagreed about the
+encoding, a signature produced by one could not be verified by the other.
 
 The canonical bytes are the protobuf encoding of the `Event`
 ([canonical.rs](rust/ajar-connector/src/canonical.rs)), constrained so that the
@@ -238,12 +233,12 @@ encoding is fully determined by the values:
 - Field order in the wire format is determined by field *number*, not by source
   order.
 - proto3 omits fields at their default value (empty string, `0`, `0.0`, empty
-  list) — so the encoding is fully determined by the values.
+  list), so the encoding is fully determined by the values.
 - The contract has **no map fields** (maps are the one proto construct with
   unspecified ordering), so the encoding is unambiguous.
 
 **Those properties make canonicality achievable; the conformance gate is what
-makes it true.** Protobuf serialization is not canonical in general — the
+makes it true.** Protobuf serialization is not canonical in general. The
 specification does not mandate a field order, and independent implementations may
 legitimately differ. The five SDKs here use five *different* encoders (prost, Go
 protobuf, libprotobuf, nanopb, Python protobuf), so their agreement is a tested
@@ -270,14 +265,13 @@ This is where `EventBuilder` earns its keep. At `build()`
 6. enforces entity-type namespacing,
 7. stamps `schema_version = "v1"` and leaves `received_at` empty.
 
-`canonical_bytes()` then *trusts* that invariant and does not re-sort — the
+`canonical_bytes()` then *trusts* that invariant and does not re-sort; the
 trust boundary is explicit. The practical upshot: **if `build()` returns `Ok`,
 the event is canonical and Core will not reject it on shape.** You essentially
 cannot emit a malformed event by accident.
 
----
 
-## 6. Step 3 deep-dive — the seal envelope (the signature)
+## 6. Step 3 deep-dive: the seal envelope (the signature)
 
 A "sealed event" on the wire is dead simple
 ([seal.rs](rust/ajar-connector/src/seal.rs)):
@@ -295,7 +289,7 @@ A "sealed event" on the wire is dead simple
   itself.
 - Ed25519 signatures are **deterministic** (RFC 8032): signing the same bytes
   with the same key always yields the same signature. So the *entire* sealed
-  envelope is reproducible — which is exactly what the conformance gate checks.
+  envelope is reproducible, which is what the conformance gate checks.
 
 On the other side, Core does the obvious inverse: split at byte 64, verify the
 signature over the remainder using your **registered public key**, and if it
@@ -305,19 +299,18 @@ unregistered key → rejected before any policy or ontology logic runs.
 **Key handling.** Each connector has its own Ed25519 keypair. You generate it
 once ([scripts/gen-connector-key.sh](scripts/gen-connector-key.sh)):
 
-- the **private seed** (32 bytes) stays with your connector — a secret store, an
+- the **private seed** (32 bytes) stays with your connector: a secret store, an
   HSM, or a locked-down file. `seal()` takes it by reference and never stores,
   logs, or serializes it.
 - the **public key** (32 bytes) you send to the operator to register against your
   `source_id`.
 
 The repo's examples use published **test seeds** (`0x47…` for golden vectors,
-`0x03…` for the local demo). Those are for reproducibility only — never sign
+`0x03…` for the local demo). Those are for reproducibility only. Never sign
 production events with them.
 
----
 
-## 7. The connector profile — your registration declaration
+## 7. The connector profile: your registration declaration
 
 Before events flow, the operator needs to know who you are and what you're
 allowed to emit. That's the **connector profile**
@@ -344,7 +337,6 @@ build with the SDK and hand to your operator:
 Note the profile is a *declaration*, not policy. The SDK just lets you state it
 correctly and serialize it deterministically; Core decides what to enforce.
 
----
 
 ## 8. What Core does on the other side (the three gates)
 
@@ -368,7 +360,6 @@ first" warning matters: if your `entity_type` or an attribute isn't in Core's
 ontology yet, gate 3 rejects you — and that's a change on the *operator's* side,
 not something you can fix in the connector.
 
----
 
 ## 9. How trust is established across four languages with no shared code
 
@@ -407,9 +398,8 @@ ctest --test-dir cpp/build                                    # C++
 The vectors are the contract made executable. You don't trust the SDK authors;
 you trust the hashes.
 
----
 
-## 10. Keeping the contract honest — supply chain
+## 10. Keeping the contract honest: supply chain
 
 The contract files are *vendored* (copied) from the private Ajar core repo, not
 authored here. That copy could drift. Two mechanisms keep it honest:
@@ -428,7 +418,6 @@ So the chain is: **core defines the contract → it's vendored with a recorded
 commit → its hashes are pinned in CI → every SDK proves it reproduces the
 vectors.** No silent drift at any link.
 
----
 
 ## 11. How it deploys (and how the key stays safe)
 
@@ -456,7 +445,6 @@ The three deployment topologies (central Core, disconnected outpost, edge
 gateway) are described in [ONBOARDING.md §2](ONBOARDING.md#L68). The connector
 code is **identical** in all three — only *where NATS and Core run* changes.
 
----
 
 ## 12. End-to-end, one more time
 
@@ -487,7 +475,6 @@ Steps 3–6 are this SDK. Step 2 is the ~15 lines you write. Steps 1 and 7–9 a
 the operator's side. The conformance gate (§9) is your proof that steps 3–6
 produce exactly what step 8 will accept.
 
----
 
 ## Where to look in the code
 

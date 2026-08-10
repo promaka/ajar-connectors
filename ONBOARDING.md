@@ -1,14 +1,14 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Connector onboarding guide
 
-This guide is for a **vendor** building a connector that feeds data into Ajar.
-A connector has one job: turn your system's native data into Ajar's canonical,
-**signed** event and publish it. The SDK does the hard parts (canonical
-encoding, signing); you write the small piece that maps *your* data.
+This guide is for a vendor building a connector that feeds data into Ajar. A
+connector has one job: turn your system's native data into Ajar's canonical, signed
+event and publish it. The SDK does the canonical encoding and the signing; you write
+the piece that maps your data.
 
-> ## Quickstart — the whole job is two edits
+> ## Quickstart
 >
-> See a real signed event **right now** — no key, no NATS, no feed:
+> To see a signed event without setting anything up, no key, no NATS and no feed:
 > ```bash
 > # Rust:
 > cd rust/examples && echo '{"lat":26.4,"lon":50.9,"alt_m":11000,"quality":0.9}' \
@@ -18,10 +18,10 @@ encoding, signing); you write the small piece that maps *your* data.
 > cd python && echo '{"lat":26.4,"lon":50.9,"alt_m":11000,"quality":0.9}' \
 >   | PYTHONPATH=. python examples/connector_template.py --dry-run
 > ```
-> Then make it yours: copy the `connector-template` for your language and edit the
-> block(s) marked **`EDIT`** (describe your record + map it to an event) — about
-> 15 lines. Generate a key with `scripts/gen-connector-key.sh`, set three env
-> vars, run. That's the entire integration. The sections below explain the *why*.
+> To make it yours, copy the `connector-template` for your language and edit the
+> blocks marked `EDIT`: describe your record, then map it to an event. That is
+> around fifteen lines. Generate a key with `scripts/gen-connector-key.sh`, set
+> three environment variables and run it. The sections below explain the reasoning.
 > Templates (each has the two `EDIT` spots): [Rust](rust/examples/connector-template/) ·
 > [Python](python/examples/connector_template.py) · [Go](go/examples/connector-template/) ·
 > [C++](cpp/examples/connector_template.cpp).
@@ -53,14 +53,14 @@ encoding, signing); you write the small piece that maps *your* data.
 
 What each Core stage checks (this is what your events must satisfy):
 
-1. **Signature** — the event is sealed with your connector's private key; Core
+1. Signature: the event is sealed with your connector's private key; Core
    verifies it against the public key you registered. Bad/unregistered key →
    rejected.
-2. **Policy** — your `source_id`, `entity_type`, and markings are allowed.
-3. **Ontology** — the `entity_type` exists and any `attributes` match its
+2. Policy: your `source_id`, `entity_type`, and markings are allowed.
+3. Ontology: the `entity_type` exists and any `attributes` match its
    schema. An attribute the schema doesn't know → rejected as `UnknownAttribute`.
 
-A **sealed event** on the wire is simply:
+A sealed event on the wire is simply:
 
 ```
   [ 64-byte Ed25519 signature ][ canonical protobuf bytes ]
@@ -68,10 +68,9 @@ A **sealed event** on the wire is simply:
 
 ## 2. Where everything runs (deployment & topology)
 
-**The one idea:** the connector and Ajar Core **never talk to each other
-directly**. They both connect to a **NATS server** (a message bus) in the
-middle. The connector *publishes* sealed events to it; Core *subscribes* and
-pulls them off.
+The connector and Ajar Core never talk to each other directly. Both connect to a
+NATS server, a message bus, in the middle. The connector publishes sealed events to
+it, and Core subscribes and pulls them off.
 
 ```
    connector  ──publish──▶  ┌─────────┐  ──deliver──▶  Ajar Core
@@ -81,21 +80,20 @@ pulls them off.
         ▲ each side opens an outbound TCP connection to NATS ▲
 ```
 
-Trust lives in the **signature, not the pipe**: the connector signs each event,
-Core verifies it against your registered public key. So events can cross an
-untrusted, lossy, or relayed link and Core still knows they're authentic and
-unmodified. The connector doesn't even need to know *where* Core is — only where
-NATS is.
+Trust lives in the signature rather than the pipe. The connector signs each event
+and Core verifies it against your registered public key, so an event can cross an
+untrusted, lossy or relayed link and Core still knows it is authentic and
+unmodified. The connector never needs to know where Core is, only where NATS is.
 
 ### Who runs what
 
 | | Builds it | Runs it | Holds |
 |---|---|---|---|
-| **Vendor** | the connector (their code + this SDK) | the connector process, at/near the data source | its **private** signing key |
-| **Operator** | nothing (runs Ajar) | NATS + Ajar Core + Postgres + audit | the connector's **public** key (registered) |
+| **Vendor** | the connector (their code + this SDK) | the connector process, at/near the data source | its private signing key |
+| **Operator** | nothing (runs Ajar) | NATS + Ajar Core + Postgres + audit | the connector's public key (registered) |
 
-So the vendor's connector runs **at the edge** (with the sensor); the operator
-runs Ajar Core **where governance + storage live** (a C2/hub, or forward in an
+So the vendor's connector runs at the edge (with the sensor); the operator
+runs Ajar Core where governance and storage live (a C2/hub, or forward in an
 outpost). NATS sits wherever you decide the two should meet.
 
 ### Default picture
@@ -113,8 +111,7 @@ outpost). NATS sits wherever you decide the two should meet.
 
 ### The three common scenarios
 
-The connector code is **identical** in all three — only *where NATS and Core
-run* changes.
+The connector code is identical in all three; only where NATS and Core run changes.
 
 **1. Central Core (most common).** Edge connectors publish to one NATS at C2;
 one Core verifies and stores centrally.
@@ -125,7 +122,7 @@ one Core verifies and stores centrally.
  edge C ┘
 ```
 
-**2. Disconnected outpost (works when cut off).** An outpost runs its **own**
+**2. Disconnected outpost (works when cut off).** An outpost runs its own
 NATS + Core locally (the air-gapped systemd/Podman bundle). Connectors publish
 locally and the outpost accepts/stores locally with no link home; it forwards
 upstream to C2 when a link returns.
@@ -146,25 +143,25 @@ outages.
 
 ### Where is NATS in the code?
 
-NATS-the-**server** is **not something anyone writes** — it's a third-party
+The NATS server is not something anyone writes. It is a third-party
 binary (`nats-server`, from nats.io) that your *deployment* runs as a process or
 container (the systemd + Podman bundle). You won't find its source in either
-repo. What you find is **client** code:
+repo. What you find is client code:
 
 - **In this connector repo (`ajar-connectors`):** only in the *examples* (a NATS
-  client publishing) — the SDK crate itself has **no** NATS dependency and is
+  client publishing). The SDK crate itself has no NATS dependency and is
   transport-free.
-- **In the core repo (`promaka/ajar`):** a NATS *client* that **subscribes** to
+- **In the core repo (`promaka/ajar`):** a NATS *client* that subscribes to
   `ajar.ingest.>` and the deployment manifests that launch the `nats-server`
   container. (Core uses `async-nats` as a client; it does not embed the server.)
 
-So: nobody codes NATS — you **run** a `nats-server`, the connector publishes to
+So nobody codes NATS. You run a `nats-server`, the connector publishes to
 it, and Core subscribes to it.
 
 ## 3. What you build
 
 The whole connector is a loop of three steps. The SDK gives you steps 2–3; you
-write step 1 — "map one of my records into an `Event`":
+write step 1, mapping one of your records into an `Event`:
 
 ```
 your record  →  build Event  →  seal  →  publish
@@ -203,7 +200,7 @@ The two field rules baked into that sample, worth stating plainly:
   passthrough that Core always accepts and surfaces to the C2.
 - **`.attribute(...)` is governed**: Core validates each key against the entity
   type's ontology schema and rejects unknown ones. The ready connectors route
-  this **per key** via `governed_attributes` in their config; the standard
+  this per key via `governed_attributes` in their config; the standard
   tactical keys and their units are listed in
   [rust/connectors/ATTRIBUTES.md](rust/connectors/ATTRIBUTES.md).
 
@@ -280,7 +277,7 @@ your identity on their side first. That's a one-time **handshake**, not an
 account:
 
 > **You send the operator:** your chosen `source_id`, your connector
-> **profile** JSON (§7 — it contains your *public* key and the entity types you
+> profile JSON (§7 — it contains your *public* key and the entity types you
 > intend to emit), and the entity type(s) + any attribute schema you need.
 >
 > **The operator sends back:** confirmation your key + types are registered, plus
@@ -293,7 +290,7 @@ don't have one, ask them for it.
 
 > **Your connector stays private.** Its source — your record format and mapping
 > logic — never leaves your environment; it is not published here or anywhere. The
-> only things you hand over are your connector's **public** key and the agreed
+> only things you hand over are your connector's public key and the agreed
 > **data contract** (entity types/attributes), and those go **privately to your
 > operator** (the team or sovereign running Ajar Core) — not to this repository or
 > any third party.
@@ -310,7 +307,7 @@ setup on the operator's side:
 |-------------|-----------|
 | a **`source_id`** | your connector's stable identity, e.g. `acme-radar-1` |
 | **entity type(s) registered** | the `mim:<type>` / `x:<vendor>:<type>` (and any attribute schema) you'll emit must exist in Core's ontology |
-| **your public key registered** | you generate a key (§6) and send the **public** half; Ajar registers it against your `source_id` |
+| **your public key registered** | you generate a key (§6) and send the public half; Ajar registers it against your `source_id` |
 | **ingest endpoint + creds** | the NATS server address (and credentials/TLS) to publish to |
 
 > Agree the **data contract first**: which entity type(s) you emit and which
@@ -376,7 +373,7 @@ the matching example.
 
 ## 6. Generate your signing key
 
-Each connector has its **own** Ed25519 key. Generate it once and keep the
+Each connector has its own Ed25519 key. Generate it once and keep the
 private half secret (a secrets manager, an HSM, a file with locked-down perms —
 never in source control).
 
@@ -507,7 +504,7 @@ operator's [DEPLOY_RUNBOOK.md] **Step 4** (register connectors) on the Core side
 
 1. **Pick a transport and get a parser.** Choose the `[transport]` `kind` that
    matches your source (table in §3). Then either:
-   - a **ready connector** already covers your standard (configure it), or
+   - a ready connector already covers your standard (configure it), or
    - your source is flat JSON/CSV → write a `[mapping]` for [`ajar-generic`](rust/connectors/generic) (no code), or
    - implement `normalize(frame) -> Event` (a `FrameParser`) — parse the native
      frame, `.new_id()`, set `entity_type` + `location` + governed attributes, put
@@ -520,7 +517,7 @@ operator's [DEPLOY_RUNBOOK.md] **Step 4** (register connectors) on the Core side
    half. Obtain the mTLS client certificate for transport identity (CN =
    `source_id`) from the operator's PKI.
 4. **Register with the control plane.** The operator registers your connector on
-   the Core side — `POST /control/connectors` with your `source_id`, the **public**
+   the Core side — `POST /control/connectors` with your `source_id`, the public
    key, allowed entity-type namespaces, and the mTLS cert subject. This is Core's
    [DEPLOY_RUNBOOK.md] Step 4; the ontology types you emit must already be
    registered (§4). (Without a control-plane API, this is the email handshake in
@@ -539,7 +536,7 @@ operator; it is not part of this open repo.
 |---------|--------------|-----|
 | Event rejected: **signature invalid** | public key not registered, or signing with the wrong seed, or `source_id` ≠ registered | confirm the registered `verifying_key_hex` matches your key; check `AJAR_SOURCE_ID` |
 | Event rejected: **`UnknownAttribute`** | you set an attribute the entity type's ontology schema doesn't define | remove it, or have Ajar add the attribute to the ontology |
-| Event rejected: **unknown entity type** | the `entity_type` isn't registered in Core's ontology | use a registered type, or get it added |
+| Event rejected: unknown entity type | the `entity_type` isn't registered in Core's ontology | use a registered type, or get it added |
 | Builder returns **`UnnamespacedEntityType`** | entity type isn't `mim:<type>` or `x:<vendor>:<type>` | namespace it (or `allow_unnamespaced_entity_type()` only for migration) |
 | Builder returns **`DuplicateAttributeKey`** / **`TooManyAttributes`** | violates canonical rules | the builder is protecting you — fix the input |
 | Nothing arrives, no error | wrong subject or `source_id` | subject must be `ajar.ingest.<source_id>` with the assigned `source_id` |
