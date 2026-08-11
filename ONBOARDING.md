@@ -248,6 +248,7 @@ matches your source — no code change:
 | `udp-multicast`, `udp` | UDP datagrams | SA broadcast (CoT, ASTERIX) |
 | `tcp-client` | TCP stream (dial out) | AIS aggregators, record streams |
 | `tcp-server` | TCP listen | legacy kit that pushes to "your ip:port" |
+| `http-server` | HTTP listen (webhooks) | cameras, VMS and SaaS callbacks that only POST to a URL |
 | `file` | tail a file | anything that writes to a log |
 | `dir` | watch a drop directory | SFTP batch exports, scheduled dumps |
 | `exec` | run a CLI tool, read its stdout | wrap any vendor binary |

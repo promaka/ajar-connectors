@@ -74,7 +74,7 @@ rust/connectors/<name>/
 Then add `"<name>"` to `members` in `rust/connectors/Cargo.toml`. Transports are
 config, not code — never write socket/file I/O; pick a `[transport]` kind in the
 TOML (`udp`, `tcp-server`, `tcp-client`, `serial`, `file`, `dir`, `exec`, `stdin`,
-`mqtt`, `rest-poll`).
+`mqtt`, `rest-poll`, `http-server`).
 
 ## EventBuilder cheat-sheet
 

@@ -204,6 +204,7 @@ transport (delivery) are separate, so any connector runs on any method by config
 | `udp-multicast`, `udp` | UDP datagrams | one packet per frame (SA broadcast) |
 | `tcp-client` | TCP stream (dial out) | `framing = "line"` or `"length-delimited"`, auto-reconnect |
 | `tcp-server` | TCP listen | sources that push to a configured address; multiple pushers |
+| `http-server` | HTTP listen (webhooks) | sources that only POST to a URL; refuses with 503 when saturated so the sender retries |
 | `file` | tail a file | follows appends, handles rotation |
 | `dir` | watch a drop directory | batch file drops (SFTP exports); reads files once settled |
 | `exec` | run a CLI tool | reads its stdout; wraps any vendor binary |
