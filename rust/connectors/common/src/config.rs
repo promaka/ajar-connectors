@@ -185,21 +185,39 @@ pub enum Transport {
     /// ```toml
     /// [transport]
     /// kind = "http-server"
-    /// bind = "0.0.0.0:8080"
+    /// bind = "0.0.0.0:8443"
     /// path = "/hook"
     /// token = "shared-secret"
+    /// tls_cert = "/etc/ajar/webhook.crt"
+    /// tls_key = "/etc/ajar/webhook.key"
+    /// # tls_client_ca = "/etc/ajar/senders-ca.crt"   # require client certs
     /// ```
+    ///
+    /// TLS follows the same fail-closed rule as the NATS connection: a `token`
+    /// without TLS refuses to start, because a shared secret on a plaintext
+    /// listener is on the wire in every delivery.
     HttpServer {
-        /// Local listen address, `ip:port` (e.g. `0.0.0.0:8080`).
+        /// Local listen address, `ip:port` (e.g. `0.0.0.0:8443`).
         bind: String,
         /// Path a delivery must target (default `/`); anything else gets 404.
         #[serde(default = "default_http_path")]
         path: String,
-        /// Shared secret required in the `X-Ajar-Token` header. Unset accepts any
-        /// caller that can reach the port, so set it unless something in front is
-        /// already authenticating.
+        /// Shared secret required in the `X-Ajar-Token` header. Requires TLS.
+        /// Prefer `tls_client_ca` where the sender can present a certificate.
         #[serde(default)]
         token: Option<String>,
+        /// PEM certificate chain served to senders. Set with `tls_key` to enable
+        /// TLS; leaving both unset serves plaintext (protected segments only).
+        #[serde(default)]
+        tls_cert: Option<String>,
+        /// PEM private key for `tls_cert`.
+        #[serde(default)]
+        tls_key: Option<String>,
+        /// PEM CA bundle senders' client certificates must chain to. Setting it
+        /// turns the listener into mutual TLS, which authenticates the sender by
+        /// certificate rather than by a shared secret.
+        #[serde(default)]
+        tls_client_ca: Option<String>,
     },
     /// Serial line (RS-232/422/485) — many sensors emit NMEA or vendor ASCII this
     /// way. Requires the `serial` feature.
