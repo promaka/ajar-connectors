@@ -6,10 +6,13 @@ import pytest
 from ajar_connector import (
     SEAL_SIGNATURE_LEN,
     BuildError,
+    canonical_bytes,
     ConnectorProfile,
     EventBuilder,
     SigningKey,
     seal,
+    SealVerificationError,
+    verify,
 )
 
 
@@ -71,3 +74,32 @@ def test_profile_json_serializes_verifying_key_as_hex():
     assert "mim:drone" in js
     assert vk.hex() in js
     assert '"rate_refill_per_sec":5.0' in js  # float keeps the .0, like the other SDKs
+
+
+def test_verify_round_trips_and_returns_canonical_bytes():
+    key = SigningKey.from_seed(bytes([0x47] * 32))
+    event = EventBuilder("acme-radar-1", "mim:aircraft").new_id().now().build()
+    canonical = canonical_bytes(event)
+    assert verify(seal(canonical, key), key.verifying_key) == canonical
+
+
+def test_verify_rejects_tampering_wrong_key_and_truncation():
+    key = SigningKey.from_seed(bytes([0x47] * 32))
+    other = SigningKey.from_seed(bytes([0x11] * 32))
+    sealed = seal(canonical_bytes(
+        EventBuilder("acme-radar-1", "mim:aircraft").new_id().now().build()
+    ), key)
+
+    tampered = bytearray(sealed)
+    tampered[-1] ^= 0x01
+    with pytest.raises(SealVerificationError):
+        verify(bytes(tampered), key.verifying_key)
+
+    with pytest.raises(SealVerificationError):
+        verify(sealed, other.verifying_key)
+
+    with pytest.raises(SealVerificationError):
+        verify(sealed[: SEAL_SIGNATURE_LEN - 1], key.verifying_key)
+
+    with pytest.raises(SealVerificationError):
+        verify(sealed, b"too-short-key")

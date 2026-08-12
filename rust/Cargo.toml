@@ -3,6 +3,7 @@
 resolver = "2"
 members = [
     "ajar-connector",
+    "ajar-verify",
     "conformance",
 ]
 # Examples live in their own workspace (rust/examples/Cargo.toml) so heavier,

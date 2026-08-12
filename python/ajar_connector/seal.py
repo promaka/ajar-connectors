@@ -1,8 +1,12 @@
 # SPDX-License-Identifier: Apache-2.0
 """The seal envelope: detached Ed25519 signature prefixed to canonical bytes."""
 
+from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+    Ed25519PrivateKey,
+    Ed25519PublicKey,
+)
 
 SEAL_SIGNATURE_LEN = 64
 """Length in bytes of the Ed25519 signature prefix on a sealed envelope."""
@@ -46,3 +50,43 @@ def seal(canonical: bytes, key: SigningKey) -> bytes:
     the canonical event from the suffix.
     """
     return key.sign(canonical) + canonical
+
+
+class SealVerificationError(Exception):
+    """A sealed envelope was not accepted."""
+
+
+def verify(sealed: bytes, verifying_key: bytes) -> bytes:
+    """Verify a sealed envelope and return the canonical bytes it carries.
+
+    The inverse of :func:`seal`, and the whole trust model in one call: it
+    answers whether these exact bytes were sealed by the holder of
+    ``verifying_key`` and are unaltered since. A recipient holding a
+    connector's registered verifying key can establish provenance without the
+    connector, the broker or Ajar Core being present or trusted.
+
+    ``verifying_key`` is the 32-byte raw Ed25519 public key, as published in the
+    connector's profile.
+
+    Raises :class:`SealVerificationError` if the envelope is too short, the key
+    is not a valid Ed25519 public key, or the signature does not verify.
+    """
+    if len(verifying_key) != 32:
+        raise SealVerificationError(
+            f"verifying key must be 32 bytes, got {len(verifying_key)}"
+        )
+    if len(sealed) < SEAL_SIGNATURE_LEN:
+        raise SealVerificationError(
+            f"sealed envelope is {len(sealed)} bytes, shorter than the "
+            f"{SEAL_SIGNATURE_LEN}-byte signature"
+        )
+    signature, canonical = sealed[:SEAL_SIGNATURE_LEN], sealed[SEAL_SIGNATURE_LEN:]
+    try:
+        Ed25519PublicKey.from_public_bytes(verifying_key).verify(signature, canonical)
+    except InvalidSignature as exc:
+        raise SealVerificationError(
+            "signature did not verify under the given key"
+        ) from exc
+    except ValueError as exc:
+        raise SealVerificationError(f"invalid verifying key: {exc}") from exc
+    return canonical

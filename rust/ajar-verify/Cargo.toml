@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: Apache-2.0
+[package]
+name = "ajar-verify"
+description = "Verify the Ed25519 seal on an Ajar event and print it. Needs no connector, broker or Core."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[[bin]]
+name = "ajar-verify"
+path = "src/main.rs"
+
+[dependencies]
+ajar-connector = { path = "../ajar-connector" }
+prost.workspace = true
+hex.workspace = true

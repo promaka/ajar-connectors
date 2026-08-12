@@ -143,6 +143,10 @@ cd rust && cargo test -p conformance --test golden_vectors
   limits, UUIDv7 / RFC 3339 helpers.
 - `canonical_bytes(&Event) -> Vec<u8>` — deterministic protobuf encoding.
 - `seal(&[u8], &SigningKey) -> Vec<u8>` — detached Ed25519 signature ++ canonical.
+- `verify(&[u8], &VerifyingKey) -> Result<&[u8], SealError>` — the inverse: confirms
+  the bytes were sealed by the holder of that key and are unaltered, returning the
+  canonical event. A recipient can establish provenance with no connector, broker
+  or Core present.
 - `ConnectorProfile` — declaration + deterministic JSON serializer.
 - `Connector` trait — inbound `normalize(&[u8]) -> Result<Event, _>`.
 - `OutboundProfile` trait — `target/slug/version/modeled_fields/lossy_fields/render`,
