@@ -39,7 +39,7 @@ fn hex32(v: &serde_json::Value, key: &str) -> [u8; 32] {
 fn parser() -> AdsbParser {
     AdsbParser::new(
         "adsb-tower-1",
-        Enrichment::default().with_affiliation("neutral"),
+        Enrichment::default().with_hostility("Neutral"),
     )
 }
 

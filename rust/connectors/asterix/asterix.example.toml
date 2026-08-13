@@ -15,8 +15,8 @@ nats_url = "nats://127.0.0.1:4222"
 subject_prefix = "ajar.ingest"
 signing_key_path = "/etc/ajar/radar-adsb-1.key"
 
-# The air picture carries no affiliation of its own; assign one for the COP.
-# default_affiliation = "unknown"
+# The air picture carries no hostility of its own; assign one for the COP.
+# default_hostility = "Unknown"
 
 # CAT048 only: monoradar reports are range/azimuth RELATIVE to the radar, so the
 # connector needs the radar's site to geolocate them onto the map. Set it to this

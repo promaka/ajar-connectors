@@ -59,10 +59,7 @@ fn inertial_frame() -> Vec<u8> {
 }
 
 fn parser() -> S4586Parser {
-    S4586Parser::new(
-        "uas-vsm-1",
-        Enrichment::default().with_affiliation("friendly"),
-    )
+    S4586Parser::new("uas-vsm-1", Enrichment::default().with_hostility("Friend"))
 }
 
 fn connector_event() -> ajar_connector::Event {
@@ -94,7 +91,7 @@ fn event_satisfies_core_content_contract() {
     assert!(is_rfc3339(&ev.timestamp), "timestamp must be RFC 3339");
     assert_eq!(ev.timestamp, "2025-07-31T22:13:20Z");
     assert!(!ev.source_id.is_empty());
-    assert_eq!(ev.entity_type, "mim:drone");
+    assert_eq!(ev.entity_type, "mim:aircraft");
 }
 
 #[test]

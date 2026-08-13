@@ -42,7 +42,7 @@ fn parser() -> AisParser {
     // Governed mode: a deployment that declared its ontology.
     AisParser::new(
         "ais-coast-1",
-        Enrichment::default().with_affiliation("neutral"),
+        Enrichment::default().with_hostility("Neutral"),
     )
 }
 

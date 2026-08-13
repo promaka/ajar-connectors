@@ -588,8 +588,8 @@ impl AisParser {
         // Parse every field into attributes; Core auto-demotes undeclared keys.
         // Affiliation is only ever the operator's explicit assertion — never a
         // connector-invented default (AIS carries none of its own).
-        if let Some(aff) = self.enrichment.affiliation.as_deref() {
-            b = b.attribute("affiliation", aff);
+        if let Some(aff) = self.enrichment.hostility.as_deref() {
+            b = b.attribute("hostility", aff);
         }
         // Governed `speed` is m/s; keep the native knots in metadata (ADR-0019).
         if let Some(kn) = p.sog {
@@ -846,7 +846,7 @@ mod tests {
     fn configured() -> AisParser {
         AisParser::new(
             "ais-coast-1",
-            Enrichment::default().with_affiliation("neutral"),
+            Enrichment::default().with_hostility("Neutral"),
         )
     }
 
@@ -926,7 +926,7 @@ mod tests {
         p.parse_sentence(T5B).unwrap();
         let pos = p.parse_sentence(POS_ARCO).unwrap().unwrap();
         let ev = p.to_event_at(&pos, "2026-06-10T08:00:00Z").unwrap();
-        assert_eq!(attr_of(&ev, "affiliation"), Some("neutral"));
+        assert_eq!(attr_of(&ev, "hostility"), Some("Neutral"));
         // Governed `speed` is m/s (10 kn * 0.514444); native knots kept in metadata.
         assert_eq!(attr_of(&ev, "speed"), Some("5.14"));
         assert_eq!(meta_of(&ev, "speed_kn"), Some("10.0"));
@@ -945,8 +945,8 @@ mod tests {
         let p = parser();
         let pos = p.parse_sentence(T1).unwrap().unwrap();
         let ev = p.to_event_at(&pos, "2026-06-10T08:00:00Z").unwrap();
-        assert!(!ev.attributes.iter().any(|a| a.key == "affiliation"));
-        assert!(!ev.metadata.iter().any(|m| m.key == "affiliation"));
+        assert!(!ev.attributes.iter().any(|a| a.key == "hostility"));
+        assert!(!ev.metadata.iter().any(|m| m.key == "hostility"));
         assert_eq!(ev.payload.as_slice(), T1);
     }
 

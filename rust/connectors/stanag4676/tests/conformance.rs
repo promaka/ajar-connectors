@@ -85,7 +85,7 @@ fn event_satisfies_core_content_contract() {
     assert!(is_rfc3339(&ev.timestamp), "timestamp must be RFC 3339");
     assert_eq!(ev.timestamp, "2026-06-10T08:00:00Z"); // baseTime + relTime 0
     assert!(!ev.source_id.is_empty());
-    assert_eq!(ev.entity_type, "mim:aircraft");
+    assert_eq!(ev.entity_type, "mim:object");
 }
 
 #[test]

@@ -28,7 +28,7 @@ canonical `Event`s. That is the whole contract.
 2. **Emit every decoded field as an attribute.** Use `.attribute(key, value)`.
    Core's ingest demotes undeclared keys to quarantine metadata — you do **not**
    gate on any ontology. Absent stays absent: never invent a default (including
-   affiliation — emit it only if the operator configured one).
+   hostility — emit it only if the operator configured one).
 3. **Canonical names + units.** Governed attributes have declared units. Normalise
    to them (speed → m/s, vertical_rate → m/s, altitude → metres, angles → degrees)
    and keep the native value in metadata (`speed_kn`, `altitude_ft`, …). A value in

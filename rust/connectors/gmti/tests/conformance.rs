@@ -86,7 +86,7 @@ fn hex32(v: &serde_json::Value, key: &str) -> [u8; 32] {
 fn parser() -> GmtiParser {
     GmtiParser::new(
         "gmti-radar-1",
-        Enrichment::default().with_affiliation("unknown"),
+        Enrichment::default().with_hostility("Unknown"),
     )
 }
 
@@ -109,7 +109,7 @@ fn event_satisfies_core_content_contract() {
 #[test]
 fn detection_identity_is_preserved_as_metadata_not_id() {
     let ev = connector_event();
-    assert_eq!(ev.entity_type, "mim:ground-track");
+    assert_eq!(ev.entity_type, "mim:object");
     let native = "REAPER-01:9001:3:42";
     assert_ne!(ev.id, native);
     assert!(

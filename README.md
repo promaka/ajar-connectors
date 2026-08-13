@@ -87,7 +87,7 @@ Or build an event directly with the validating builder:
 ```rust
 use ajar_connector::EventBuilder;
 
-let event = EventBuilder::new("sensor-123", "mim:drone")
+let event = EventBuilder::new("sensor-123", "mim:aircraft")
     .new_id()                    // UUIDv7, time-ordered
     .now()                       // RFC 3339 observation time
     .confidence(0.98)
@@ -102,7 +102,7 @@ let event = EventBuilder::new("sensor-123", "mim:drone")
 ```go
 import "github.com/promaka/ajar-connectors/go/ajarconnector"
 
-event, err := ajarconnector.NewEventBuilder("sensor-123", "mim:drone").
+event, err := ajarconnector.NewEventBuilder("sensor-123", "mim:aircraft").
     NewID().Now().
     Confidence(0.98).
     PolicyTag("class:secret").

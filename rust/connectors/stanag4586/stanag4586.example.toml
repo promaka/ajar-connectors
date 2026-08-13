@@ -13,11 +13,11 @@ nats_url = "nats://127.0.0.1:4222"
 subject_prefix = "ajar.ingest"
 signing_key_path = "/etc/ajar/uas-vsm-1.key"
 
-# 4586 carries no affiliation; assert one for the COP. Own-force UAS are typically
+# 4586 carries no hostility; assert one for the COP. Own-force UAS are typically
 # friendly.
-default_affiliation = "friendly"
+default_hostility = "Friend"
 
-# Optional: the entity type decoded vehicles map to (default: mim:drone).
+# Optional: the entity type decoded vehicles map to (default: mim:aircraft).
 # [entity_map]
 # default = "mim:aircraft"
 

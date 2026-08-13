@@ -24,7 +24,7 @@ async fn main() -> anyhow::Result<()> {
     let cfg = Config::load(&path).with_context(|| format!("loading {path}"))?;
 
     // A UAS carries no affiliation of its own; the operator asserts one (own-force
-    // UAS are typically `friendly`). The entity type defaults to `mim:drone`, with
+    // UAS are typically `friendly`). The entity type defaults to `mim:aircraft`, with
     // an optional `[entity_map] default = "..."` override.
     let parser = S4586Parser::new(cfg.source_id.clone(), cfg.enrichment())
         .with_entity_type(cfg.entity_map.get("default").cloned());

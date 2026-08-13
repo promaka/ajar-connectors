@@ -32,4 +32,4 @@ group = "239.2.3.1"
 # falls back to a battle-dimension default (air/sea) or an x:cot:<type> namespace,
 # so nothing is dropped for lack of a mapping.
 [entity_map]
-"a-f-G-U-C-D" = "mim:drone"
+"a-f-G-U-C-D" = "mim:unit"

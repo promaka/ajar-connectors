@@ -68,7 +68,7 @@ impl std::fmt::Display for S4676Error {
 impl std::error::Error for S4676Error {}
 
 /// Normalizes STANAG 4676 for one connector identity, with optional
-/// environment -> entity-type overrides and a default affiliation.
+/// environment -> entity-type overrides and a default hostility.
 pub struct S4676Parser {
     source_id: String,
     /// `environment` value (e.g. `AIR`) -> Ajar entity type, from config
@@ -105,7 +105,7 @@ struct TrackCtx {
 impl S4676Parser {
     /// Build a parser for one connector identity. `overrides` maps a 4676
     /// `environment` to an Ajar entity type; `enrichment` supplies the default
-    /// affiliation for points whose identity is unknown.
+    /// hostility for points whose identity is absent or unrecognised.
     pub fn new(
         source_id: impl Into<String>,
         overrides: HashMap<String, String>,
@@ -248,13 +248,13 @@ impl S4676Parser {
     ) -> Result<(), S4676Error> {
         let source_uid = track.uid.clone();
         let entity = self.entity_type(track.environment.as_deref());
-        let affiliation = self.affiliation(track.identity.as_deref());
+        let hostility = self.hostility(track.identity.as_deref());
 
         for p in &track.points {
             let mut b = EventBuilder::new(self.source_id.clone(), entity.clone())
                 .new_id()
                 .payload(raw.to_vec())
-                .attribute("affiliation", affiliation);
+                .attribute("hostility", hostility.clone());
 
             match point_time(base_time, rel_increment, p.rel_time) {
                 Some(ts) => b = b.timestamp(ts),
@@ -272,8 +272,18 @@ impl S4676Parser {
             if let Some(id) = &track.identity {
                 b = b.metadata("identity", id.clone());
             }
-            if let Some(env) = &track.environment {
-                b = b.metadata("environment", env.clone());
+            // Always emitted: an absent or unrecognised domain is UNKNOWN, which
+            // is a value Core governs, rather than a missing attribute.
+            let env_code = environment_code(track.environment.as_deref());
+            b = b.attribute("environment", env_code);
+            if env_code == "UNKNOWN" {
+                if let Some(raw) = &track.environment {
+                    if raw != "UNKNOWN" {
+                        // A producer using a token outside STANAG 1241. Keep it so
+                        // the oddity is visible rather than flattened away.
+                        b = b.metadata("environment_source", raw.clone());
+                    }
+                }
             }
             if let Some(oc) = &track.object_class {
                 b = b.attribute("object_class", oc.clone());
@@ -301,35 +311,76 @@ impl S4676Parser {
     /// then accepts.
     fn entity_type(&self, environment: Option<&str>) -> String {
         let env = environment.unwrap_or("");
-        if let Some(mapped) = self.overrides.get(env) {
+        // A deployment that knows its feed better can still map an environment to
+        // a specific type in `[entity_map]`.
+        // Keyed on either the wire token or the normalised code, so an operator
+        // writing SUBSURFACE or SUB-SURFACE both work.
+        if let Some(mapped) = self
+            .overrides
+            .get(env)
+            .or_else(|| self.overrides.get(environment_code(environment)))
+        {
             return mapped.clone();
         }
-        match env {
-            "AIR" => "mim:aircraft".to_string(),
-            "SURFACE" => "mim:vessel".to_string(),
-            "LAND" => "mim:ground".to_string(),
-            "SUB-SURFACE" => "x:s4676:subsurface".to_string(),
-            "SPACE" => "x:s4676:space".to_string(),
-            _ => "x:s4676:track".to_string(),
-        }
+        // Every value of `environment` is a domain, not a classification. AIR does
+        // not mean aircraft: it can be a missile, a balloon or a bird, exactly as
+        // LAND can be a person or a facility. Emitting a specific type here would
+        // assert what the tracker never said, so the track is `mim:object` and the
+        // domain rides alongside as an attribute.
+        //
+        // When the message carries `objectClass` — an APP-6 code, which genuinely
+        // is a classification — that is the field a specific type should come
+        // from. Mapping APP-6 onto MIM is its own piece of work.
+        "mim:object".to_string()
     }
 
-    /// Affiliation from the STANAG 1241 identity. Only the three unambiguous values
-    /// assert an affiliation; ASSUMED_FRIEND / SUSPECT / UNKNOWN / absent resolve to
-    /// the operator default (else `unknown`) so a COP never shows a fabricated
-    /// friend or hostile. The precise identity is preserved in metadata regardless.
-    fn affiliation(&self, identity: Option<&str>) -> &'static str {
+    /// Hostility from the STANAG 1241 identity.
+    ///
+    /// MIM 5.3 carries the same distinctions STANAG 1241 does, so the mapping is
+    /// now one-to-one and nothing is discarded. Previously only FRIEND, HOSTILE
+    /// and NEUTRAL had anywhere to go and ASSUMED_FRIEND and SUSPECT were flattened
+    /// to unknown, which lost exactly the nuance an operator cares about.
+    ///
+    /// An absent or unrecognised identity falls back to the operator's configured
+    /// default, and to `Unknown` if they set none: a connector does not invent a
+    /// friend or a foe.
+    fn hostility(&self, identity: Option<&str>) -> String {
         match identity {
-            Some("FRIEND") => "friendly",
-            Some("HOSTILE") => "hostile",
-            Some("NEUTRAL") => "neutral",
-            _ => match self.enrichment.affiliation.as_deref() {
-                Some("friendly") => "friendly",
-                Some("hostile") => "hostile",
-                Some("neutral") => "neutral",
-                _ => "unknown",
-            },
+            Some("FRIEND") => "Friend".to_string(),
+            Some("ASSUMED_FRIEND") => "AssumedFriend".to_string(),
+            Some("HOSTILE") => "Hostile".to_string(),
+            Some("SUSPECT") => "Suspect".to_string(),
+            Some("NEUTRAL") => "Neutral".to_string(),
+            _ => self
+                .enrichment
+                .hostility
+                .clone()
+                .unwrap_or_else(|| "Unknown".to_string()),
         }
+    }
+}
+
+/// Normalise a STANAG 1241 environment onto the closed set Core governs.
+///
+/// Core drives the CoT battle dimension from this attribute, so an AIR contact of
+/// unknown type renders in the air dimension rather than as a bare unknown. That
+/// only works while the value is inside the set: anything else is quarantined and
+/// the track silently loses its dimension on the map.
+///
+/// Two reasons not to pass the wire value through. STANAG 1241 hyphenates
+/// `SUB-SURFACE` where Core does not, and its enums are extensible, so a producer
+/// may legitimately send a token no one has seen. Both normalise here.
+///
+/// `environment` is an Ajar extension rather than MIM vocabulary: MIM 5.3 has no
+/// domain concept.
+fn environment_code(raw: Option<&str>) -> &'static str {
+    match raw.map(str::trim) {
+        Some("AIR") => "AIR",
+        Some("LAND") => "LAND",
+        Some("SURFACE") => "SURFACE",
+        Some("SUB-SURFACE" | "SUBSURFACE") => "SUBSURFACE",
+        Some("SPACE") => "SPACE",
+        _ => "UNKNOWN",
     }
 }
 
@@ -649,8 +700,9 @@ mod tests {
         // Identity carried across both points from the track's `object` block, which
         // in document order follows the points — proving the deferred flush is right.
         for ev in &evs {
-            assert_eq!(ev.entity_type, "mim:aircraft"); // AIR
-            assert_eq!(tactical(ev, "affiliation"), Some("friendly")); // FRIEND
+            // A domain is not a classification: AIR says where, not what.
+            assert_eq!(ev.entity_type, "mim:object");
+            assert_eq!(tactical(ev, "hostility"), Some("Friend"));
             assert_eq!(tactical(ev, "track_status"), Some("update")); // MAINTAINING
             assert_eq!(
                 tactical(ev, "source_uid"),
@@ -733,29 +785,75 @@ mod tests {
 
     #[test]
     fn environment_and_identity_overrides_and_defaults() {
-        // SURFACE -> vessel, HOSTILE -> hostile.
+        // The environment no longer picks a type; only the hostility changes.
         let sea = AIR_TRACK
             .replace("<ns2:environment>AIR", "<ns2:environment>SURFACE")
             .replace("<ns2:identity>FRIEND", "<ns2:identity>HOSTILE");
         let ev = &parser().to_events(sea.as_bytes()).unwrap()[0];
-        assert_eq!(ev.entity_type, "mim:vessel");
-        assert_eq!(tactical(ev, "affiliation"), Some("hostile"));
+        assert_eq!(ev.entity_type, "mim:object");
+        assert_eq!(tactical(ev, "hostility"), Some("Hostile"));
 
-        // ASSUMED_FRIEND must NOT be asserted as friendly (stays unknown), but the
-        // exact identity is preserved.
+        // ASSUMED_FRIEND now has somewhere to go: MIM carries the same distinction,
+        // so it survives instead of being flattened.
         let assumed = AIR_TRACK.replace("<ns2:identity>FRIEND", "<ns2:identity>ASSUMED_FRIEND");
         let ev = &parser().to_events(assumed.as_bytes()).unwrap()[0];
-        assert_eq!(tactical(ev, "affiliation"), Some("unknown"));
+        assert_eq!(tactical(ev, "hostility"), Some("AssumedFriend"));
         assert_eq!(tactical(ev, "identity"), Some("ASSUMED_FRIEND"));
+    }
+
+    #[test]
+    fn no_environment_picks_a_specific_type() {
+        // Every STANAG 1241 environment is a domain. None of them says what the
+        // thing is, so none of them may choose a type; the domain rides as an
+        // attribute instead. A specific type must come from `objectClass`.
+        // The wire token on the left, the value Core governs on the right.
+        for (wire, code) in [
+            ("AIR", "AIR"),
+            ("SURFACE", "SURFACE"),
+            ("LAND", "LAND"),
+            // STANAG 1241 hyphenates this; Core's closed set does not. Passing the
+            // wire value through would quarantine it and lose the CoT dimension.
+            ("SUB-SURFACE", "SUBSURFACE"),
+            ("SPACE", "SPACE"),
+            ("UNKNOWN", "UNKNOWN"),
+        ] {
+            let xml =
+                AIR_TRACK.replace("<ns2:environment>AIR", &format!("<ns2:environment>{wire}"));
+            let ev = &parser().to_events(xml.as_bytes()).unwrap()[0];
+            assert_eq!(ev.entity_type, "mim:object", "environment {wire}");
+            assert_eq!(
+                tactical(ev, "environment"),
+                Some(code),
+                "environment {wire}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unrecognised_environment_is_unknown_and_the_token_is_kept() {
+        // 4676's enums are extensible, so a producer may send something outside
+        // STANAG 1241. Emitting it verbatim would be quarantined by Core and the
+        // track would lose its battle dimension without anyone noticing.
+        let xml = AIR_TRACK.replace("<ns2:environment>AIR", "<ns2:environment>LITTORAL");
+        let ev = &parser().to_events(xml.as_bytes()).unwrap()[0];
+        assert_eq!(tactical(ev, "environment"), Some("UNKNOWN"));
+        assert_eq!(tactical(ev, "environment_source"), Some("LITTORAL"));
+    }
+
+    #[test]
+    fn a_track_with_no_environment_still_carries_one() {
+        let xml = AIR_TRACK.replace("<ns2:environment>AIR</ns2:environment>", "");
+        let ev = &parser().to_events(xml.as_bytes()).unwrap()[0];
+        assert_eq!(tactical(ev, "environment"), Some("UNKNOWN"));
     }
 
     #[test]
     fn config_entity_override_wins() {
         let mut ov = HashMap::new();
-        ov.insert("AIR".to_string(), "mim:drone".to_string());
+        ov.insert("AIR".to_string(), "mim:aircraft".to_string());
         let p = S4676Parser::new("t", ov, Enrichment::default());
         let ev = &p.to_events(AIR_TRACK.as_bytes()).unwrap()[0];
-        assert_eq!(ev.entity_type, "mim:drone");
+        assert_eq!(ev.entity_type, "mim:aircraft");
     }
 
     #[test]

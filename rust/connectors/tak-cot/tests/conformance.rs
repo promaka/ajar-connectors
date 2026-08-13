@@ -77,7 +77,7 @@ fn native_uid_is_preserved_as_metadata_not_id() {
     assert!(
         ev.attributes
             .iter()
-            .any(|a| a.key == "affiliation" && a.value == "friendly"),
+            .any(|a| a.key == "hostility" && a.value == "Friend"),
         "affiliation must be a governed attribute"
     );
     assert!(is_canonical(&ev.attributes), "attributes must be canonical");

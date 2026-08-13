@@ -47,7 +47,7 @@ Beyond position, the connector extracts the attributes an operating picture need
 
 | Attribute | From | Notes |
 |-----------|------|------------|
-| `affiliation` | the type's 2nd field: `f`→`friendly`, `h`→`hostile`, `n`→`neutral`, `u`/other→`unknown` | always set — a track is never blank |
+| `hostility` | the type's 2nd field: `f`→`friendly`, `h`→`hostile`, `n`→`neutral`, `u`/other→`unknown` | always set — a track is never blank |
 | `callsign` | `<detail><contact callsign="…"/>` | if present |
 | confidence | `<detail><confidence>0.87</confidence>` or `<confidence value="87"/>` (percent accepted) | the event's `confidence` field (if present) |
 
@@ -58,7 +58,7 @@ everything to metadata, so an undeclared key can never cost a track. Once the
 deployment's ontology declares them, set:
 
 ```toml
-governed_attributes = ["affiliation", "callsign"]
+governed_attributes = ["hostility", "callsign"]
 ```
 
 The full attribute reference (all connectors, semantics, units) is

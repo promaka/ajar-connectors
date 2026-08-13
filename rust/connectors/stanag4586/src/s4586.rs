@@ -88,7 +88,8 @@ pub struct S4586Parser {
     /// 4586 carries no affiliation, so it comes from config (own-force UAS are
     /// typically `friendly`); `None` resolves to `unknown`.
     enrichment: Enrichment,
-    /// Entity type for decoded vehicles (a UAS); overridable via config.
+    /// Entity type for decoded vehicles; overridable via config. MIM 5.3 has no
+    /// uncrewed class: the airframe is the thing, and crewing is a property of it.
     entity_type: String,
 }
 
@@ -113,12 +114,12 @@ struct Inertial {
 
 impl S4586Parser {
     /// Build a parser for one connector identity. `entity_type` defaults to
-    /// `mim:drone`; `enrichment` supplies the operator-asserted affiliation.
+    /// `mim:aircraft`; `enrichment` supplies the operator-asserted affiliation.
     pub fn new(source_id: impl Into<String>, enrichment: Enrichment) -> Self {
         Self {
             source_id: source_id.into(),
             enrichment,
-            entity_type: "mim:drone".to_string(),
+            entity_type: "mim:aircraft".to_string(),
         }
     }
 
@@ -230,8 +231,8 @@ impl S4586Parser {
             None => b = b.now(),
         }
         b = b.metadata("timestamp_s", format!("{:.3}", s.timestamp_s));
-        if let Some(aff) = &self.enrichment.affiliation {
-            b = b.attribute("affiliation", aff.clone());
+        if let Some(aff) = &self.enrichment.hostility {
+            b = b.attribute("hostility", aff.clone());
         }
 
         Ok(Some(
@@ -315,10 +316,7 @@ mod tests {
     use super::*;
 
     fn parser() -> S4586Parser {
-        S4586Parser::new(
-            "uas-vsm-1",
-            Enrichment::default().with_affiliation("friendly"),
-        )
+        S4586Parser::new("uas-vsm-1", Enrichment::default().with_hostility("Friend"))
     }
 
     fn tactical<'a>(ev: &'a Event, key: &str) -> Option<&'a str> {
@@ -378,7 +376,7 @@ mod tests {
         assert_eq!(evs.len(), 1);
         let ev = &evs[0];
 
-        assert_eq!(ev.entity_type, "mim:drone");
+        assert_eq!(ev.entity_type, "mim:aircraft");
         assert_eq!(tactical(ev, "source_uid"), Some("s4586:vehicle:7"));
         let loc = ev.location.as_ref().unwrap();
         assert!((loc.latitude - 26.3).abs() < 1e-6, "lat {}", loc.latitude);
@@ -396,7 +394,7 @@ mod tests {
         // W=-5 down -> +5 climb.
         assert_eq!(tactical(ev, "vertical_rate"), Some("5.00"));
         assert_eq!(tactical(ev, "altitude_type"), Some("wgs84"));
-        assert_eq!(tactical(ev, "affiliation"), Some("friendly"));
+        assert_eq!(tactical(ev, "hostility"), Some("Friend"));
     }
 
     #[test]
