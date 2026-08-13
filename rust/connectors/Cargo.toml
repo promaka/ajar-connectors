@@ -22,6 +22,7 @@ members = [
     "gmti",
     "stanag4676",
     "stanag4586",
+    "sink",
     "tak-egress",
 ]
 
