@@ -47,6 +47,8 @@ pub mod mqtt;
 pub mod rest;
 #[cfg(feature = "serial")]
 pub mod serial;
+#[cfg(feature = "websocket")]
+pub mod ws;
 
 pub use config::{Config, Enrichment, Framing, SensorSite, Transport};
 pub use runtime::{run, FrameParser, FrameSource, ParseError};
@@ -91,6 +93,12 @@ pub async fn open_source(transport: &Transport) -> anyhow::Result<Box<dyn FrameS
         Transport::Serial { device, baud } => Box::new(serial::open(device, *baud)?),
         #[cfg(feature = "mqtt")]
         Transport::Mqtt { host, topic } => Box::new(mqtt::open(host, topic)?),
+        #[cfg(feature = "websocket")]
+        Transport::WsClient {
+            url,
+            subscribe,
+            headers,
+        } => Box::new(ws::open(url, subscribe.clone(), headers)?),
         #[cfg(feature = "rest-poll")]
         Transport::RestPoll {
             url,
