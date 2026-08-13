@@ -1,0 +1,63 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# A complete Ajar path on one machine: a bus, publishers, and a verifying sink.
+#
+#   docker compose -f deploy/dev/compose.yml up --build
+#
+# The sink records every event that verifies, into a hash-chained SQLite file in
+# the `sink-data` volume. Prove the record afterwards with:
+#
+#   docker compose -f deploy/dev/compose.yml run --rm sink audit /etc/ajar/sink.toml
+#
+# This is a development and evaluation stack. It exercises publish, seal, verify,
+# persist and audit; it does not govern. Policy, ontology and classification are
+# Ajar Core's, and Core is not part of this repo.
+
+name: ajar-dev
+
+services:
+  nats:
+    image: nats:2-alpine
+    command: ["-m", "8222"]
+    ports:
+      - "4222:4222"   # clients
+      - "8222:8222"   # monitoring
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8222/healthz"]
+      interval: 5s
+      timeout: 2s
+      retries: 10
+
+  # A publisher: synthetic multi-domain tracks, signed with the documented dev
+  # seed. Swap in any connector by pointing it at the same NATS.
+  demo-radar:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile
+    environment:
+      NATS_URL: "nats://nats:4222"
+      AJAR_SOURCE_ID: "demo-radar"
+      AJAR_RATE_PER_MIN: "600"
+    depends_on:
+      nats:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Verify, persist, chain.
+  sink:
+    build:
+      context: ../..
+      dockerfile: deploy/dev/Dockerfile.sink
+    command: ["run", "/etc/ajar/sink.toml"]
+    volumes:
+      - ./sink.toml:/etc/ajar/sink.toml:ro
+      - sink-data:/var/lib/ajar
+    environment:
+      RUST_LOG: "info"
+    depends_on:
+      nats:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  sink-data:
