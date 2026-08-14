@@ -13,7 +13,7 @@ from .canonical import canonical_bytes
 from .connector import Connector, OutboundProfile
 from .event_pb2 import Attribute, Event, GeoPoint
 from .profile import ConnectorProfile
-from .seal import SEAL_SIGNATURE_LEN, SigningKey, seal
+from .seal import SEAL_SIGNATURE_LEN, SealVerificationError, SigningKey, seal, verify
 
 __all__ = [
     "Attribute",
@@ -28,7 +28,9 @@ __all__ = [
     "MAX_POLICY_TAGS",
     "OutboundProfile",
     "SEAL_SIGNATURE_LEN",
+    "SealVerificationError",
     "SigningKey",
     "canonical_bytes",
     "seal",
+    "verify",
 ]

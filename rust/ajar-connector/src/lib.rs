@@ -57,7 +57,7 @@ pub use connector::{Connector, OutboundProfile};
 pub use error::BuildError;
 pub use event::{Attribute, Event, GeoPoint};
 pub use profile::ConnectorProfile;
-pub use seal::{seal, SEAL_SIGNATURE_LEN};
+pub use seal::{seal, verify, SealError, SEAL_SIGNATURE_LEN};
 
 // Re-exported so connector authors don't have to match our exact dep versions.
 pub use ed25519_dalek::{self, SigningKey, VerifyingKey};

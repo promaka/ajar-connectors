@@ -30,6 +30,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ajar-verify"
+version = "0.5.0"
+dependencies = [
+ "ajar-connector",
+ "hex",
+ "prost",
+]
+
+[[package]]
 name = "anyhow"
 version = "1.0.102"
 source = "registry+https://github.com/rust-lang/crates.io-index"
