@@ -16,6 +16,7 @@ publish = false
 serial = ["dep:tokio-serial"]
 mqtt = ["dep:rumqttc"]
 rest-poll = ["dep:reqwest"]
+websocket = ["dep:tokio-tungstenite", "dep:futures-util"]
 
 [dependencies]
 ajar-connector.workspace = true
@@ -37,6 +38,13 @@ rustls-pemfile.workspace = true
 tokio-serial = { version = "5", optional = true }
 rumqttc = { version = "0.24", optional = true }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"], optional = true }
+# ring, to match the one crypto provider already in the process (see workspace note).
+futures-util = { workspace = true, optional = true }
+tokio-tungstenite = { version = "0.24", default-features = false, features = [
+    "connect",
+    "handshake",
+    "rustls-tls-webpki-roots",
+], optional = true }
 
 [dev-dependencies]
 rcgen = { version = "0.13", default-features = false, features = ["ring", "pem"] }

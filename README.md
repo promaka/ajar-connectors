@@ -216,6 +216,7 @@ transport (delivery) are separate, so any connector runs on any method by config
 | `serial` | RS-232/422/485 | needs the `serial` feature (NMEA sensors) |
 | `mqtt` | subscribe a topic | needs the `mqtt` feature (IoT buses) |
 | `rest-poll` | HTTP GET on interval | needs the `rest-poll` feature (pull-only APIs) |
+| `ws-client` | WebSocket, connect out | needs the `websocket` feature; hosted live feeds, subscription message and auth headers supported |
 
 DDS is reached through an external gateway that re-publishes onto one of these
 (usually `udp-multicast` or `mqtt`), not as a native kind. Full onboarding —

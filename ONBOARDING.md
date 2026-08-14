@@ -256,6 +256,7 @@ matches your source — no code change:
 | `serial` | RS-232/422/485 (`serial` feature) | NMEA/serial sensors |
 | `mqtt` | subscribe a topic (`mqtt` feature) | IoT / sensor buses |
 | `rest-poll` | HTTP GET on an interval (`rest-poll` feature) | pull-only REST APIs |
+| `ws-client` | WebSocket, connect out (`websocket` feature) | hosted live feeds (`wss://`) |
 
 **DDS** is integrated via an external gateway that re-publishes onto one of the
 above (typically `udp-multicast` or `mqtt`), not as a native kind — DDS is a

@@ -245,6 +245,34 @@ pub enum Transport {
         /// Topic to subscribe (wildcards allowed).
         topic: String,
     },
+    /// WebSocket client — connect out to a hosted feed and take each message as a
+    /// frame. Requires the `websocket` feature.
+    ///
+    /// The push counterpart to `rest-poll`, and unlike `http-server` the provider
+    /// does not need to reach you, so it works from behind a firewall with no
+    /// inbound path.
+    ///
+    /// ```toml
+    /// [transport]
+    /// kind = "ws-client"
+    /// url = "wss://feed.example.com/stream"
+    /// subscribe = '{"action":"subscribe","channel":"tracks"}'
+    ///
+    /// [transport.headers]
+    /// Authorization = "Bearer <token>"
+    /// ```
+    #[cfg(feature = "websocket")]
+    WsClient {
+        /// Feed endpoint, `ws://…` or `wss://…`.
+        url: String,
+        /// Message sent after every handshake, including reconnects. Most feeds
+        /// need one; without it you connect and then receive nothing.
+        #[serde(default)]
+        subscribe: Option<String>,
+        /// Extra handshake headers, typically authentication.
+        #[serde(default)]
+        headers: std::collections::HashMap<String, String>,
+    },
     /// Poll an HTTP endpoint on an interval — for REST/JSON APIs with no push.
     /// Requires the `rest-poll` feature.
     #[cfg(feature = "rest-poll")]
