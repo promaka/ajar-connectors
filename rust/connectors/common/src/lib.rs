@@ -31,6 +31,7 @@ pub mod dir;
 pub mod exec;
 pub mod file;
 pub mod health;
+pub mod http_server;
 mod key;
 pub mod nats;
 mod runtime;
@@ -66,6 +67,26 @@ pub async fn open_source(transport: &Transport) -> anyhow::Result<Box<dyn FrameS
         Transport::File { path, from_start } => Box::new(file::open(path, *from_start).await?),
         Transport::Exec { command, args } => Box::new(exec::open(command, args)?),
         Transport::Stdin => Box::new(stdin::open()?),
+        Transport::HttpServer {
+            bind,
+            path,
+            token,
+            tls_cert,
+            tls_key,
+            tls_client_ca,
+        } => Box::new(
+            http_server::open(
+                bind,
+                path,
+                token.clone(),
+                http_server::Tls {
+                    cert: tls_cert.as_deref(),
+                    key: tls_key.as_deref(),
+                    client_ca: tls_client_ca.as_deref(),
+                },
+            )
+            .await?,
+        ),
         #[cfg(feature = "serial")]
         Transport::Serial { device, baud } => Box::new(serial::open(device, *baud)?),
         #[cfg(feature = "mqtt")]

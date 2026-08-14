@@ -30,10 +30,14 @@ tracing.workspace = true
 anyhow.workspace = true
 hex.workspace = true
 async-trait.workspace = true
+# Server-side TLS for the http-server transport (same ring-only stack as tak-egress).
+tokio-rustls.workspace = true
+rustls-pemfile.workspace = true
 # Feature-gated transport dependencies.
 tokio-serial = { version = "5", optional = true }
 rumqttc = { version = "0.24", optional = true }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"], optional = true }
 
 [dev-dependencies]
+rcgen = { version = "0.13", default-features = false, features = ["ring", "pem"] }
 proptest = "1"

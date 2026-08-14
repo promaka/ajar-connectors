@@ -99,6 +99,10 @@ fn default_subject_prefix() -> String {
     "ajar.ingest".to_string()
 }
 
+fn default_http_path() -> String {
+    "/".to_string()
+}
+
 /// How a native feed reaches the connector — the integration *method*, distinct
 /// from the protocol (which is the parsing). Selected by `kind` in the config's
 /// `[transport]` table; each kind names the fields it needs.
@@ -177,6 +181,51 @@ pub enum Transport {
     /// Read this process's stdin, one line per frame — pipe from anything
     /// (`producer | ajar-<connector>`).
     Stdin,
+    /// HTTP server — accept webhook deliveries from sources that can only *push to
+    /// a URL*: IP cameras and VMS event notifications, SDR republishers, SaaS
+    /// callbacks. Each request body is one frame.
+    ///
+    /// Alone among the transports it can answer the sender, so a saturated
+    /// pipeline refuses the delivery (503) and a well-behaved client retries,
+    /// rather than the event being shed unseen.
+    ///
+    /// ```toml
+    /// [transport]
+    /// kind = "http-server"
+    /// bind = "0.0.0.0:8443"
+    /// path = "/hook"
+    /// token = "shared-secret"
+    /// tls_cert = "/etc/ajar/webhook.crt"
+    /// tls_key = "/etc/ajar/webhook.key"
+    /// # tls_client_ca = "/etc/ajar/senders-ca.crt"   # require client certs
+    /// ```
+    ///
+    /// TLS follows the same fail-closed rule as the NATS connection: a `token`
+    /// without TLS refuses to start, because a shared secret on a plaintext
+    /// listener is on the wire in every delivery.
+    HttpServer {
+        /// Local listen address, `ip:port` (e.g. `0.0.0.0:8443`).
+        bind: String,
+        /// Path a delivery must target (default `/`); anything else gets 404.
+        #[serde(default = "default_http_path")]
+        path: String,
+        /// Shared secret required in the `X-Ajar-Token` header. Requires TLS.
+        /// Prefer `tls_client_ca` where the sender can present a certificate.
+        #[serde(default)]
+        token: Option<String>,
+        /// PEM certificate chain served to senders. Set with `tls_key` to enable
+        /// TLS; leaving both unset serves plaintext (protected segments only).
+        #[serde(default)]
+        tls_cert: Option<String>,
+        /// PEM private key for `tls_cert`.
+        #[serde(default)]
+        tls_key: Option<String>,
+        /// PEM CA bundle senders' client certificates must chain to. Setting it
+        /// turns the listener into mutual TLS, which authenticates the sender by
+        /// certificate rather than by a shared secret.
+        #[serde(default)]
+        tls_client_ca: Option<String>,
+    },
     /// Serial line (RS-232/422/485) — many sensors emit NMEA or vendor ASCII this
     /// way. Requires the `serial` feature.
     #[cfg(feature = "serial")]
@@ -306,6 +355,17 @@ mod tests {
         assert!(matches!(
             transport("[transport]\nkind='stdin'"),
             Transport::Stdin
+        ));
+        // http-server: path defaults to "/" and the token is optional.
+        assert!(matches!(
+            transport("[transport]\nkind='http-server'\nbind='0.0.0.0:8080'"),
+            Transport::HttpServer { ref path, token: None, .. } if path == "/"
+        ));
+        assert!(matches!(
+            transport(
+                "[transport]\nkind='http-server'\nbind='0.0.0.0:8080'\npath='/hook'\ntoken='s'"
+            ),
+            Transport::HttpServer { ref path, token: Some(ref t), .. } if path == "/hook" && t == "s"
         ));
     }
 

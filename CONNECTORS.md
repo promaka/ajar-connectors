@@ -9,8 +9,9 @@ Pick by the wire format your equipment speaks rather than by its make. A radar a
 ground station from different vendors that both emit ASTERIX use the same connector.
 
 Transport is configuration. Any connector reads from whatever delivers its bytes,
-chosen in the `[transport]` block of its config: UDP multicast, TCP, serial, a tailed
-file, a watched directory, stdin, an exec'd CLI, MQTT or an HTTP poll. A system that
+chosen in the `[transport]` block of its config: UDP multicast, TCP, an HTTP endpoint
+receiving webhook deliveries, serial, a tailed file, a watched directory, stdin, an
+exec'd CLI, MQTT or an HTTP poll. A system that
 outputs ASTERIX over UDP multicast and one that sends it over a TCP stream use the
 same connector with a different four-line transport section.
 
