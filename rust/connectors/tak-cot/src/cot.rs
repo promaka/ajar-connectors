@@ -49,7 +49,7 @@ impl CotParser {
     pub fn new(
         source_id: impl Into<String>,
         overrides: HashMap<String, String>,
-        // CoT encodes affiliation in the event type, so this connector derives it
+        // CoT encodes hostility in the event type, so this connector derives it
         // from the wire and needs no enrichment; the arg is kept for API uniformity.
         _enrichment: Enrichment,
     ) -> Self {
@@ -156,10 +156,10 @@ impl CotParser {
         // ungoverned passthrough, so it goes in metadata (never the id, never a
         // governed attribute).
         //
-        // The tactical attributes a COP needs — affiliation, callsign, confidence.
+        // The tactical attributes a COP needs: hostility, callsign, confidence.
         // Affiliation and callsign are routed per the connector's attribute mode
         // (governed when the ontology declares them, else metadata — always safe);
-        // affiliation is always set (defaulting to unknown), so a track is never
+        // Hostility is always set (defaulting to Unknown), so a track is never
         // blank. Confidence is the event's first-class field. The native uid stays
         // in metadata (never the id).
         let mut builder = EventBuilder::new(self.source_id.clone(), self.map_type(&cot_type))
@@ -167,7 +167,7 @@ impl CotParser {
             .payload(native.to_vec())
             .timestamp(time)
             .metadata("source_uid", uid)
-            .attribute("affiliation", affiliation(&cot_type));
+            .attribute("hostility", hostility(&cot_type));
         if let Some(callsign) = callsign {
             builder = builder.attribute("callsign", callsign);
         }
@@ -196,17 +196,27 @@ impl CotParser {
     }
 }
 
-/// Affiliation from the CoT type's second field (`a-f-…` → friendly). Always
-/// resolves — anything other than the four standard codes (including a missing
-/// field, and pending/assumed/suspect variants) reads as `unknown`, so a COP never
-/// shows a blank affiliation.
-fn affiliation(cot_type: &str) -> &'static str {
+/// Hostility from the CoT type's second field (`a-f-…` → `Friend`).
+///
+/// CoT and MIM 5.3 line up almost exactly here, so every code the wire carries
+/// now survives: previously only friend, hostile, neutral and unknown had
+/// anywhere to go and the rest collapsed to `unknown`. `j` and `k` are the
+/// exercise codes, a friendly playing hostile and a track playing suspect, and
+/// are carried through rather than being reported as a real threat.
+///
+/// Anything unrecognised, including a missing field, reads as `Unknown` so a COP
+/// never shows a blank where a hostility belongs.
+fn hostility(cot_type: &str) -> &'static str {
     match cot_type.split('-').nth(1) {
-        Some("f") => "friendly",
-        Some("h") => "hostile",
-        Some("n") => "neutral",
-        Some("u") => "unknown",
-        _ => "unknown",
+        Some("f") => "Friend",
+        Some("a") => "AssumedFriend",
+        Some("h") => "Hostile",
+        Some("s") => "Suspect",
+        Some("n") => "Neutral",
+        Some("p") => "Pending",
+        Some("j") => "Joker",
+        Some("k") => "Faker",
+        _ => "Unknown",
     }
 }
 
@@ -269,7 +279,7 @@ mod tests {
         assert_eq!(loc.latitude, 26.4);
         assert_eq!(loc.altitude_m, 1200.0);
         // Affiliation is always set from the type's 2nd field (a-f-… -> friendly).
-        assert_eq!(tactical(&ev, "affiliation"), Some("friendly"));
+        assert_eq!(tactical(&ev, "hostility"), Some("Friend"));
     }
 
     #[test]
@@ -277,8 +287,8 @@ mod tests {
         // Affiliation is derived from the CoT type (real data, not a default) and
         // rides as an attribute; Core demotes it if the ontology hasn't declared it.
         let ev = parser().to_event(SAMPLE.as_bytes()).unwrap();
-        assert!(ev.attributes.iter().any(|a| a.key == "affiliation"));
-        assert!(!ev.metadata.iter().any(|m| m.key == "affiliation"));
+        assert!(ev.attributes.iter().any(|a| a.key == "hostility"));
+        assert!(!ev.metadata.iter().any(|m| m.key == "hostility"));
         // The raw CoT frame is preserved verbatim in the signed payload.
         assert_eq!(ev.payload.as_slice(), SAMPLE.as_bytes());
     }
@@ -291,7 +301,7 @@ mod tests {
             <detail><contact callsign="EAGLE01"/><confidence>0.87</confidence></detail>
         </event>"#;
         let ev = governed().to_event(cot.as_bytes()).unwrap();
-        assert_eq!(tactical(&ev, "affiliation"), Some("hostile"));
+        assert_eq!(tactical(&ev, "hostility"), Some("Hostile"));
         assert_eq!(tactical(&ev, "callsign"), Some("EAGLE01"));
         assert!((ev.confidence - 0.87).abs() < 1e-9);
     }
@@ -301,25 +311,51 @@ mod tests {
         let cot = r#"<event uid="X" type="a-n-A" time="2026-06-10T08:00:00Z"><detail><confidence value="87"/></detail></event>"#;
         let ev = parser().to_event(cot.as_bytes()).unwrap();
         assert!((ev.confidence - 0.87).abs() < 1e-9);
-        assert_eq!(tactical(&ev, "affiliation"), Some("neutral"));
+        assert_eq!(tactical(&ev, "hostility"), Some("Neutral"));
     }
 
     #[test]
-    fn unknown_affiliation_never_blank() {
-        // No 2nd field / unmapped code -> "unknown", never missing.
+    fn unknown_hostility_never_blank() {
+        // No 2nd field / unmapped code -> Unknown, never missing.
         let cot = r#"<event uid="X" type="a" time="2026-06-10T08:00:00Z"/>"#;
         let ev = parser().to_event(cot.as_bytes()).unwrap();
-        assert_eq!(tactical(&ev, "affiliation"), Some("unknown"));
+        assert_eq!(tactical(&ev, "hostility"), Some("Unknown"));
+    }
+
+    #[test]
+    fn every_cot_hostility_code_survives() {
+        // Each of these previously collapsed to "unknown" because there was
+        // nowhere for it to go. `j` and `k` are the exercise codes and must not
+        // reach a COP as a real threat.
+        for (code, expected) in [
+            ("f", "Friend"),
+            ("a", "AssumedFriend"),
+            ("h", "Hostile"),
+            ("s", "Suspect"),
+            ("n", "Neutral"),
+            ("p", "Pending"),
+            ("j", "Joker"),
+            ("k", "Faker"),
+            ("x", "Unknown"),
+        ] {
+            let cot = format!(r#"<event uid="X" type="a-{code}-A" time="2026-06-10T08:00:00Z"/>"#);
+            let ev = parser().to_event(cot.as_bytes()).unwrap();
+            assert_eq!(
+                tactical(&ev, "hostility"),
+                Some(expected),
+                "CoT affiliation code {code:?}"
+            );
+        }
     }
 
     #[test]
     fn overrides_win_over_defaults() {
         let mut ov = HashMap::new();
-        ov.insert("a-f-A-M-F-Q".to_string(), "mim:drone".to_string());
+        ov.insert("a-f-A-M-F-Q".to_string(), "mim:aircraft".to_string());
         let p = CotParser::new("tak-field-1", ov, Enrichment::default());
         assert_eq!(
             p.to_event(SAMPLE.as_bytes()).unwrap().entity_type,
-            "mim:drone"
+            "mim:aircraft"
         );
     }
 

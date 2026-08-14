@@ -322,7 +322,7 @@ mod tests {
 
     #[test]
     fn sorts_attributes_and_sets_defaults() {
-        let event = EventBuilder::new("sensor-1", "mim:drone")
+        let event = EventBuilder::new("sensor-1", "mim:aircraft")
             .new_id()
             .now()
             .attribute("speed", "110")
@@ -337,7 +337,7 @@ mod tests {
 
     #[test]
     fn sorts_metadata_and_rejects_duplicate_keys() {
-        let event = EventBuilder::new("sensor-1", "mim:drone")
+        let event = EventBuilder::new("sensor-1", "mim:aircraft")
             .new_id()
             .now()
             .metadata("mmsi", "227006760")
@@ -347,7 +347,7 @@ mod tests {
         let keys: Vec<_> = event.metadata.iter().map(|m| m.key.as_str()).collect();
         assert_eq!(keys, ["callsign", "mmsi"]);
 
-        let err = EventBuilder::new("sensor-1", "mim:drone")
+        let err = EventBuilder::new("sensor-1", "mim:aircraft")
             .new_id()
             .now()
             .metadata("mmsi", "1")
@@ -359,7 +359,7 @@ mod tests {
 
     #[test]
     fn rejects_duplicate_attribute_keys() {
-        let err = EventBuilder::new("sensor-1", "mim:drone")
+        let err = EventBuilder::new("sensor-1", "mim:aircraft")
             .new_id()
             .now()
             .attribute("heading", "225")
@@ -371,7 +371,7 @@ mod tests {
 
     #[test]
     fn requires_id_and_timestamp() {
-        let err = EventBuilder::new("sensor-1", "mim:drone")
+        let err = EventBuilder::new("sensor-1", "mim:aircraft")
             .build()
             .unwrap_err();
         assert_eq!(err, BuildError::MissingField("id"));
@@ -386,7 +386,7 @@ mod tests {
             "2026-06-10T25:00:00Z",
             "2026-06-10T08:00:00",
         ] {
-            let err = EventBuilder::new("sensor-1", "mim:drone")
+            let err = EventBuilder::new("sensor-1", "mim:aircraft")
                 .new_id()
                 .timestamp(bad)
                 .build()
@@ -399,7 +399,7 @@ mod tests {
             "2026-06-10T08:00:00+02:00",
         ] {
             assert!(
-                EventBuilder::new("sensor-1", "mim:drone")
+                EventBuilder::new("sensor-1", "mim:aircraft")
                     .new_id()
                     .timestamp(good)
                     .build()
@@ -412,7 +412,7 @@ mod tests {
     #[test]
     fn rejects_out_of_range_coordinates() {
         for (lat, lon) in [(9999.0, 2.0), (1.0, 999.0), (f64::NAN, 2.0), (-91.0, 0.0)] {
-            let err = EventBuilder::new("sensor-1", "mim:drone")
+            let err = EventBuilder::new("sensor-1", "mim:aircraft")
                 .new_id()
                 .now()
                 .location(lat, lon, 0.0)
@@ -423,7 +423,7 @@ mod tests {
                 "{lat},{lon}"
             );
         }
-        assert!(EventBuilder::new("sensor-1", "mim:drone")
+        assert!(EventBuilder::new("sensor-1", "mim:aircraft")
             .new_id()
             .now()
             .location(-90.0, 180.0, 11000.0)
@@ -433,7 +433,7 @@ mod tests {
 
     #[test]
     fn rejects_out_of_range_confidence() {
-        let err = EventBuilder::new("sensor-1", "mim:drone")
+        let err = EventBuilder::new("sensor-1", "mim:aircraft")
             .new_id()
             .now()
             .confidence(1.5)

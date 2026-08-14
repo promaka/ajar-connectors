@@ -18,7 +18,7 @@ ingests it from the larger tactical / MALE platforms and ground stations that sp
 
 ```
 STANAG 4586 DLI (UDP) ──▶ ajar-stanag4586 ──▶ canonical Event(s) ──▶ seal ──▶ NATS  ajar.ingest.<source_id>
-     untrusted edge        decode                (mim:drone)        (Ed25519)        (mTLS to Core)
+     untrusted edge        decode                (mim:aircraft)        (Ed25519)        (mTLS to Core)
 ```
 
 A datagram may pack **several messages** back to back; each has its own checksum, so
@@ -61,7 +61,7 @@ sent regularly to the CUCS and exactly what populates a track:
 - **Attitude** — roll/pitch as metadata; yaw as `heading`.
 - **Identity** — the vehicle id becomes `source_uid` (`s4586:vehicle:<id>`).
 
-Speeds are m/s, angles degrees. 4586 carries no affiliation, so the operator asserts
+Speeds are m/s, angles degrees. 4586 carries no hostility, so the operator asserts
 one in config (own-force UAS are typically `friendly`). Other message types are
 validated at the wrapper and skipped (not yet mapped) — a later pass extends coverage
 without touching the wire.
@@ -74,7 +74,7 @@ Copy [`stanag4586.example.toml`](stanag4586.example.toml). The DLI is usually UD
 source_id = "uas-vsm-1"
 nats_url  = "nats://127.0.0.1:4222"
 signing_key_path = "/etc/ajar/uas-vsm-1.key"
-default_affiliation = "friendly"
+default_hostility = "Friend"
 
 [transport]
 kind = "udp"

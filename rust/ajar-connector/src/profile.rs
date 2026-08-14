@@ -100,12 +100,12 @@ mod tests {
     fn serializes_verifying_key_as_hex() {
         let vk = SigningKey::from_bytes(&[0x47; 32]).verifying_key();
         let profile = ConnectorProfile::new("sensor-123", vk)
-            .allow_entity_type("mim:drone")
+            .allow_entity_type("mim:aircraft")
             .max_payload_bytes(4096)
             .rate_limit(50, 5.0);
         let json = profile.to_json();
         assert!(json.contains("\"source_id\":\"sensor-123\""));
         assert!(json.contains(&hex::encode(vk.to_bytes())));
-        assert!(json.contains("mim:drone"));
+        assert!(json.contains("mim:aircraft"));
     }
 }

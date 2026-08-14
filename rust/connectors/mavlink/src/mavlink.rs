@@ -410,8 +410,8 @@ impl MavParser {
             b = b.metadata("payload_truncated", "true");
         }
         // Operator-asserted affiliation only — never a connector-invented default.
-        if let Some(aff) = self.enrichment.affiliation.as_deref() {
-            b = b.attribute("affiliation", aff);
+        if let Some(aff) = self.enrichment.hostility.as_deref() {
+            b = b.attribute("hostility", aff);
         }
 
         // Parse every field into attributes; Core demotes undeclared keys.
@@ -696,7 +696,7 @@ mod tests {
     fn governed() -> MavParser {
         MavParser::new(
             "uav-flight-1",
-            Enrichment::default().with_affiliation("friendly"),
+            Enrichment::default().with_hostility("Friend"),
         )
     }
 
@@ -774,7 +774,7 @@ mod tests {
         assert_eq!(pos.state.status, Some("active"));
         assert_eq!(pos.state.armed, Some(true));
         let ev = p.to_event_at(&pos, "2026-06-10T08:00:00Z").unwrap();
-        assert_eq!(attr_of(&ev, "affiliation"), Some("friendly"));
+        assert_eq!(attr_of(&ev, "hostility"), Some("Friend"));
         assert_eq!(attr_of(&ev, "vehicle_type"), Some("multirotor"));
         assert_eq!(attr_of(&ev, "armed"), Some("true"));
     }
@@ -954,8 +954,8 @@ mod tests {
         let p = parser();
         let pos = p.parse_frame(&bytes(GPI)).unwrap().unwrap();
         let ev = p.to_event_at(&pos, "2026-06-10T08:00:00Z").unwrap();
-        assert!(!ev.attributes.iter().any(|a| a.key == "affiliation"));
-        assert!(!ev.metadata.iter().any(|m| m.key == "affiliation"));
+        assert!(!ev.attributes.iter().any(|a| a.key == "hostility"));
+        assert!(!ev.metadata.iter().any(|m| m.key == "hostility"));
         assert_eq!(ev.payload, bytes(GPI));
     }
 

@@ -37,7 +37,8 @@ load-bearing facts are packed in ways a naive decoder mishandles:
 | **Velocity** | `<vel>`, whose WGS-84 horizontal components are **degrees/second** | derives ground `speed` (m/s) + `course` (deg); keeps the native °/s in metadata |
 | **Time** | `baseTime + relTime × relTimeIncrement` (no ISO stamp on the point) | reconstructs the absolute RFC 3339 time |
 | **Status** | `segment/status` | maps INITIATING/MAINTAINING/SEARCHING/TERMINATED → new/update/coast/drop |
-| **Identity** | `track/object/id1241` (STANAG 1241) | affiliation from FRIEND/HOSTILE/NEUTRAL; exact identity kept in metadata |
+| **Identity** | `track/object/id1241` (STANAG 1241) | hostility, mapping one-to-one onto MIM including AssumedFriend and Suspect |
+| **Environment** | `id1241/environment` | an attribute, not the entity type: see below |
 | **Classification** | `originatorConfidentialityLabel` (STANAG 4774) | surfaced as the event's `policy_tag` |
 
 Matching is on **local element names only**, so any namespace-prefix binding
@@ -46,9 +47,21 @@ with canonical units (`speed` m/s, `course` deg, `vertical_rate` m/s per ADR-001
 native values are preserved in metadata.
 
 > **Affiliation is conservative.** Only FRIEND/HOSTILE/NEUTRAL assert an
-> affiliation; ASSUMED_FRIEND, SUSPECT, and UNKNOWN resolve to the operator default
+> hostility; ASSUMED_FRIEND, SUSPECT, and UNKNOWN resolve to the operator default
 > (else `unknown`) so a COP never shows a fabricated friend or hostile — the precise
-> STANAG 1241 identity is always preserved in metadata for a downstream rule to use.
+> STANAG 1241 identity is always preserved for a downstream rule to use.
+
+**Every track is `mim:object`.** The `environment` field reports a domain, not a
+classification: AIR says a track is in the air, not that it is an aircraft, and it
+could as easily be a missile, a balloon or a bird. Choosing a specific type from it
+would assert something the tracker never said, so the domain rides as an attribute
+and the type stays honest. Core drives the CoT battle dimension from that
+attribute, so an air contact still reaches TAK in the air dimension as `a-u-A`
+rather than as a bare unknown. The wire value is normalised first: STANAG 1241
+hyphenates `SUB-SURFACE` where Core's closed set does not, and an unrecognised
+token becomes `UNKNOWN` with the original kept in `environment_source`. A specific type belongs to `objectClass`, an APP-6 code
+that genuinely does classify; mapping APP-6 onto MIM is separate work. A deployment
+that knows its feed better can override per environment in `[entity_map]`.
 
 **Scope.** This connector decodes the **track** layer (`track → segment → tp`).
 Detection-only messages (raw GMTI dots re-embedded in 4676) produce no events — use

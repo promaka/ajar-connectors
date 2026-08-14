@@ -15,9 +15,9 @@ nats_url = "nats://127.0.0.1:4222"
 subject_prefix = "ajar.ingest"
 signing_key_path = "/etc/ajar/adsb-tower-1.key"
 
-# ADS-B is cooperative civil traffic and carries no affiliation of its own.
+# ADS-B is cooperative civil traffic and carries no hostility of its own.
 # Stamp one for the COP (usually "neutral"; "civil" if your ontology declares it).
-default_affiliation = "neutral"
+default_hostility = "Neutral"
 
 [transport]
 # Point at the receiver's SBS-1 output (dump1090 / readsb default port 30003).

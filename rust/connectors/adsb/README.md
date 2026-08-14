@@ -25,10 +25,10 @@ metadata), so Core derives a per-airframe `track_id` and the console renders one
 symbol per aircraft — never a merged blob.
 
 Governed attribute keys (see [`../ATTRIBUTES.md`](../ATTRIBUTES.md)):
-`affiliation`, `callsign`, `speed` (kt), `course` (deg), `vertical_speed` (m/s),
+`hostility`, `callsign`, `speed` (kt), `course` (deg), `vertical_speed` (m/s),
 `squawk`, `on_ground`. Altitude rides in the event location (metres).
 
-ADS-B carries no affiliation of its own — set `default_affiliation` (usually
+ADS-B carries no hostility of its own — set `default_hostility` (usually
 `"neutral"`) in the config.
 
 ## Run

@@ -32,12 +32,19 @@ pub struct Config {
     /// connector's default, so nothing is silently dropped.
     #[serde(default)]
     pub entity_map: std::collections::HashMap<String, String>,
-    /// Force-identity affiliation for feeds that carry none (AIS, MAVLink, civil
-    /// ADS-B). E.g. `"friendly"` for own-force UAS, `"neutral"` for civil traffic.
-    /// Connectors whose wire format encodes affiliation (CoT) derive it and ignore
-    /// this. Unset resolves to `unknown`.
+    /// Force-identity hostility for feeds that carry none (AIS, MAVLink, civil
+    /// ADS-B). E.g. `"Friend"` for own-force UAS, `"Neutral"` for civil traffic.
+    /// Connectors whose wire format encodes it (CoT, STANAG 4676) derive it and
+    /// ignore this. Unset resolves to `Unknown`.
+    ///
+    /// Values are MIM 5.3 `HostilityCodeType`, and the case is exact: `Friend`,
+    /// `AssumedFriend`, `Hostile`, `AssumedHostile`, `Suspect`, `Neutral`,
+    /// `AssumedNeutral`, `Involved`, `AssumedInvolved`, `Pending`, `Unknown`,
+    /// `Faker`, `Joker`. An unrecognised value is quarantined by Core rather than
+    /// rejected, so a lower-case `friendly` would silently lose friend/foe
+    /// colouring on the map.
     #[serde(default)]
-    pub default_affiliation: Option<String>,
+    pub default_hostility: Option<String>,
     /// The sensor's own site, for feeds that report positions relative to it
     /// (ASTERIX CAT048 monoradar reports are range/azimuth from the radar). A
     /// connector that needs it geolocates against this; without it, the relative
@@ -62,19 +69,19 @@ pub struct SensorSite {
 
 /// The enrichment a connector applies, distilled from [`Config`]. Connectors emit
 /// every decoded field as an attribute and Core's signed ontology governs which
-/// are kept, so the only enrichment left is the operator-asserted affiliation for
+/// are kept, so the only enrichment left is the operator-asserted hostility for
 /// feeds (AIS, MAVLink, civil ADS-B) that carry none of their own.
 #[derive(Debug, Clone, Default)]
 pub struct Enrichment {
-    /// Affiliation to stamp on feeds that carry none (`None` → not asserted, so
-    /// the connector emits no affiliation rather than inventing one).
-    pub affiliation: Option<String>,
+    /// Hostility to stamp on feeds that carry none (`None` → not asserted, so the
+    /// connector emits nothing rather than inventing a friend or foe).
+    pub hostility: Option<String>,
 }
 
 impl Enrichment {
-    /// Sets the default affiliation (builder-style convenience).
-    pub fn with_affiliation(mut self, affiliation: impl Into<String>) -> Self {
-        self.affiliation = Some(affiliation.into());
+    /// Sets the default hostility (builder-style convenience).
+    pub fn with_hostility(mut self, hostility: impl Into<String>) -> Self {
+        self.hostility = Some(hostility.into());
         self
     }
 }
@@ -83,7 +90,7 @@ impl Config {
     /// The enrichment settings for a connector built from this config.
     pub fn enrichment(&self) -> Enrichment {
         Enrichment {
-            affiliation: self.default_affiliation.clone(),
+            hostility: self.default_hostility.clone(),
         }
     }
 }

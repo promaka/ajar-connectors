@@ -22,11 +22,11 @@ nats_url = "nats://127.0.0.1:4222"
 subject_prefix = "ajar.ingest"
 signing_key_path = "/etc/ajar/gmti-radar-1.key"
 
-# GMTI carries no affiliation of its own; stamp one for the COP (moving-target
+# GMTI carries no hostility of its own; stamp one for the COP (moving-target
 # detections are often "unknown" or "suspect" pending correlation).
-default_affiliation = "unknown"
+default_hostility = "Unknown"
 
-# NOTE: the emitted entity type is `mim:ground-track`. If your Core ontology names
+# NOTE: the emitted entity type is `mim:object`. If your Core ontology names
 # ground moving-target detections differently, change the one `entity_type`
 # constant in src/gmti.rs to match.
 

@@ -13,16 +13,20 @@ nats_url = "nats://127.0.0.1:4222"
 subject_prefix = "ajar.ingest"
 signing_key_path = "/etc/ajar/isr-tracker-1.key"
 
-# 4676 carries a STANAG 1241 identity, so affiliation is derived from the wire
+# 4676 carries a STANAG 1241 identity, so hostility is derived from the wire
 # (FRIEND/HOSTILE/NEUTRAL). This default is only used when a track's identity is
 # absent or ambiguous (ASSUMED_FRIEND / SUSPECT / UNKNOWN).
-# default_affiliation = "unknown"
+# default_hostility = "Unknown"
 
-# Optional: map a 4676 `environment` to an Ajar entity type. The built-ins are
-# AIR -> mim:aircraft, SURFACE -> mim:vessel, LAND -> mim:ground; SUB-SURFACE and
-# SPACE ride under a vendor namespace. Override any of them here.
+# Every 4676 `environment` value is a domain, not a classification: AIR says a
+# track is in the air, not that it is an aircraft. So every track is emitted as
+# `mim:object` with the environment as an attribute, rather than asserting a type
+# the tracker never reported.
+#
+# If your deployment knows its feed better than that — a tracker that only ever
+# reports crewed aircraft, say — map the environment to a specific type here.
 # [entity_map]
-# AIR = "mim:drone"
+# AIR = "mim:aircraft"
 
 [transport]
 # A 4676 message is a whole XML document, so the transport must deliver ONE

@@ -144,8 +144,8 @@ impl GenericParser {
 
         // A configured default affiliation, so a generic feed reads consistently
         // on the COP alongside the format-specific connectors.
-        if let Some(aff) = &self.enrichment.affiliation {
-            b = b.attribute("affiliation", aff.clone());
+        if let Some(aff) = &self.enrichment.hostility {
+            b = b.attribute("hostility", aff.clone());
         }
 
         // Explicitly-mapped governed attributes and ungoverned metadata.
@@ -236,7 +236,7 @@ mod tests {
     }
 
     #[test]
-    fn maps_confidence_field_and_default_affiliation() {
+    fn maps_confidence_field_and_default_hostility() {
         let m = mapping(
             r#"
             [mapping]
@@ -246,7 +246,7 @@ mod tests {
             confidence_field = "quality"
             "#,
         );
-        let enrichment = Enrichment::default().with_affiliation("friendly");
+        let enrichment = Enrichment::default().with_hostility("Friend");
         let ev = GenericParser::new("gen-1", m, enrichment)
             .to_event(br#"{"ts":"2026-06-10T08:00:00Z","quality":87}"#)
             .unwrap();
@@ -254,7 +254,7 @@ mod tests {
         assert!(ev
             .attributes
             .iter()
-            .any(|a| a.key == "affiliation" && a.value == "friendly"));
+            .any(|a| a.key == "hostility" && a.value == "Friend"));
     }
 
     #[test]

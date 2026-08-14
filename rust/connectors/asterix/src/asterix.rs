@@ -700,8 +700,8 @@ impl AsterixParser {
             b = b.metadata("time_of_day_s", format!("{tod:.3}"));
         }
         // Affiliation only ever the operator's explicit assertion.
-        if let Some(aff) = self.enrichment.affiliation.as_deref() {
-            b = b.attribute("affiliation", aff);
+        if let Some(aff) = self.enrichment.hostility.as_deref() {
+            b = b.attribute("hostility", aff);
         }
         if let Some(gs) = t.ground_speed {
             b = b.attribute("speed", format!("{:.2}", gs * KNOTS_TO_MPS)); // m/s

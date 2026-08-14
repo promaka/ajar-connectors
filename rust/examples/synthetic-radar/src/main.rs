@@ -9,8 +9,8 @@
 //! consumer correlates observations into one track: a governed **`callsign`**
 //! (its native track key — a callsign / hull id) is the correlation key the console
 //! trails, and the same value rides in `source_uid` metadata for provenance.
-//! Domain-conveying `entity_type` (`mim:aircraft` / `mim:surface-vessel` /
-//! `mim:ground-vehicle`) drives correct symbology, and an `affiliation` attribute
+//! Domain-conveying `entity_type` (`mim:aircraft` / `mim:vessel` /
+//! `mim:land-vehicle`) drives correct symbology, and a `hostility` attribute
 //! colours friend/hostile/neutral.
 //!
 //! The shape every connector follows is the three steps in the loop:
@@ -62,8 +62,8 @@ impl Domain {
     fn entity_type(self) -> &'static str {
         match self {
             Domain::Air => "mim:aircraft",
-            Domain::Surface => "mim:surface-vessel",
-            Domain::Ground => "mim:ground-vehicle",
+            Domain::Surface => "mim:vessel",
+            Domain::Ground => "mim:land-vehicle",
         }
     }
 }
@@ -75,7 +75,7 @@ struct Track {
     /// Native track key — rides in `source_uid` metadata; the console's stable id.
     uid: String,
     domain: Domain,
-    affiliation: &'static str,
+    hostility: &'static str,
     route: Vec<(f64, f64)>, // waypoints (lat, lon)
     leg: usize,
     lat: f64,
@@ -107,29 +107,29 @@ impl Track {
 
 /// Builds a realistic mixed order of battle over the Gulf: airborne CAP/AWACS,
 /// surface combatants + merchant traffic, and a coastal ground patrol. Stable,
-/// hand-picked track keys and affiliations so the picture reads like a real feed.
+/// hand-picked track keys and hostilities so the picture reads like a real feed.
 fn make_tracks() -> Vec<Track> {
-    // (uid, domain, affiliation, centre lat, centre lon, radius, altitude m, step)
+    // (uid, domain, hostility, centre lat, centre lon, radius, altitude m, step)
     #[rustfmt::skip]
     #[allow(clippy::type_complexity)]
     let defs: &[(&str, Domain, &str, f64, f64, f64, f64, f64)] = &[
         // Air
-        ("QTR41", Domain::Air, "friend", 25.6, 51.2, 0.22, 10600.0, 0.030),
-        ("IAF221", Domain::Air, "friend", 26.2, 50.6, 0.18, 9100.0, 0.026),
-        ("AWACS1", Domain::Air, "friend", 26.0, 50.9, 0.30, 9800.0, 0.018),
-        ("UNK07", Domain::Air, "unknown", 26.7, 52.0, 0.15, 7300.0, 0.034),
-        ("HOSTILE9", Domain::Air, "hostile", 27.0, 52.3, 0.20, 6100.0, 0.038),
-        ("9HA4721", Domain::Air, "neutral", 25.3, 51.6, 0.24, 11200.0, 0.028),
+        ("QTR41", Domain::Air, "Friend", 25.6, 51.2, 0.22, 10600.0, 0.030),
+        ("IAF221", Domain::Air, "Friend", 26.2, 50.6, 0.18, 9100.0, 0.026),
+        ("AWACS1", Domain::Air, "Friend", 26.0, 50.9, 0.30, 9800.0, 0.018),
+        ("UNK07", Domain::Air, "Unknown", 26.7, 52.0, 0.15, 7300.0, 0.034),
+        ("HOSTILE9", Domain::Air, "Hostile", 27.0, 52.3, 0.20, 6100.0, 0.038),
+        ("9HA4721", Domain::Air, "Neutral", 25.3, 51.6, 0.24, 11200.0, 0.028),
         // Surface
-        ("HMS-DARING", Domain::Surface, "friend", 25.9, 50.3, 0.10, 0.0, 0.006),
-        ("USS-COLE", Domain::Surface, "friend", 26.1, 50.1, 0.08, 0.0, 0.005),
-        ("IRIS-JAMARAN", Domain::Surface, "hostile", 26.6, 51.4, 0.09, 0.0, 0.006),
-        ("MV-SHERE", Domain::Surface, "neutral", 25.5, 50.5, 0.14, 0.0, 0.004),
-        ("MT-PATROL3", Domain::Surface, "unknown", 26.4, 50.8, 0.07, 0.0, 0.005),
+        ("HMS-DARING", Domain::Surface, "Friend", 25.9, 50.3, 0.10, 0.0, 0.006),
+        ("USS-COLE", Domain::Surface, "Friend", 26.1, 50.1, 0.08, 0.0, 0.005),
+        ("IRIS-JAMARAN", Domain::Surface, "Hostile", 26.6, 51.4, 0.09, 0.0, 0.006),
+        ("MV-SHERE", Domain::Surface, "Neutral", 25.5, 50.5, 0.14, 0.0, 0.004),
+        ("MT-PATROL3", Domain::Surface, "Unknown", 26.4, 50.8, 0.07, 0.0, 0.005),
         // Ground (coastal)
-        ("SAM-SKORP1", Domain::Ground, "hostile", 26.9, 51.9, 0.04, 15.0, 0.002),
-        ("PATROL-V7", Domain::Ground, "friend", 25.7, 50.2, 0.06, 20.0, 0.003),
-        ("CONVOY-ZZ", Domain::Ground, "friend", 25.4, 50.35, 0.05, 12.0, 0.0025),
+        ("SAM-SKORP1", Domain::Ground, "Hostile", 26.9, 51.9, 0.04, 15.0, 0.002),
+        ("PATROL-V7", Domain::Ground, "Friend", 25.7, 50.2, 0.06, 20.0, 0.003),
+        ("CONVOY-ZZ", Domain::Ground, "Friend", 25.4, 50.35, 0.05, 12.0, 0.0025),
     ];
     defs.iter()
         .map(|&(uid, domain, aff, cx, cy, r, alt, step)| {
@@ -138,7 +138,7 @@ fn make_tracks() -> Vec<Track> {
             Track {
                 uid: uid.to_string(),
                 domain,
-                affiliation: aff,
+                hostility: aff,
                 route,
                 leg: 1,
                 lat,
@@ -232,7 +232,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     eprintln!(
         "[synthetic-radar] source_id={source_id}  subject={subject}\n\
          [synthetic-radar] {n_tracks} tracks (air/surface/ground), target ~{rate_per_min:.0} records/min\n\
-         [synthetic-radar] canonical mim: types + governed callsign (correlation key) + affiliation. Ctrl-C to stop."
+         [synthetic-radar] canonical mim: types + governed callsign (correlation key) + hostility. Ctrl-C to stop."
     );
 
     let start = Instant::now();
@@ -250,16 +250,21 @@ async fn main() -> Result<(), Box<dyn Error>> {
             //    human-readable id, and the same native key rides in `source_uid`
             //    metadata for provenance. Without a governed identity a consumer sees
             //    every observation as a new track.
-            let event = EventBuilder::new(&source_id, track.domain.entity_type())
+            let mut builder = EventBuilder::new(&source_id, track.domain.entity_type())
                 .new_id()
                 .now()
                 .location(track.lat, track.lon, track.alt_m)
                 .confidence(0.9)
                 .policy_tag("air-defence")
-                .attribute("affiliation", track.affiliation)
+                .attribute("hostility", track.hostility)
                 .attribute("callsign", &track.uid)
-                .metadata("source_uid", &track.uid)
-                .build()?;
+                .metadata("source_uid", &track.uid);
+            // A vessel's domain is an attribute now that surface and subsurface
+            // share one entity type.
+            if let Domain::Surface = track.domain {
+                builder = builder.attribute("vessel_domain", "Surface");
+            }
+            let event = builder.build()?;
 
             // 2. seal, 3. publish
             let sealed = seal(&canonical_bytes(&event), &key);

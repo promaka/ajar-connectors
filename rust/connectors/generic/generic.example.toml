@@ -12,8 +12,8 @@ nats_url = "nats://127.0.0.1:4222"
 subject_prefix = "ajar.ingest"
 signing_key_path = "/etc/ajar/acme-sensor-1.key"
 
-# Feeds mapped generically usually carry no affiliation; stamp one for the COP.
-# default_affiliation = "friendly"
+# Feeds mapped generically usually carry no hostility; stamp one for the COP.
+# default_hostility = "Friend"
 
 [transport]
 kind = "tcp-client"

@@ -18,7 +18,7 @@ subject_prefix = "ajar.ingest"
 signing_key_path = "/etc/ajar/ais-coast-1.key"
 
 # Coastal AIS is overwhelmingly civil traffic.
-default_affiliation = "neutral"
+default_hostility = "Neutral"
 
 [transport]
 # AIS aggregators and ship-network NMEA servers usually expose a TCP port that

@@ -18,7 +18,7 @@
 //! use ed25519_dalek::SigningKey;
 //!
 //! # fn main() -> Result<(), ajar_connector::BuildError> {
-//! let event = EventBuilder::new("sensor-123", "mim:drone")
+//! let event = EventBuilder::new("sensor-123", "mim:aircraft")
 //!     .new_id()                 // UUIDv7, time-ordered
 //!     .now()                    // RFC 3339 observation timestamp
 //!     .confidence(0.98)

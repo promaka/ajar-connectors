@@ -320,8 +320,8 @@ impl AdsbParser {
         // Parse every field into attributes; Core auto-demotes undeclared keys.
         // Affiliation is only ever the operator's explicit assertion — never a
         // connector-invented default (ADS-B carries none of its own).
-        if let Some(aff) = self.enrichment.affiliation.as_deref() {
-            b = b.attribute("affiliation", aff);
+        if let Some(aff) = self.enrichment.hostility.as_deref() {
+            b = b.attribute("hostility", aff);
         }
         macro_rules! attr {
             ($key:expr, $val:expr) => {
@@ -420,7 +420,7 @@ mod tests {
     }
 
     fn governed() -> AdsbParser {
-        AdsbParser::new("adsb-1", Enrichment::default().with_affiliation("neutral"))
+        AdsbParser::new("adsb-1", Enrichment::default().with_hostility("Neutral"))
     }
 
     fn attr_of<'a>(ev: &'a Event, k: &str) -> Option<&'a str> {
@@ -466,7 +466,7 @@ mod tests {
         assert_eq!(pos.state.callsign.as_deref(), Some("BAW123"));
         let ev = p.to_event_at(&pos, "2026-06-10T08:00:00Z").unwrap();
         assert_eq!(attr_of(&ev, "callsign"), Some("BAW123"));
-        assert_eq!(attr_of(&ev, "affiliation"), Some("neutral"));
+        assert_eq!(attr_of(&ev, "hostility"), Some("Neutral"));
     }
 
     #[test]
@@ -506,8 +506,8 @@ mod tests {
         // absent), and the raw SBS line is preserved verbatim in the signed payload.
         let pos = parser().parse_line(AIRBORNE.as_bytes()).unwrap().unwrap();
         let ev = parser().to_event_at(&pos, "2026-06-10T08:00:00Z").unwrap();
-        assert!(!ev.attributes.iter().any(|a| a.key == "affiliation"));
-        assert!(!ev.metadata.iter().any(|m| m.key == "affiliation"));
+        assert!(!ev.attributes.iter().any(|a| a.key == "hostility"));
+        assert!(!ev.metadata.iter().any(|m| m.key == "hostility"));
         assert_eq!(ev.payload.as_slice(), AIRBORNE.as_bytes());
     }
 

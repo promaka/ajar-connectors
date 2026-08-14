@@ -195,8 +195,8 @@ impl KlvParser {
         }
         // Affiliation is only ever the operator's explicit assertion — never a
         // connector-invented default (KLV carries none of its own).
-        if let Some(aff) = self.enrichment.affiliation.as_deref() {
-            b = b.attribute("affiliation", aff);
+        if let Some(aff) = self.enrichment.hostility.as_deref() {
+            b = b.attribute("hostility", aff);
         }
         if let Some(d) = &m.designation {
             b = b.attribute("platform_designation", d.clone());
@@ -424,17 +424,14 @@ mod tests {
     #[test]
     fn event_carries_canonical_fields_and_seals_raw() {
         let set = sample();
-        let p = KlvParser::new(
-            "uas-klv-1",
-            Enrichment::default().with_affiliation("friendly"),
-        );
+        let p = KlvParser::new("uas-klv-1", Enrichment::default().with_hostility("Friend"));
         let m = p.parse_set(&set).unwrap().unwrap();
         let ev = p.to_event_at(&m, "2026-06-10T08:00:00Z").unwrap();
         assert_eq!(meta(&ev, "source_uid"), Some("AB123"));
         assert_eq!(meta(&ev, "tail_number"), Some("AB123"));
         assert_eq!(attr(&ev, "heading"), Some("270.0"));
         assert_eq!(attr(&ev, "platform_designation"), Some("PREDATOR"));
-        assert_eq!(attr(&ev, "affiliation"), Some("friendly"));
+        assert_eq!(attr(&ev, "hostility"), Some("Friend"));
         // Losslessness: the entire raw set (incl. the unmapped airspeed tag 56) is
         // sealed verbatim in the payload.
         assert_eq!(ev.payload.as_slice(), set.as_slice());

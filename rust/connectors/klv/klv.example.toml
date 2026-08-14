@@ -18,9 +18,9 @@ nats_url = "nats://127.0.0.1:4222"
 subject_prefix = "ajar.ingest"
 signing_key_path = "/etc/ajar/uas-klv-1.key"
 
-# Motion-imagery metadata carries no affiliation of its own; stamp one for the
+# Motion-imagery metadata carries no hostility of its own; stamp one for the
 # COP (e.g. "friendly" for own-force UAS).
-default_affiliation = "friendly"
+default_hostility = "Friend"
 
 [transport]
 # A metadata extractor commonly forwards each KLV set as one UDP datagram.

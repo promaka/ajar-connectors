@@ -316,7 +316,7 @@ impl GmtiParser {
         // associates them. Height defaults to 0 when the report omits it.
         let report = self.mti_ordinal(t);
         let source_uid = format!("{}:{}:{}:{}", t.platform, t.job_id, t.dwell_index, report);
-        let mut b = EventBuilder::new(self.source_id.clone(), "mim:ground-track")
+        let mut b = EventBuilder::new(self.source_id.clone(), "mim:object")
             .new_id()
             .location(t.lat, t.lon, t.height_m.unwrap_or(0.0))
             .payload(t.raw.clone())
@@ -334,8 +334,8 @@ impl GmtiParser {
         // Affiliation is only ever the operator's explicit assertion — GMTI carries
         // none of its own. Every decoded field rides as an attribute; Core demotes
         // undeclared keys.
-        if let Some(aff) = self.enrichment.affiliation.as_deref() {
-            b = b.attribute("affiliation", aff);
+        if let Some(aff) = self.enrichment.hostility.as_deref() {
+            b = b.attribute("hostility", aff);
         }
         // Radial velocity is line-of-sight (governed m/s), distinct from ground
         // speed; kept under its own key.
@@ -575,16 +575,16 @@ mod tests {
         let pkt = sample_packet();
         let p = GmtiParser::new(
             "gmti-radar-1",
-            Enrichment::default().with_affiliation("hostile"),
+            Enrichment::default().with_hostility("Hostile"),
         );
         let t = &p.parse_packet(&pkt).unwrap()[0];
         let ev = p.to_event_at(t, "2026-06-10T08:00:00Z").unwrap();
-        assert_eq!(ev.entity_type, "mim:ground-track");
+        assert_eq!(ev.entity_type, "mim:object");
         // Unique-per-detection source_uid: platform:job:dwell:report.
         assert_eq!(meta(&ev, "source_uid"), Some("REAPER-01:9001:3:42"));
         assert_eq!(meta(&ev, "platform"), Some("REAPER-01"));
         assert_eq!(attr(&ev, "radial_velocity"), Some("-4.50")); // m/s
-        assert_eq!(attr(&ev, "affiliation"), Some("hostile"));
+        assert_eq!(attr(&ev, "hostility"), Some("Hostile"));
         // Losslessness: the whole raw dwell segment is sealed in the payload.
         assert!(ev.payload.starts_with(&[SEG_DWELL]));
         assert!(ev.payload.len() > 40);
