@@ -42,8 +42,14 @@ lands through a pull request — no direct pushes.
   **approving review from a Promaka maintainer** (see [CODEOWNERS](.github/CODEOWNERS))
   before it can merge.
 - PRs are **squash-merged** to keep `main` history linear.
-- Releases are git tags on `main` (e.g. `v0.1.0`). A fix for an already-released
-  line goes on a `release-x.y` maintenance branch and is tagged there.
+- Releases are git tags on `main` (e.g. `v0.1.0`). Pushing the tag is the whole
+  release: CI builds and pushes the images, then creates the GitHub release from
+  the tag's `CHANGELOG.md` entry. Nothing is published by hand, so a build that
+  fails leaves no release rather than one whose images are missing. The tag must
+  match the `version` in `rust/connectors/Cargo.toml`, and that version must have
+  a `CHANGELOG.md` entry; both are checked before anything is pushed. A fix for an
+  already-released line goes on a `release-x.y` maintenance branch and is tagged
+  there.
 
 ## Before you push
 
