@@ -13,6 +13,14 @@ Two version lines are tracked independently (see COMPATIBILITY.md):
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-08-15
+
+### Changed
+- The GitHub release is now created by CI once every image it refers to has been
+  pushed, rather than by hand beforehand. A failed image build leaves no release
+  instead of a half-built one, and a tag with no matching `CHANGELOG.md` section
+  fails rather than publishing empty notes.
+
 ## [0.5.0] - 2026-08-07
 
 ### Added

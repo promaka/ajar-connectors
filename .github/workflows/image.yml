@@ -89,7 +89,13 @@ jobs:
             echo "::error::git tag v$tag does not match rust/connectors/Cargo.toml version $ver"
             exit 1
           fi
-          echo "release-guard OK: tag and crate version agree ($ver)"
+          # Checked here rather than only in the release job so that a tag which
+          # cannot produce release notes fails before any image is published.
+          if ! grep -qE "^## \[$tag\]( |$)" CHANGELOG.md; then
+            echo "::error::CHANGELOG.md has no entry for $tag; write one before tagging"
+            exit 1
+          fi
+          echo "release-guard OK: tag, crate version and changelog entry agree ($ver)"
       # No QEMU: Dockerfile.build cross-compiles to arm64 on the native amd64
       # runner, so there is no emulated arch to register.
       - uses: docker/setup-buildx-action@v4
@@ -129,3 +135,38 @@ jobs:
           subject-name: ${{ env.IMAGE }}
           subject-digest: ${{ steps.build.outputs.digest }}
           push-to-registry: true
+
+  # The GitHub release is created here and nowhere else, after every image it
+  # refers to has been pushed. A failed build therefore leaves no release rather
+  # than one whose images do not exist.
+  release:
+    name: publish the release
+    needs: [build-push, connectors]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - name: notes for this version, from CHANGELOG.md
+        run: |
+          ver="${GITHUB_REF_NAME#v}"
+          awk -v v="$ver" '
+            $0 == "## [" v "]" || index($0, "## [" v "] ") == 1 { inside = 1; next }
+            inside && /^## \[/ { exit }
+            inside { print }
+          ' CHANGELOG.md > notes.md
+          # A missing entry would otherwise publish a release with empty notes.
+          if [ ! -s notes.md ]; then
+            echo "::error::CHANGELOG.md has no entry for $ver; write one before tagging"
+            exit 1
+          fi
+          cat notes.md
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$GITHUB_REF_NAME" \
+            --notes-file notes.md \
+            --verify-tag
