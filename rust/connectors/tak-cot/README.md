@@ -47,9 +47,21 @@ Beyond position, the connector extracts the attributes an operating picture need
 
 | Attribute | From | Notes |
 |-----------|------|------------|
-| `hostility` | the type's 2nd field: `f`→`friendly`, `h`→`hostile`, `n`→`neutral`, `u`/other→`unknown` | always set — a track is never blank |
+| `hostility` | the type's 2nd field (table below) | always set — a track is never blank |
 | `callsign` | `<detail><contact callsign="…"/>` | if present |
 | confidence | `<detail><confidence>0.87</confidence>` or `<confidence value="87"/>` (percent accepted) | the event's `confidence` field (if present) |
+
+`hostility` carries the MIM 5.3 `HostilityCodeType` vocabulary. The values are
+case-sensitive, and Core discards an unrecognised one without raising an error,
+so a track keeps its position and loses its affiliation silently:
+
+| CoT | `hostility` | CoT | `hostility` |
+|-----|-------------|-----|-------------|
+| `f` | `Friend` | `p` | `Pending` |
+| `a` | `AssumedFriend` | `j` | `Joker` |
+| `h` | `Hostile` | `k` | `Faker` |
+| `s` | `Suspect` | anything else | `Unknown` |
+| `n` | `Neutral` | | |
 
 Routing is **per attribute**: a key listed in the config's `governed_attributes`
 rides as a governed attribute (type-validated by the ontology); every other key
