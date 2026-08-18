@@ -13,6 +13,13 @@ Two version lines are tracked independently (see COMPATIBILITY.md):
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-08-18
+
+### Added
+- Published container images for the ASTERIX (`ajar-asterix`) and TAK/CoT
+  (`ajar-tak-cot`) ingress connectors, built for `linux/amd64` and `linux/arm64`
+  alongside the existing five.
+
 ## [0.5.1] - 2026-08-15
 
 ### Changed
