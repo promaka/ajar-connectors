@@ -16,6 +16,10 @@ rejected at template time rather than crash-looping in the cluster.
 
 > It does **not** deploy NATS or Ajar Core — those are operator/core-side.
 
+> **Registry access.** The published connector images are private. Your cluster
+> needs a pull secret with `read:packages` for `ghcr.io/promaka`, referenced via
+> `imagePullSecrets`, or the pods will fail to pull with `unauthorized`.
+
 A reference connector image (multi-stage, distroless non-root) is at
 [`deploy/docker/Dockerfile`](../../docker/Dockerfile).
 
