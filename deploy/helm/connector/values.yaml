@@ -19,6 +19,12 @@ connector:
   sourceId: "demo-connector"        # must equal the AJAR_SOURCE_ID Ajar assigned you
   ingestPrefix: "ajar.ingest"       # subject is <prefix>.<sourceId>
   natsUrl: "nats://ajar-ajar-nats:4222"  # in-cluster NATS (or an external tls://… host)
+  # REQUIRED — the connector's TOML, passed as its first argument. Every
+  # connector on the shared runtime reads its identity, transport and key path
+  # from this file; see each connector's <name>.example.toml.
+  config: ""
+  existingConfigMap: ""             # or manage the ConfigMap yourself
+  configMountPath: "/etc/ajar/config/connector.toml"
 
 # The connector's Ed25519 signing seed (32 raw bytes), mounted as a file and
 # exposed to the connector via AJAR_SIGNING_SEED. Provide it as a Secret.

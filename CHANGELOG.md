@@ -13,6 +13,18 @@ Two version lines are tracked independently (see COMPATIBILITY.md):
 
 ## [Unreleased]
 
+### Fixed
+- `synthetic-radar` now reads its signing seed from `AJAR_SIGNING_SEED`, the
+  variable every connector template, the keygen script and the Helm chart already
+  use. It previously read `AJAR_SEED_FILE`, so a chart-deployed instance silently
+  fell back to the published dev seed and signed events with a test key. Without
+  a seed it now refuses to publish rather than signing; the dev seed remains
+  reachable under `--dry-run`, where nothing leaves the process.
+- The Helm chart now renders the connector's TOML into a ConfigMap and passes its
+  path as the container's first argument. Connectors on the shared runtime read
+  their identity, transport and key path from that file, so the chart previously
+  produced a pod that could not start.
+
 ## [0.5.2] - 2026-08-18
 
 ### Added

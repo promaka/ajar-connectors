@@ -27,7 +27,7 @@
 //!
 //! Env: `NATS_URL`, `AJAR_SOURCE_ID` (connector identity, default `demo-radar`),
 //! `AJAR_INGEST_PREFIX`, `AJAR_RATE_PER_MIN` (records/min, default 600),
-//! `AJAR_SEED_FILE` (32-byte Ed25519 signing seed; default = dev seed),
+//! `AJAR_SIGNING_SEED` (32-byte Ed25519 signing seed; required unless --dry-run),
 //! `AJAR_TLS_CA` / `AJAR_TLS_CERT` / `AJAR_TLS_KEY` (enable mTLS),
 //! `AJAR_HEALTH_ADDR` (Prometheus `/metrics` + `/healthz`).
 
@@ -40,7 +40,7 @@ use std::time::{Duration, Instant};
 use ajar_connector::{canonical_bytes, seal, EventBuilder, SigningKey};
 
 /// Dev-only fallback signing seed: 32 bytes of `0x03` (documented TEST seed).
-/// Production loads a real registered seed via `AJAR_SEED_FILE`.
+/// Reachable only under `--dry-run`; publishing requires `AJAR_SIGNING_SEED`.
 const DEV_SEED: [u8; 32] = [0x03; 32];
 
 #[derive(Default)]
@@ -150,6 +150,13 @@ fn make_tracks() -> Vec<Track> {
         .collect()
 }
 
+/// Whether this invocation publishes nothing. Publishing is the default, so an
+/// unrecognised or misspelled flag leaves the connector publishing rather than
+/// silently entering a mode where the dev seed becomes reachable.
+fn is_dry_run(args: &[String]) -> bool {
+    args.iter().any(|a| a == "--dry-run")
+}
+
 fn flag_value(args: &[String], name: &str) -> Option<String> {
     let i = args.iter().position(|a| a == name)?;
     args.get(i + 1).cloned()
@@ -162,27 +169,59 @@ fn env_f64(key: &str, default: f64) -> f64 {
         .unwrap_or(default)
 }
 
-/// Loads the Ed25519 signing seed from `AJAR_SEED_FILE`, falling back to the
-/// documented dev seed. The file is either 32 raw bytes or the 64 hex characters
-/// `ajar keygen` writes (surrounding whitespace tolerated) — this is how the
-/// connector assumes its **registered identity**; the seed's public half must be
-/// in Core's registry.
-fn load_seed() -> [u8; 32] {
-    match env::var("AJAR_SEED_FILE") {
-        Ok(path) if !path.is_empty() => {
+/// Loads the Ed25519 signing seed from the file named by `AJAR_SIGNING_SEED` —
+/// the same variable every connector template and the Helm chart use. The file is
+/// either 32 raw bytes or the 64 hex characters `ajar keygen` writes (surrounding
+/// whitespace tolerated); this is how the connector assumes its **registered
+/// identity**, and the seed's public half must be in Core's registry.
+///
+/// The dev seed is reachable only under `--dry-run`, where nothing is published.
+/// Publishing without a real seed is refused rather than silently signed with a
+/// key whose private half is in this repository.
+fn load_seed(dry_run: bool) -> Result<[u8; 32], Box<dyn Error>> {
+    match seed_source(dry_run, env::var("AJAR_SIGNING_SEED").ok().as_deref()) {
+        SeedSource::File(path) => {
             let bytes = std::fs::read(&path)
-                .unwrap_or_else(|e| panic!("[synthetic-radar] read AJAR_SEED_FILE {path}: {e}"));
-            parse_seed(&bytes).unwrap_or_else(|| {
-                panic!(
-                    "[synthetic-radar] seed file {path}: expected 32 raw bytes or 64 hex chars, got {} bytes",
+                .map_err(|e| format!("read AJAR_SIGNING_SEED {path}: {e}"))?;
+            parse_seed(&bytes).ok_or_else(|| {
+                format!(
+                    "seed file {path}: expected 32 raw bytes or 64 hex chars, got {} bytes",
                     bytes.len()
                 )
+                .into()
             })
         }
-        _ => {
-            eprintln!("[synthetic-radar] no AJAR_SEED_FILE — using dev seed (0x03)");
-            DEV_SEED
+        SeedSource::Dev => {
+            eprintln!("[synthetic-radar] no AJAR_SIGNING_SEED — using the dev seed (dry-run only)");
+            Ok(DEV_SEED)
         }
+        SeedSource::Refuse => Err(
+            "set AJAR_SIGNING_SEED to your 32-byte key file (see scripts/gen-connector-key.sh). \
+             The dev seed is a published test key and is never used for publishing."
+                .into(),
+        ),
+    }
+}
+
+/// Where the signing seed comes from. Decided before any I/O and with no
+/// environment access, so the rule that matters — the dev seed is unreachable
+/// whenever events are published — is a pure function that can be checked
+/// exhaustively rather than a branch nobody exercises.
+#[derive(Debug, PartialEq, Eq)]
+enum SeedSource {
+    /// Read the seed from this path.
+    File(String),
+    /// The published test seed. Only ever selected when nothing is published.
+    Dev,
+    /// No seed and events would be published: refuse rather than sign.
+    Refuse,
+}
+
+fn seed_source(dry_run: bool, configured: Option<&str>) -> SeedSource {
+    match configured {
+        Some(path) if !path.is_empty() => SeedSource::File(path.to_string()),
+        _ if dry_run => SeedSource::Dev,
+        _ => SeedSource::Refuse,
     }
 }
 
@@ -199,7 +238,7 @@ fn parse_seed(bytes: &[u8]) -> Option<[u8; 32]> {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let args: Vec<String> = env::args().collect();
-    let dry_run = args.iter().any(|a| a == "--dry-run");
+    let dry_run = is_dry_run(&args);
     let max_ticks: Option<u64> = flag_value(&args, "--ticks").and_then(|v| v.parse().ok());
 
     let source_id = env::var("AJAR_SOURCE_ID").unwrap_or_else(|_| "demo-radar".to_string());
@@ -216,7 +255,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let interval = Duration::from_secs_f64((1.0 / sweeps_per_sec).clamp(0.05, 5.0));
 
     let subject = format!("{prefix}.{source_id}");
-    let key = SigningKey::from_bytes(&load_seed());
+    let key = SigningKey::from_bytes(&load_seed(dry_run)?);
 
     let metrics = Arc::new(Metrics::default());
     spawn_health(metrics.clone());
@@ -385,6 +424,78 @@ fn spawn_health(metrics: Arc<Metrics>) {
 
 #[cfg(test)]
 mod tests {
+    use super::{is_dry_run, seed_source, SeedSource};
+
+    fn argv(parts: &[&str]) -> Vec<String> {
+        std::iter::once("synthetic-radar".to_string())
+            .chain(parts.iter().map(|s| s.to_string()))
+            .collect()
+    }
+
+    /// The one rule that matters: nothing may both sign with the published test
+    /// seed and publish. Checked over every flag arrangement crossed with every
+    /// state the seed variable can be in, rather than trusting one branch.
+    #[test]
+    fn no_invocation_both_signs_with_the_dev_seed_and_publishes() {
+        let flag_sets: &[&[&str]] = &[
+            &[],
+            &["--ticks", "1"],
+            &["--dry-run"],
+            &["--dry-run", "--ticks", "1"],
+            &["--ticks", "1", "--dry-run"],
+            &["--rate", "600"],
+            // Near-misses: none of these may be mistaken for --dry-run, because
+            // being wrong here puts the dev seed on a publishing path.
+            &["--dry_run"],
+            &["--dryrun"],
+            &["-dry-run"],
+            &["--dry-run=true"],
+            &["--DRY-RUN"],
+            &["--ticks", "--dry-run"],
+        ];
+        let seed_states: &[Option<&str>] = &[None, Some(""), Some("/etc/ajar/seed")];
+
+        for flags in flag_sets {
+            let args = argv(flags);
+            let dry = is_dry_run(&args);
+            for configured in seed_states {
+                let source = seed_source(dry, *configured);
+                if !dry {
+                    assert_ne!(
+                        source,
+                        SeedSource::Dev,
+                        "{flags:?} with seed {configured:?} publishes but selected the dev seed"
+                    );
+                }
+                // And the converse worth stating: a configured seed always wins,
+                // so --dry-run never quietly discards a real key.
+                if matches!(configured, Some(p) if !p.is_empty()) {
+                    assert!(matches!(source, SeedSource::File(_)));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn publishing_without_a_seed_is_refused_not_defaulted() {
+        assert_eq!(seed_source(false, None), SeedSource::Refuse);
+        assert_eq!(seed_source(false, Some("")), SeedSource::Refuse);
+    }
+
+    #[test]
+    fn the_dev_seed_is_reachable_only_in_dry_run() {
+        assert_eq!(seed_source(true, None), SeedSource::Dev);
+        assert_eq!(seed_source(true, Some("")), SeedSource::Dev);
+    }
+
+    #[test]
+    fn only_the_exact_flag_means_dry_run() {
+        assert!(is_dry_run(&argv(&["--dry-run"])));
+        for near in ["--dry_run", "--dryrun", "-dry-run", "--DRY-RUN", "--dry-run=true"] {
+            assert!(!is_dry_run(&argv(&[near])), "{near} must not enable dry-run");
+        }
+    }
+
     use super::parse_seed;
 
     #[test]

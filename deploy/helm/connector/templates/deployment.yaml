@@ -38,6 +38,8 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           securityContext:
             {{- toYaml .Values.securityContext | nindent 12 }}
+          args:
+            - {{ .Values.connector.configMountPath | quote }}
           {{- if .Values.health.enabled }}
           ports:
             - name: health
@@ -89,6 +91,9 @@ spec:
               mountPath: {{ .Values.tls.mountPath | quote }}
               readOnly: true
             {{- end }}
+            - name: config
+              mountPath: {{ dir .Values.connector.configMountPath | quote }}
+              readOnly: true
             {{- with .Values.extraVolumeMounts }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
@@ -101,6 +106,9 @@ spec:
             items:
               - key: {{ .Values.signingSeed.secretKey | quote }}
                 path: {{ base .Values.signingSeed.mountPath | quote }}
+        - name: config
+          configMap:
+            name: {{ include "connector.configVolumeName" . }}
         {{- if .Values.tls.existingSecret }}
         - name: nats-tls
           secret:

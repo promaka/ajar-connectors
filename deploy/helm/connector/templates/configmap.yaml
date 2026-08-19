@@ -1,0 +1,17 @@
+{{- /*
+The connector's TOML config. Every connector built on the shared runtime takes a
+config file path as its first argument, so without this the container starts,
+fails to find its config, and crash-loops. Supply the file contents in
+`connector.config`, or point `connector.existingConfigMap` at one you manage.
+*/ -}}
+{{- if and .Values.connector.config (not .Values.connector.existingConfigMap) }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "connector.fullname" . }}-config
+  labels:
+    {{- include "connector.labels" . | nindent 4 }}
+data:
+  {{ base .Values.connector.configMountPath }}: |
+    {{- .Values.connector.config | nindent 4 }}
+{{- end }}

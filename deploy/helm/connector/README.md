@@ -4,9 +4,15 @@
 Deploys **a connector** into Kubernetes — the same clean way Core deploys (pairs
 with the Core chart in `promaka/ajar`, `deploy/helm/ajar`; same conventions).
 For clusters at a C2/hub or a forward outpost. The chart is **generic**: you
-bring your built connector image and its config; the chart wires up the signing
-key (from a Secret) and the standard environment the SDK reads (`AJAR_SOURCE_ID`,
-`AJAR_INGEST_PREFIX`, `NATS_URL`, `AJAR_SIGNING_SEED`).
+bring a connector image and its TOML config. The chart renders the config into a
+ConfigMap and passes its path as the connector's first argument, mounts the
+signing key from a Secret, and sets the TLS and health environment the runtime
+reads (`AJAR_TLS_CA` / `AJAR_TLS_CERT` / `AJAR_TLS_KEY`, `AJAR_HEALTH_ADDR`).
+
+Identity, transport and key path come from the TOML, not the environment — set
+`connector.config` to the contents of the connector's `<name>.example.toml`. A
+release with neither `connector.config` nor `connector.existingConfigMap` is
+rejected at template time rather than crash-looping in the cluster.
 
 > It does **not** deploy NATS or Ajar Core — those are operator/core-side.
 

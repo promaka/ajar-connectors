@@ -51,4 +51,66 @@ jobs:
                --set image.repository=x --set signingSeed.existingSecret=x >/dev/null 2>&1; then
             echo "expected failure: unpinned image (no tag/digest) was accepted"; exit 1
           fi
+          if helm template demo deploy/helm/connector \
+               --set image.repository=x --set image.tag=1.0.0 \
+               --set signingSeed.existingSecret=x >/dev/null 2>&1; then
+            echo "expected failure: missing connector.config was accepted"; exit 1
+          fi
           echo "guard rails OK"
+
+  # Renders the chart and starts a REAL published connector against its output.
+  # `helm lint` and `helm template` both pass on a chart whose pod cannot start,
+  # because neither knows what the binary inside the image expects — so the only
+  # way to prove the deploy path is to run it. synthetic-radar is deliberately not
+  # used here: it is configured by environment alone and would pass while every
+  # connector we actually ship failed.
+  chart-runs-a-connector:
+    name: the chart's output boots a real connector
+    runs-on: ubuntu-latest
+    env:
+      IMAGE: ghcr.io/promaka/ajar-connector-asterix:0.5.2
+    steps:
+      - uses: actions/checkout@v7
+      - uses: azure/setup-helm@v5
+      - name: Render the chart
+        run: |
+          set -euo pipefail
+          helm template ci deploy/helm/connector \
+            --set image.repository="${IMAGE%:*}" \
+            --set image.tag="${IMAGE##*:}" \
+            --set signingSeed.existingSecret=ci-seed \
+            --set-file connector.config=.github/fixtures/ci-connector.toml \
+            > rendered.yaml
+      - name: Extract the config and argv the chart chose
+        run: |
+          set -euo pipefail
+          python3 - <<'EOF'
+          import yaml
+          docs = [d for d in yaml.safe_load_all(open("rendered.yaml")) if d]
+          cm  = next(d for d in docs if d["kind"] == "ConfigMap")
+          dep = next(d for d in docs if d["kind"] == "Deployment")
+          args = dep["spec"]["template"]["spec"]["containers"][0].get("args") or []
+          assert args, "the chart passed no config path to the connector"
+          open("connector.toml", "w").write(next(iter(cm["data"].values())))
+          open("argv", "w").write(args[0])
+          print("chart argv:", args)
+          EOF
+      - name: Start the image exactly as the chart would
+        run: |
+          set -euo pipefail
+          ARG="$(cat argv)"
+          head -c 32 /dev/urandom > seed
+          docker run --rm -d --name conn \
+            -v "$GITHUB_WORKSPACE/connector.toml:$ARG:ro" \
+            -v "$GITHUB_WORKSPACE/seed:/etc/ajar/seed:ro" \
+            "$IMAGE" "$ARG"
+          sleep 10
+          docker logs conn > logs.txt 2>&1 || true
+          docker rm -f conn >/dev/null 2>&1 || true
+          cat logs.txt
+          # A missing or unreadable config dies before ever logging this line.
+          grep -q "connector starting" logs.txt \
+            || { echo "::error::the connector never started from the chart's own output"; exit 1; }
+          grep -q "ci-asterix" logs.txt \
+            || { echo "::error::the connector did not pick up the chart-rendered config"; exit 1; }
+          echo "the chart's output boots a real connector"

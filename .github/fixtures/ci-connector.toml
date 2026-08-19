@@ -1,0 +1,9 @@
+# Config used by the chart deploy test: the chart renders this into a ConfigMap
+# and a real connector image is started against it.
+source_id = "ci-asterix"
+nats_url = "nats://127.0.0.1:4222"
+signing_key_path = "/etc/ajar/seed"
+
+[transport]
+kind = "udp"
+bind = "0.0.0.0:8600"
