@@ -13,6 +13,16 @@ Two version lines are tracked independently (see COMPATIBILITY.md):
 
 ## [Unreleased]
 
+### Added
+- `--profile` on every connector prints the profile document the operator
+  registers, derived from the config the connector already parses and the key it
+  already holds, and exits before opening a transport. Onboarding previously
+  asked a vendor to hand-write that document, or to write Rust to produce it.
+  `allowed_entity_types` are prefixes, which is what lets an open-ended connector
+  declare itself: `tak-cot` emits `["mim:", "x:cot:"]`, covering the unbounded
+  `x:cot:<type>` fallback no enumeration could cover. Rate limits are omitted:
+  they are the operator's policy, not the connector's to assert.
+
 ## [0.5.3] - 2026-08-19
 
 ### Fixed

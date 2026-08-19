@@ -405,31 +405,54 @@ let signing_key = SigningKey::from_bytes(&seed);
 
 ## 7. Declare your profile
 
-Your **connector profile** is the declaration Ajar registers for you. Build it
-with the SDK and hand the JSON to your operator:
+Your **connector profile** is the declaration Ajar registers for you. If you are
+running one of the connectors in this repository, you do not write it — every
+field is already in your config and your key, so the connector derives it:
+
+```bash
+ajar-tak-cot --profile ./tak-cot.toml
+```
+
+It prints the document and exits without opening a transport, so it is safe to
+run against a production config. Send the output to your operator.
+
+`allowed_entity_types` are **prefixes**, matched by Core with `starts_with`. That
+is what lets a connector with an open-ended fallback declare itself: `tak-cot`
+maps two CoT battle dimensions to `mim:` types and emits `x:cot:<type>` for
+everything else, so it declares `["mim:", "x:cot:"]`. Any `[entity_map]` override
+that falls outside those prefixes is added for you.
+
+Rate limits are absent by design: they are your operator's policy to set, not
+yours to assert, and Core supplies them.
+
+If you are writing your own connector, build the same document with the SDK:
 
 ```rust
 use ajar_connector::ConnectorProfile;
 
 let profile = ConnectorProfile::new("acme-radar-1", signing_key.verifying_key())
     .allow_entity_type("mim:aircraft")
-    .max_payload_bytes(64 * 1024)
-    .rate_limit(200, 20.0);     // burst capacity, refill/sec
+    .max_payload_bytes(64 * 1024);
 println!("{}", profile.to_json_pretty());
 ```
 
-produces exactly what Ajar needs:
+Either way it produces what Ajar needs:
 
 ```json
 {
-  "source_id": "acme-radar-1",
-  "allowed_entity_types": ["mim:aircraft"],
+  "contract": "v1",
+  "source_id": "tak-field-1",
+  "allowed_entity_types": ["mim:", "x:cot:"],
   "max_payload_bytes": 65536,
-  "rate_capacity": 200,
-  "rate_refill_per_sec": 20.0,
-  "verifying_key_hex": "e28a89..."
+  "verifying_key_hex": "be632a73306cf201f8222cd8766a4427f4c7224c0e55018012c28faed60e0892"
 }
 ```
+
+`contract` names the generation of this document's shape, so Core can accept an
+older profile unchanged when the shape next grows. `max_payload_bytes` is
+advisory — the connector's own frame ceiling — and Core enforces its own limit
+regardless. The key is the **public** half; your signing seed never leaves your
+environment and never appears in this document.
 
 ## 8. Run it
 

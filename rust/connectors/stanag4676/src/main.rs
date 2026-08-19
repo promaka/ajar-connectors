@@ -18,10 +18,23 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
-    let path = std::env::args()
-        .nth(1)
+    let args: Vec<String> = std::env::args().collect();
+    // The first non-flag argument is the config path, so `--profile` may sit on
+    // either side of it.
+    let path = args
+        .iter()
+        .skip(1)
+        .find(|a| !a.starts_with("--"))
+        .cloned()
         .unwrap_or_else(|| "stanag4676.toml".to_string());
     let cfg = Config::load(&path).with_context(|| format!("loading {path}"))?;
+
+    // `--profile` prints the document the operator registers and exits,
+    // before any transport is opened.
+    if ajar_connector_common::profile::requested(&args) {
+        println!("{}", ajar_connector_common::profile::emit(&cfg, &["mim:"])?);
+        return Ok(());
+    }
 
     let parser = S4676Parser::new(
         cfg.source_id.clone(),

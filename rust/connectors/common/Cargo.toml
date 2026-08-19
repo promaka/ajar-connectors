@@ -30,6 +30,7 @@ toml.workspace = true
 tracing.workspace = true
 anyhow.workspace = true
 hex.workspace = true
+serde_json.workspace = true
 async-trait.workspace = true
 # Server-side TLS for the http-server transport (same ring-only stack as tak-egress).
 tokio-rustls.workspace = true
