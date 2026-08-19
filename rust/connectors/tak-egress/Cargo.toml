@@ -32,4 +32,4 @@ anyhow.workspace = true
 # Mints a throwaway CA + server/client certs so the TLS acceptance tests need no
 # external PKI or fixtures. ring only — keep aws-lc-rs out of the tree so the
 # process has exactly one rustls crypto provider.
-rcgen = { version = "0.13", default-features = false, features = ["ring", "pem"] }
+rcgen = { version = "0.14", default-features = false, features = ["ring", "pem"] }
