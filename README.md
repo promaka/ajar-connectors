@@ -4,6 +4,7 @@
 [![ci](https://github.com/promaka/ajar-connectors/actions/workflows/ci.yml/badge.svg)](https://github.com/promaka/ajar-connectors/actions/workflows/ci.yml)
 [![image](https://github.com/promaka/ajar-connectors/actions/workflows/image.yml/badge.svg)](https://github.com/promaka/ajar-connectors/actions/workflows/image.yml)
 [![deploy](https://github.com/promaka/ajar-connectors/actions/workflows/helm.yml/badge.svg)](https://github.com/promaka/ajar-connectors/actions/workflows/helm.yml)
+[![conformant: contract-v1](https://img.shields.io/badge/conformant-contract--v1-2ea44f)](docs/wire-contract-v1.md)
 
 The vendor-facing SDK for building **connectors** to **Ajar**,
 the sovereign defence integration & governance plane.
@@ -24,6 +25,54 @@ native bytes ──▶ Connector::normalize ──▶ Event ──▶ canonical_
 > **Building a connector?** Start with the **[connector onboarding guide](ONBOARDING.md)** —
 > data flow, what to build, key generation, profile declaration, running it, and
 > troubleshooting.
+
+## Prove your bytes are right, without asking us
+
+`ajar-conformance` runs **your** implementation against the vendored golden
+vectors — whatever language it is in, whether it links this SDK or reimplements
+the contract in your own binary. Offline, no credentials, no Ajar Core.
+
+Your implementation reads a fixture on stdin and writes raw bytes on stdout:
+
+```python
+out = canonical_bytes(fixture_to_event(json.load(sys.stdin)))
+if sys.argv[1] == "sealed":
+    out = seal(out, SigningKey.from_seed(bytes.fromhex(os.environ["AJAR_TEST_SIGNING_SEED"])))
+sys.stdout.buffer.write(out)
+```
+
+That is the whole interface — the complete runnable version is
+[`python/examples/conformance_adapter.py`](python/examples/conformance_adapter.py),
+with a Rust one in [`rust/examples/conformance-adapter/`](rust/examples/conformance-adapter/).
+
+```console
+$ ajar-conformance run --impl python3 your_adapter.py
+ok   aircraft_with_attrs/canonical
+ok   aircraft_with_attrs/sealed
+...
+Conformant — contract-v1 (14 vectors)
+```
+
+Exit 0 means your bytes are the bytes Ajar accepts. Exit 1 tells you which
+vector diverged and by how much. Add `--report out.json` for a machine-readable
+result. In your CI:
+
+```yaml
+- name: Ajar conformance
+  run: |
+    cargo install --git https://github.com/promaka/ajar-connectors \
+      --tag v0.5.3 --bin ajar-conformance conformance
+    ajar-conformance run --impl ./your-connector --report conformance.json
+```
+
+Green means you are conformant with `contract-v1`. Display the badge:
+
+```markdown
+[![conformant: contract-v1](https://img.shields.io/badge/conformant-contract--v1-2ea44f)](https://github.com/promaka/ajar-connectors/blob/main/docs/wire-contract-v1.md)
+```
+
+The contract those vectors encode is one page:
+**[docs/wire-contract-v1.md](docs/wire-contract-v1.md)**.
 
 ## Status
 

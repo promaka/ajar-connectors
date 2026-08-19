@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: Apache-2.0
+[package]
+name = "conformance-adapter"
+description = "Reference adapter showing what ajar-conformance expects of an implementation."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+ajar-connector.workspace = true
+conformance = { path = "../../conformance" }
+ed25519-dalek = "3"
+hex = "0.4"

@@ -96,18 +96,23 @@ struct FixtureAttr {
 pub fn load_fixture(name: &str) -> Event {
     let path = contract_dir().join("corpus").join(format!("{name}.json"));
     let raw = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {name}.json: {e}"));
-    let f: FixtureEvent =
-        serde_json::from_str(&raw).unwrap_or_else(|e| panic!("parse {name}.json: {e}"));
+    fixture_from_str(&raw).unwrap_or_else(|e| panic!("parse {name}.json: {e}"))
+}
+
+/// Converts fixture JSON to a canonical [`Event`].
+///
+/// Shared with the `ajar-conformance` reference adapter so the harness and the
+/// golden-vector gate cannot read the same fixture two different ways.
+pub fn fixture_from_str(raw: &str) -> Result<Event, Box<dyn std::error::Error>> {
+    let f: FixtureEvent = serde_json::from_str(raw)?;
 
     let payload = if f.payload.is_empty() {
         Vec::new()
     } else {
-        base64::engine::general_purpose::STANDARD
-            .decode(f.payload.as_bytes())
-            .unwrap_or_else(|e| panic!("base64 payload in {name}.json: {e}"))
+        base64::engine::general_purpose::STANDARD.decode(f.payload.as_bytes())?
     };
 
-    Event {
+    Ok(Event {
         schema_version: f.schema_version,
         id: f.id,
         source_id: f.source_id,
@@ -138,5 +143,5 @@ pub fn load_fixture(name: &str) -> Event {
                 value: a.value,
             })
             .collect(),
-    }
+    })
 }

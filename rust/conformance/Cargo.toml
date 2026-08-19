@@ -10,11 +10,17 @@ repository.workspace = true
 authors.workspace = true
 publish = false
 
+[[bin]]
+name = "ajar-conformance"
+path = "src/main.rs"
+
 [dependencies]
 ajar-connector.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 base64.workspace = true
+sha2.workspace = true
+hex.workspace = true
 
 [dev-dependencies]
 ed25519-dalek.workspace = true

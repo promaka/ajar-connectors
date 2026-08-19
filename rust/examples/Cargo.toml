@@ -8,6 +8,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "conformance-adapter",
     "connector-template",
     "cot-connector",
     "synthetic-radar",
