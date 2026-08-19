@@ -34,6 +34,7 @@ pub mod health;
 pub mod http_server;
 mod key;
 pub mod nats;
+pub mod profile;
 mod runtime;
 pub mod stdin;
 mod stream;
@@ -50,7 +51,13 @@ pub mod serial;
 #[cfg(feature = "websocket")]
 pub mod ws;
 
+/// Largest native frame the runtime will read. A frame beyond this is rejected
+/// rather than truncated: half a record parses into a wrong event, which is worse
+/// than a missing one. Reported in the connector profile as an advisory ceiling.
+pub const MAX_FRAME_BYTES: usize = 64 * 1024;
+
 pub use config::{Config, Enrichment, Framing, SensorSite, Transport};
+pub use profile::Profile;
 pub use runtime::{run, FrameParser, FrameSource, ParseError};
 
 /// Open the transport named in config, boxed for [`run`]. This is the one line a

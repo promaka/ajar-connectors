@@ -93,7 +93,7 @@ pub async fn run(
 
     let shutdown = shutdown_signal();
     tokio::pin!(shutdown);
-    let mut buf = vec![0u8; 64 * 1024];
+    let mut buf = vec![0u8; crate::MAX_FRAME_BYTES];
     loop {
         tokio::select! {
             _ = &mut shutdown => {
