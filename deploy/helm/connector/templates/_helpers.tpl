@@ -42,13 +42,24 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 
 {{/* Image ref: pin by digest when set, else by an explicit tag. A floating
      "latest" (or no tag) is rejected — production must pin a real version. */}}
+{{- define "connector.repository" -}}
+{{- if .Values.image.repository -}}
+{{- .Values.image.repository -}}
+{{- else if .Values.connector.name -}}
+{{- printf "%s/ajar-connector-%s" .Values.image.registry .Values.connector.name -}}
+{{- else -}}
+{{- fail "set connector.name to a published connector (asterix, tak-cot, adsb, mavlink, generic, tak-egress), or image.repository to an image you built" -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "connector.image" -}}
+{{- $repo := include "connector.repository" . -}}
 {{- if .Values.image.digest -}}
-{{- printf "%s@%s" .Values.image.repository .Values.image.digest -}}
+{{- printf "%s@%s" $repo .Values.image.digest -}}
 {{- else if or (not .Values.image.tag) (eq .Values.image.tag "latest") -}}
 {{- fail "image.digest or an explicit image.tag is required (a pinned version, not \"latest\") — set image.digest=sha256:… (recommended) or image.tag=1.0.0" -}}
 {{- else -}}
-{{- printf "%s:%s" .Values.image.repository .Values.image.tag -}}
+{{- printf "%s:%s" $repo .Values.image.tag -}}
 {{- end -}}
 {{- end -}}
 

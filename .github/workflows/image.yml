@@ -97,7 +97,10 @@ jobs:
             echo "::error::CHANGELOG.md has no entry for $tag; write one before tagging"
             exit 1
           fi
-          echo "release-guard OK: tag, crate version and changelog entry agree ($ver)"
+          # Install instructions that pin an older release send vendors to an SDK
+          # from an earlier ontology, whose events Core discards silently.
+          bash scripts/check-doc-pins.sh "$tag"
+          echo "release-guard OK: tag, crate version, changelog and doc pins agree ($ver)"
       # No QEMU: Dockerfile.build cross-compiles to arm64 on the native amd64
       # runner, so there is no emulated arch to register.
       - uses: docker/setup-buildx-action@v4
@@ -138,18 +141,91 @@ jobs:
           subject-digest: ${{ steps.build.outputs.digest }}
           push-to-registry: true
 
+  # The chart is versioned and published with the suite it deploys, so a given
+  # release has a chart that matches its images. Chained behind the image builds
+  # for the same reason the release is: a chart that references images which do
+  # not exist is worse than no chart.
+  chart:
+    name: package + push the Helm chart
+    needs: [connectors]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: azure/setup-helm@v5
+      - name: Package at the release version and push to ghcr
+        run: |
+          set -euo pipefail
+          ver="${GITHUB_REF_NAME#v}"
+          echo "${{ secrets.GITHUB_TOKEN }}" \
+            | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
+          helm package deploy/helm/connector --version "$ver" --app-version "$ver" -d dist
+          helm push "dist/connector-$ver.tgz" "oci://ghcr.io/${{ github.repository_owner }}/charts"
+
+  # Static binaries for the release. An evaluator on a laptop, or an air-gapped
+  # site that cannot pull images, otherwise has to build a Rust toolchain first.
+  # Same cross-compile path the images use, so these are the binaries in them.
+  binaries:
+    name: build release binaries (${{ matrix.target }})
+    needs: [connectors]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu]
+    steps:
+      - uses: actions/checkout@v7
+      - name: Cross toolchain for aarch64
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc-aarch64-linux-gnu libc6-dev-arm64-cross
+      - run: rustup target add ${{ matrix.target }}
+      - name: Build every connector
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+          CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
+        run: |
+          set -euo pipefail
+          cargo build --release --target ${{ matrix.target }} \
+            --manifest-path rust/connectors/Cargo.toml --bins
+      - name: Collect into one archive
+        run: |
+          set -euo pipefail
+          ver="${GITHUB_REF_NAME#v}"
+          out="ajar-connectors-$ver-${{ matrix.target }}"
+          mkdir -p "$out"
+          find rust/connectors/target/${{ matrix.target }}/release -maxdepth 1 -type f \
+            -name 'ajar-*' ! -name '*.d' -exec cp {} "$out/" \;
+          ls -la "$out"
+          test "$(ls -1 "$out" | wc -l)" -gt 0 || { echo "::error::no binaries collected"; exit 1; }
+          tar czf "$out.tar.gz" "$out"
+          sha256sum "$out.tar.gz" > "$out.tar.gz.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binaries-${{ matrix.target }}
+          path: |
+            ajar-connectors-*.tar.gz
+            ajar-connectors-*.tar.gz.sha256
+
   # The GitHub release is created here and nowhere else, after every image it
   # refers to has been pushed. A failed build therefore leaves no release rather
   # than one whose images do not exist.
   release:
     name: publish the release
-    needs: [build-push, connectors]
+    needs: [build-push, connectors, chart, binaries]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: binaries-*
+          merge-multiple: true
+          path: dist
       - name: notes for this version, from CHANGELOG.md
         run: |
           ver="${GITHUB_REF_NAME#v}"
@@ -171,4 +247,5 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --title "$GITHUB_REF_NAME" \
             --notes-file notes.md \
-            --verify-tag
+            --verify-tag \
+            dist/*

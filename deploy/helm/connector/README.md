@@ -4,7 +4,7 @@
 Deploys **a connector** into Kubernetes — the same clean way Core deploys (pairs
 with the Core chart in `promaka/ajar`, `deploy/helm/ajar`; same conventions).
 For clusters at a C2/hub or a forward outpost. The chart is **generic**: you
-bring a connector image and its TOML config. The chart renders the config into a
+name a published connector (or bring your own image) and supply its TOML config. The chart renders the config into a
 ConfigMap and passes its path as the connector's first argument, mounts the
 signing key from a Secret, and sets the TLS and health environment the runtime
 reads (`AJAR_TLS_CA` / `AJAR_TLS_CERT` / `AJAR_TLS_KEY`, `AJAR_HEALTH_ADDR`).

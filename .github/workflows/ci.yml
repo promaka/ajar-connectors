@@ -15,7 +15,7 @@ env:
 
 jobs:
   guards:
-    name: license-headers + contract-divergence
+    name: license-headers + contract-divergence + doc-pins
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -23,6 +23,10 @@ jobs:
         run: ./scripts/check-license-headers.sh
       - name: Contract divergence
         run: ./scripts/check-contract.sh
+      # Catches a pin going stale on the PR that causes it, rather than at the
+      # next release when the docs have already been wrong for weeks.
+      - name: Documented version pins
+        run: ./scripts/check-doc-pins.sh
 
   rust:
     name: fmt + clippy + test + conformance

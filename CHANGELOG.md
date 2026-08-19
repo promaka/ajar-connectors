@@ -13,6 +13,8 @@ Two version lines are tracked independently (see COMPATIBILITY.md):
 
 ## [Unreleased]
 
+## [0.5.3] - 2026-08-19
+
 ### Fixed
 - `synthetic-radar` now reads its signing seed from `AJAR_SIGNING_SEED`, the
   variable every connector template, the keygen script and the Helm chart already
@@ -24,6 +26,18 @@ Two version lines are tracked independently (see COMPATIBILITY.md):
   path as the container's first argument. Connectors on the shared runtime read
   their identity, transport and key path from that file, so the chart previously
   produced a pod that could not start.
+- Install instructions across README, ONBOARDING, COMPATIBILITY and
+  CONNECTOR_BRIEF pinned `v0.1.0`, five releases behind. They now pin the current
+  release, and a guard fails the build when any documented pin drifts.
+
+### Added
+- The Helm chart is packaged and published to `oci://ghcr.io/promaka/charts` on
+  release, versioned with the suite it deploys.
+- `connector.name` resolves the image to the published connector of that name, so
+  deploying a shipped connector no longer means knowing the registry path.
+  `image.repository` still takes precedence for a connector you built yourself.
+- Release binaries for `x86_64` and `aarch64` Linux, attached to the release with
+  SHA-256 sums, for evaluators and air-gapped sites that cannot pull images.
 
 ## [0.5.2] - 2026-08-18
 
