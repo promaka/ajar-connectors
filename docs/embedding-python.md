@@ -1,0 +1,99 @@
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+# Embedding the Ajar SDK — Python
+
+For linking Ajar into your own service. If you want a ready-made connector for a
+standard format instead, see [CONNECTORS.md](../CONNECTORS.md).
+
+```bash
+pip install ajar-connector
+```
+
+## Build, seal, publish
+
+```python
+from ajar_connector import EventBuilder, canonical_bytes, seal, SigningKey
+
+key = SigningKey.from_seed(open("acme-radar-1.seed", "rb").read())
+
+event = (
+    EventBuilder("acme-radar-1", "mim:aircraft")   # source_id, ontology class
+    .new_id()                                       # fresh UUIDv7 per event
+    .now()                                          # RFC 3339 observation time
+    .location(25.27, 51.52, 10600.0)                # lat, lon, altitude in metres
+    .attribute("speed", "231.50")                   # governed: m/s
+    .metadata("icao", "4CA2D6")                     # ungoverned: native identity
+    .payload(raw_frame)                             # your source bytes, verbatim
+    .build()
+)
+
+sealed = seal(canonical_bytes(event), key)          # 64-byte signature ++ canonical
+await nats.publish(f"ajar.ingest.acme-radar-1", sealed)
+```
+
+That is the whole SDK surface for ingress: build, seal, publish.
+
+## What the two identifiers mean
+
+**`source_id`** is your registered identity. Ajar accepts an event only if its
+seal verifies under the public key registered against this exact string, so it is
+not a label you choose per event — it is who you are.
+
+**The signing key** is a 32-byte Ed25519 seed you generate and never share:
+
+```bash
+scripts/gen-connector-key.sh acme-radar-1
+```
+
+It writes the private seed and prints the public half. The private seed stays in
+your secret store; only the public half is ever sent.
+
+## Governed versus ungoverned
+
+`attribute()` is validated against Ajar's ontology. `metadata()` is not, and is
+always accepted.
+
+**Ajar discards an unrecognised attribute name or value without an error.** Your
+service keeps running, events keep publishing, and the data does not arrive. So:
+agree the entity type and attribute names with your operator before you build,
+and treat controlled vocabularies as case-sensitive — `hostility` takes `Friend`,
+not `friendly`. Native identifiers go in `metadata`, never in `id`.
+
+Full reference: [ATTRIBUTES.md](../rust/connectors/ATTRIBUTES.md).
+
+## Getting registered
+
+Ajar accepts events only from a registered identity. Send your operator the
+profile document — `source_id`, the entity-type prefixes you will emit, and your
+**public** key:
+
+```json
+{
+  "contract": "v1",
+  "source_id": "acme-radar-1",
+  "allowed_entity_types": ["mim:"],
+  "max_payload_bytes": 65536,
+  "verifying_key_hex": "e28a89…"
+}
+```
+
+You receive confirmation plus the NATS endpoint and credentials. Your source code
+never leaves your environment.
+
+## Proving your bytes
+
+Before you go live, prove your build produces the bytes Ajar accepts. Offline, no
+credentials, no Ajar Core:
+
+```bash
+ajar-conformance run --impl python3 your_adapter.py
+```
+
+The adapter is three lines — see
+[`python/examples/conformance_adapter.py`](../python/examples/conformance_adapter.py).
+Green means conformant with `contract-v1`. Put it in your CI.
+
+## The contract
+
+One page: [docs/wire-contract-v1.md](wire-contract-v1.md). It is the whole
+agreement — event shape, canonical bytes, the seal, the subject, and what is
+frozen.

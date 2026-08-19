@@ -27,6 +27,8 @@ jobs:
       # next release when the docs have already been wrong for weeks.
       - name: Documented version pins
         run: ./scripts/check-doc-pins.sh
+      - name: Manifest versions agree
+        run: ./scripts/check-versions.sh
 
   rust:
     name: fmt + clippy + test + conformance

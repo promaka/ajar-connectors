@@ -100,6 +100,7 @@ jobs:
           # Install instructions that pin an older release send vendors to an SDK
           # from an earlier ontology, whose events Core discards silently.
           bash scripts/check-doc-pins.sh "$tag"
+          bash scripts/check-versions.sh "$tag"
           echo "release-guard OK: tag, crate version, changelog and doc pins agree ($ver)"
       # No QEMU: Dockerfile.build cross-compiles to arm64 on the native amd64
       # runner, so there is no emulated arch to register.
