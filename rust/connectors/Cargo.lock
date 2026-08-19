@@ -13,7 +13,7 @@ dependencies = [
 
 [[package]]
 name = "ajar-adsb"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "ajar-connector",
  "ajar-connector-common",
@@ -30,7 +30,7 @@ dependencies = [
 
 [[package]]
 name = "ajar-ais-nmea"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "ajar-connector",
  "ajar-connector-common",
@@ -48,7 +48,7 @@ dependencies = [
 
 [[package]]
 name = "ajar-asterix"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "ajar-connector",
  "ajar-connector-common",
@@ -66,7 +66,7 @@ dependencies = [
 
 [[package]]
 name = "ajar-connector"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "ed25519-dalek",
  "hex",
@@ -83,7 +83,7 @@ dependencies = [
 
 [[package]]
 name = "ajar-connector-common"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "ajar-connector",
  "anyhow",
@@ -110,7 +110,7 @@ dependencies = [
 
 [[package]]
 name = "ajar-generic"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "ajar-connector",
  "ajar-connector-common",
@@ -131,7 +131,7 @@ dependencies = [
 
 [[package]]
 name = "ajar-gmti"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "ajar-connector",
  "ajar-connector-common",
@@ -148,7 +148,7 @@ dependencies = [
 
 [[package]]
 name = "ajar-klv"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "ajar-connector",
  "ajar-connector-common",
@@ -166,7 +166,7 @@ dependencies = [
 
 [[package]]
 name = "ajar-mavlink"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "ajar-connector",
  "ajar-connector-common",
@@ -184,7 +184,7 @@ dependencies = [
 
 [[package]]
 name = "ajar-stanag4586"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "ajar-connector",
  "ajar-connector-common",
@@ -203,7 +203,7 @@ dependencies = [
 
 [[package]]
 name = "ajar-stanag4676"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "ajar-connector",
  "ajar-connector-common",
@@ -223,7 +223,7 @@ dependencies = [
 
 [[package]]
 name = "ajar-tak-cot"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "ajar-connector",
  "ajar-connector-common",
@@ -242,7 +242,7 @@ dependencies = [
 
 [[package]]
 name = "ajar-tak-egress"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "ajar-connector-common",
  "anyhow",

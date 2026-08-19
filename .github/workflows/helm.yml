@@ -45,8 +45,15 @@ jobs:
       - name: Guard rails reject incomplete config
         run: |
           if helm template demo deploy/helm/connector --set signingSeed.existingSecret=x >/dev/null 2>&1; then
-            echo "expected failure: missing image.repository was accepted"; exit 1
+            echo "expected failure: neither connector.name nor image.repository was accepted"; exit 1
           fi
+          # Naming a published connector is enough to resolve the image.
+          helm template demo deploy/helm/connector \
+            --set connector.name=asterix --set image.tag=1.0.0 \
+            --set signingSeed.existingSecret=x \
+            --set-file connector.config=.github/fixtures/ci-connector.toml \
+            | grep -q "ghcr.io/promaka/ajar-connector-asterix:1.0.0" \
+            || { echo "connector.name did not resolve to the published image"; exit 1; }
           if helm template demo deploy/helm/connector --set image.repository=x >/dev/null 2>&1; then
             echo "expected failure: missing signing key was accepted"; exit 1
           fi
@@ -87,7 +94,7 @@ jobs:
         run: |
           set -euo pipefail
           helm template ci deploy/helm/connector \
-            --set image.repository="${IMAGE%:*}" \
+            --set connector.name=asterix \
             --set image.tag="${IMAGE##*:}" \
             --set signingSeed.existingSecret=ci-seed \
             --set-file connector.config=.github/fixtures/ci-connector.toml \

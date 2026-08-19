@@ -1,7 +1,4 @@
 {{/* SPDX-License-Identifier: Apache-2.0 */}}
-{{- if not .Values.image.repository }}
-{{- fail "image.repository is required — set it to your built connector image" }}
-{{- end }}
 {{- if and (not .Values.signingSeed.existingSecret) (not .Values.signingSeed.create) }}
 {{- fail "provide a signing key: set signingSeed.existingSecret (recommended) or signingSeed.create=true (dev only)" }}
 {{- end }}

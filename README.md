@@ -272,7 +272,7 @@ depends only on the **wire contract**, which is frozen (`event.proto` +
 [`vendor/contract/`](vendor/contract/), and proven by the golden vectors. The SDK
 API (`EventBuilder` / `seal` / …) is just a convenience for *building* those
 bytes — if it ever changes, only a deliberate rebuild is affected, never a running
-binary. **Pin the released tag `v0.1.0`, not a branch.**
+binary. **Pin the released tag `v0.5.3`, not a branch.**
 
 The full guarantee — what we will and won't change within `contract-v1` — is in
 [COMPATIBILITY.md](COMPATIBILITY.md). Security issues: [SECURITY.md](SECURITY.md).
