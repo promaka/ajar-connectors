@@ -181,8 +181,8 @@ fn env_f64(key: &str, default: f64) -> f64 {
 fn load_seed(dry_run: bool) -> Result<[u8; 32], Box<dyn Error>> {
     match seed_source(dry_run, env::var("AJAR_SIGNING_SEED").ok().as_deref()) {
         SeedSource::File(path) => {
-            let bytes = std::fs::read(&path)
-                .map_err(|e| format!("read AJAR_SIGNING_SEED {path}: {e}"))?;
+            let bytes =
+                std::fs::read(&path).map_err(|e| format!("read AJAR_SIGNING_SEED {path}: {e}"))?;
             parse_seed(&bytes).ok_or_else(|| {
                 format!(
                     "seed file {path}: expected 32 raw bytes or 64 hex chars, got {} bytes",
@@ -491,8 +491,17 @@ mod tests {
     #[test]
     fn only_the_exact_flag_means_dry_run() {
         assert!(is_dry_run(&argv(&["--dry-run"])));
-        for near in ["--dry_run", "--dryrun", "-dry-run", "--DRY-RUN", "--dry-run=true"] {
-            assert!(!is_dry_run(&argv(&[near])), "{near} must not enable dry-run");
+        for near in [
+            "--dry_run",
+            "--dryrun",
+            "-dry-run",
+            "--DRY-RUN",
+            "--dry-run=true",
+        ] {
+            assert!(
+                !is_dry_run(&argv(&[near])),
+                "{near} must not enable dry-run"
+            );
         }
     }
 

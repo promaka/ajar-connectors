@@ -31,14 +31,17 @@ jobs:
         run: |
           helm lint deploy/helm/connector \
             --set image.repository=registry.example/connector \
-            --set signingSeed.existingSecret=connector-seed
+            --set image.tag=1.0.0 \
+            --set signingSeed.existingSecret=connector-seed \
+            --set-file connector.config=.github/fixtures/ci-connector.toml
       - name: Template (recommended path)
         run: |
           helm template demo deploy/helm/connector \
             --set image.repository=registry.example/connector \
             --set image.tag=1.0.0 \
             --set connector.sourceId=acme-radar-1 \
-            --set signingSeed.existingSecret=connector-seed > /dev/null
+            --set signingSeed.existingSecret=connector-seed \
+            --set-file connector.config=.github/fixtures/ci-connector.toml > /dev/null
       - name: Guard rails reject incomplete config
         run: |
           if helm template demo deploy/helm/connector --set signingSeed.existingSecret=x >/dev/null 2>&1; then
@@ -69,9 +72,17 @@ jobs:
     runs-on: ubuntu-latest
     env:
       IMAGE: ghcr.io/promaka/ajar-connector-asterix:0.5.2
+    permissions:
+      contents: read
+      packages: read
     steps:
       - uses: actions/checkout@v7
       - uses: azure/setup-helm@v5
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
       - name: Render the chart
         run: |
           set -euo pipefail
