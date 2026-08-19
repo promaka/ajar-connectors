@@ -42,6 +42,14 @@ lands through a pull request — no direct pushes.
   **approving review from a Promaka maintainer** (see [CODEOWNERS](.github/CODEOWNERS))
   before it can merge.
 - PRs are **squash-merged** to keep `main` history linear.
+- **Stacked PRs target `main` before their parent merges.** A squash merge
+  replaces the parent's commits with one new commit, so a child still pointing at
+  the parent branch is left behind: its own merge lands in a branch that no longer
+  feeds `main`, and the work silently never ships. When a change builds on another:
+  1. open it against the parent branch and say so in the body;
+  2. the moment the parent merges, rebase the child onto `main` and retarget it;
+  3. never delete a parent branch while a child still points at it — a closed PR
+     whose base is gone cannot be reopened and must be raised again from scratch.
 - Releases are git tags on `main` (e.g. `v0.1.0`). Pushing the tag is the whole
   release: CI builds and pushes the images, then creates the GitHub release from
   the tag's `CHANGELOG.md` entry. Nothing is published by hand, so a build that
