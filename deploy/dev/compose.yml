@@ -38,6 +38,12 @@ services:
       NATS_URL: "nats://nats:4222"
       AJAR_SOURCE_ID: "demo-radar"
       AJAR_RATE_PER_MIN: "600"
+      # The publisher will not sign without a seed. The one mounted here is the
+      # documented TEST seed, matching the public key in sink.toml — the stack
+      # says so out loud rather than a connector quietly defaulting to it.
+      AJAR_SIGNING_SEED: "/etc/ajar/demo-radar.seed"
+    volumes:
+      - ./demo-radar.seed:/etc/ajar/demo-radar.seed:ro
     depends_on:
       nats:
         condition: service_healthy

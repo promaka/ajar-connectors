@@ -7,3 +7,6 @@ database = "/var/lib/ajar/ajar-sink.db"
 [sources]
 # synthetic-radar's documented dev seed (32 x 0x03) — TEST ONLY.
 "demo-radar" = "ed4928c628d1c2c6eae90338905995612959273a5c63f93636c14614ac8737d1"
+
+# The seed itself is deploy/dev/demo-radar.seed (32 x 0x03, published test key).
+# A real deployment registers a key the publisher generated and never shared.
