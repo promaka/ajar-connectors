@@ -51,3 +51,17 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- printf "%s:%s" .Values.image.repository .Values.image.tag -}}
 {{- end -}}
 {{- end -}}
+
+{{/* The connector's config file. Every connector on the shared runtime takes a
+     TOML path as its first argument, so a release with neither inline config nor
+     an existing ConfigMap would deploy a pod that cannot start. Rejected here
+     rather than at 3am in a crash-loop. */}}
+{{- define "connector.configVolumeName" -}}
+{{- if .Values.connector.existingConfigMap -}}
+{{- .Values.connector.existingConfigMap -}}
+{{- else if .Values.connector.config -}}
+{{- printf "%s-config" (include "connector.fullname" .) -}}
+{{- else -}}
+{{- fail "connector.config is required — the connector's TOML, passed as its first argument (see each connector's <name>.example.toml). Or set connector.existingConfigMap to one you manage." -}}
+{{- end -}}
+{{- end -}}
