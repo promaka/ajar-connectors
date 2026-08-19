@@ -6,44 +6,307 @@
 [![deploy](https://github.com/promaka/ajar-connectors/actions/workflows/helm.yml/badge.svg)](https://github.com/promaka/ajar-connectors/actions/workflows/helm.yml)
 [![conformant: contract-v1](https://img.shields.io/badge/conformant-contract--v1-2ea44f)](docs/wire-contract-v1.md)
 
-The vendor-facing SDK for building **connectors** to **Ajar**,
-the sovereign defence integration & governance plane.
-
-A connector turns a vendor or legacy system's native data into Ajar's canonical,
-signed **event** (inbound), and/or renders governed events into a target
-system's format (outbound). This repo is **standalone** and **Apache-2.0** — it
-never depends on the private Ajar core. It earns trust by reproducing the
-*golden byte-vectors* that core accepts: byte-for-byte compatibility is the
-acceptance test, not a promise.
+Apache-2.0 SDK for sending signed events to Ajar, a defence data integration and
+governance plane. Standalone: it does not depend on the private Ajar core.
 
 ```
-native bytes ──▶ Connector::normalize ──▶ Event ──▶ canonical_bytes ──▶ seal ──▶ Ajar
- (CoT, CSV,                              (canonical            (deterministic    (sig ++
-  vendor frame)                           protobuf)             protobuf)         bytes)
+your data ──▶ build Event ──▶ canonical bytes ──▶ seal (Ed25519) ──▶ ajar.ingest.<source_id>
 ```
 
-> **Building a connector?** Start with the **[connector onboarding guide](ONBOARDING.md)** —
-> data flow, what to build, key generation, profile declaration, running it, and
-> troubleshooting.
+## Contents
 
-## Prove your bytes are right, without asking us
+| # | Section | Read it if |
+|---|---------|-----------|
+| 1 | [What you need before you start](#1-what-you-need-before-you-start) | everyone |
+| 2 | [Choose how to connect](#2-choose-how-to-connect) | everyone |
+| 3 | [Set up: inside your own code](#3-set-up-inside-your-own-code) | you picked option A |
+| 4 | [Set up: run a prebuilt connector](#4-set-up-run-a-prebuilt-connector) | you picked option B |
+| 5 | [Set up: map flat JSON or CSV](#5-set-up-map-flat-json-or-csv) | you picked option C |
+| 6 | [Set up: write a new connector](#6-set-up-write-a-new-connector) | you picked option D |
+| 7 | [Deploy it](#7-deploy-it) | options B, C, D |
+| 8 | [Prove your bytes are correct](#8-prove-your-bytes-are-correct) | everyone |
+| 9 | [Register with the operator](#9-register-with-the-operator) | everyone |
+| 10 | [Reference](#language-support) | as needed |
 
-`ajar-conformance` runs **your** implementation against the vendored golden
-vectors — whatever language it is in, whether it links this SDK or reimplements
-the contract in your own binary. Offline, no credentials, no Ajar Core.
+Read 1 and 2, then jump to your one setup section, then 7 to 9.
 
-Your implementation reads a fixture on stdin and writes raw bytes on stdout:
+---
+
+## 1. What you need before you start
+
+1. **A `source_id`.** Your connector's identity, agreed with your Ajar operator.
+   Example: `acme-radar-1`.
+2. **An entity type and attribute names**, agreed with the same operator. Ajar
+   discards an entity type or attribute name it does not recognise, without
+   raising an error, so settle these before you write any mapping.
+3. **A signing key.** Generate it yourself:
+
+   ```bash
+   scripts/gen-connector-key.sh acme-radar-1
+   ```
+
+   This writes `acme-radar-1.seed` (keep secret) and prints the public key.
+4. **The NATS endpoint and credentials**, which the operator sends you after you
+   register in [section 9](#9-register-with-the-operator).
+
+You can build and test everything without items 1 and 4. You only need them to
+send real events.
+
+---
+
+## 2. Choose how to connect
+
+| Option | Your situation | Go to |
+|---|---|---|
+| **A** | You have a service and want it to send events from inside your own code | [section 3](#3-set-up-inside-your-own-code) |
+| **B** | Your equipment already speaks ADS-B, AIS, CoT, MAVLink, ASTERIX or STANAG | [section 4](#4-set-up-run-a-prebuilt-connector) |
+| **C** | Your source emits flat JSON or CSV | [section 5](#5-set-up-map-flat-json-or-csv) |
+| **D** | Your format needs real parsing and none of the above covers it | [section 6](#6-set-up-write-a-new-connector) |
+
+Options B, C and D run as a separate binary. Option A runs inside your process.
+
+---
+
+## 3. Set up: inside your own code
+
+Your process, your deployment. The SDK builds, seals and verifies. You publish.
+
+**Step 1. Get the SDK.**
+
+```bash
+git clone --depth 1 --branch v0.5.3 https://github.com/promaka/ajar-connectors
+```
+
+**Step 2. Add it to your build.**
+
+| Language | Command |
+|---|---|
+| Rust | `ajar-connector = { git = "https://github.com/promaka/ajar-connectors", tag = "v0.5.3" }` |
+| Python | `pip install ./ajar-connectors/python` |
+| Go | `go get github.com/promaka/ajar-connectors/go/ajarconnector@v0.5.3` |
+| C++ | `cmake -S cpp -B build && cmake --build build && cmake --install build --prefix /opt/ajar` |
+
+C++ then links with:
+
+```cmake
+find_package(ajar_connector REQUIRED)
+target_link_libraries(your_service PRIVATE ajar_connector::ajar_connector)
+```
+
+**Step 3. Load your signing key.**
 
 ```python
-out = canonical_bytes(fixture_to_event(json.load(sys.stdin)))
-if sys.argv[1] == "sealed":
-    out = seal(out, SigningKey.from_seed(bytes.fromhex(os.environ["AJAR_TEST_SIGNING_SEED"])))
-sys.stdout.buffer.write(out)
+from ajar_connector import SigningKey
+key = SigningKey.from_seed(open("acme-radar-1.seed", "rb").read())
 ```
 
-That is the whole interface — the complete runnable version is
-[`python/examples/conformance_adapter.py`](python/examples/conformance_adapter.py),
-with a Rust one in [`rust/examples/conformance-adapter/`](rust/examples/conformance-adapter/).
+**Step 4. Build an event.**
+
+```python
+from ajar_connector import EventBuilder
+
+event = (EventBuilder("acme-radar-1", "mim:aircraft")   # source_id, entity type
+         .new_id()                                       # fresh UUIDv7
+         .now()                                          # RFC 3339 timestamp
+         .location(25.27, 51.52, 10600.0)                # lat, lon, metres
+         .attribute("speed", "231.50")                   # governed, m/s
+         .metadata("icao", "4CA2D6")                     # ungoverned, native id
+         .payload(raw_frame)                             # your bytes, verbatim
+         .build())
+```
+
+Governed attributes are checked against the ontology. Metadata is not, and is
+always kept. Put native identifiers in metadata, never in `id`.
+
+**Step 5. Seal it.**
+
+```python
+from ajar_connector import canonical_bytes, seal
+sealed = seal(canonical_bytes(event), key)
+```
+
+**Step 6. Publish it** to `ajar.ingest.<source_id>` with your own NATS client.
+
+**Step 7.** Go to [section 8](#8-prove-your-bytes-are-correct).
+
+Longer guides: [Python](docs/embedding-python.md) · [C++](docs/embedding-cpp.md).
+Rust and Go use the same three calls.
+
+---
+
+## 4. Set up: run a prebuilt connector
+
+**Step 1. Pick your connector** from the [table in section 10](#reference-connectors).
+
+**Step 2. Copy its example config.** Every connector ships one:
+
+```bash
+cp rust/connectors/asterix/asterix.example.toml ./asterix.toml
+```
+
+**Step 3. Edit four values.**
+
+```toml
+source_id = "acme-radar-1"                        # from section 1
+nats_url = "tls://ajar.example.mil:4222"          # from section 9
+signing_key_path = "/etc/ajar/acme-radar-1.seed"  # from section 1
+
+[transport]                                        # how bytes reach the connector
+kind = "udp-multicast"
+bind = "0.0.0.0:8600"
+group = "239.2.3.1"
+```
+
+Any connector runs on any transport. The full list is in
+[section 10](#transport-is-orthogonal-to-protocol).
+
+**Step 4. Run it once locally** to check the config parses:
+
+```bash
+cargo build --release -p ajar-asterix
+./rust/connectors/target/release/ajar-asterix ./asterix.toml
+```
+
+**Step 5.** Go to [section 7](#7-deploy-it).
+
+---
+
+## 5. Set up: map flat JSON or CSV
+
+No code. You write field names.
+
+**Step 1. Copy the example config.**
+
+```bash
+cp rust/connectors/generic/generic.example.toml ./generic.toml
+```
+
+**Step 2. Fill in the same four values as section 4** (source_id, nats_url,
+signing_key_path, transport).
+
+**Step 3. Write the mapping.** Ajar's name on the left, yours on the right.
+
+```toml
+[mapping]
+format = "json"                   # or "csv"
+entity_type = "x:acme:sensor"     # agreed in section 1
+timestamp_field = "observed_at"
+lat_field = "latitude"
+lon_field = "longitude"
+[mapping.attributes]              # governed, checked against the ontology
+speed = "speed"
+[mapping.metadata]                # ungoverned, native identifiers
+sensor_id = "sensor_id"
+```
+
+**Step 4. Run it.**
+
+```bash
+cargo build --release -p ajar-generic
+./rust/connectors/target/release/ajar-generic ./generic.toml
+```
+
+**Step 5.** Go to [section 7](#7-deploy-it).
+
+Limits (flat fields only, one record per frame): [generic connector](rust/connectors/generic).
+
+---
+
+## 6. Set up: write a new connector
+
+**Step 1. Copy the template** for your language:
+[Rust](rust/examples/connector-template/) · [Python](python/examples/connector_template.py) ·
+[Go](go/examples/connector-template/) · [C++](cpp/examples/connector_template.cpp).
+
+**Step 2. Edit the two blocks marked `EDIT`.** Describe your record, then map it
+to an event. Around fifteen lines.
+
+**Step 3. Run it against a sample** without any infrastructure:
+
+```bash
+cd rust/examples
+echo '{"lat":26.4,"lon":50.9,"alt_m":11000}' | cargo run -p connector-template -- --dry-run
+```
+
+**Step 4.** Go to [section 7](#7-deploy-it).
+
+---
+
+## 7. Deploy it
+
+For options B, C and D. Pick one method. All three run the same binary with the
+same config file.
+
+### 7a. As a binary
+
+```bash
+./ajar-asterix /etc/ajar/asterix.toml
+```
+
+With systemd:
+
+```ini
+[Service]
+ExecStart=/usr/local/bin/ajar-asterix /etc/ajar/asterix.toml
+Environment=AJAR_TLS_CA=/etc/ajar/ca.pem
+Environment=AJAR_TLS_CERT=/etc/ajar/connector.crt
+Environment=AJAR_TLS_KEY=/etc/ajar/connector.key
+Environment=AJAR_HEALTH_ADDR=0.0.0.0:9110
+Restart=always
+```
+
+### 7b. As a container
+
+Images are private. Create a pull secret with `read:packages` for
+`ghcr.io/promaka` first.
+
+```bash
+docker run \
+  -v ./asterix.toml:/etc/ajar/connector.toml:ro \
+  -v ./acme-radar-1.seed:/etc/ajar/seed:ro \
+  ghcr.io/promaka/ajar-connector-asterix:0.5.3 /etc/ajar/connector.toml
+```
+
+### 7c. On Kubernetes
+
+```bash
+kubectl create secret generic radar-seed --from-file=seed=acme-radar-1.seed
+
+helm install radar deploy/helm/connector \
+  --set connector.name=asterix \
+  --set image.tag=0.5.3 \
+  --set signingSeed.existingSecret=radar-seed \
+  --set-file connector.config=./asterix.toml
+```
+
+The chart renders your config into a ConfigMap, mounts the key from the Secret,
+and can restrict egress to NATS only. Pull secrets, mTLS and health probes:
+[chart README](deploy/helm/connector).
+
+### 7d. Health and metrics
+
+Set `AJAR_HEALTH_ADDR=0.0.0.0:9110` on any method. Gives `/healthz` and
+`/metrics` with `connector_received_total`, `connector_published_total` and
+`connector_rejected_total`.
+
+---
+
+## 8. Prove your bytes are correct
+
+Runs offline. No credentials, no Ajar Core, no contact with us.
+
+**Step 1. Build the harness.**
+
+```bash
+cargo build --release --manifest-path rust/Cargo.toml -p conformance --bin ajar-conformance
+```
+
+**Step 2. Write an adapter** that reads a fixture on stdin and writes raw bytes
+on stdout. Three lines. Copy
+[the Python one](python/examples/conformance_adapter.py) or
+[the Rust one](rust/examples/conformance-adapter/).
+
+**Step 3. Run it.**
 
 ```console
 $ ajar-conformance run --impl python3 your_adapter.py
@@ -53,175 +316,81 @@ ok   aircraft_with_attrs/sealed
 Conformant — contract-v1 (14 vectors)
 ```
 
-Exit 0 means your bytes are the bytes Ajar accepts. Exit 1 tells you which
-vector diverged and by how much. Add `--report out.json` for a machine-readable
-result. In your CI:
+Exit 0 means your bytes match. Exit 1 names the vector that diverged.
+
+**Step 4. Add it to your CI.**
 
 ```yaml
-- name: Ajar conformance
-  run: |
-    cargo install --git https://github.com/promaka/ajar-connectors \
-      --tag v0.5.3 --bin ajar-conformance conformance
-    ajar-conformance run --impl ./your-connector --report conformance.json
+- run: ajar-conformance run --impl ./your-connector --report conformance.json
 ```
 
-Green means you are conformant with `contract-v1`. Display the badge:
+**Step 5.** Display the badge once green:
 
 ```markdown
 [![conformant: contract-v1](https://img.shields.io/badge/conformant-contract--v1-2ea44f)](https://github.com/promaka/ajar-connectors/blob/main/docs/wire-contract-v1.md)
 ```
 
-The contract those vectors encode is one page:
-**[docs/wire-contract-v1.md](docs/wire-contract-v1.md)**.
+---
 
-## Status
+## 9. Register with the operator
 
-| Language | SDK | Conformance gate |
-|----------|-----|------------------|
-| Rust     | `rust/ajar-connector` | reproduces all golden vectors |
-| Go       | `go/ajarconnector` | reproduces all golden vectors (same `vectors.json`) |
-| C++ (desktop) | `cpp/` (protoc-C++) | reproduces all golden vectors (same `vectors.json`) |
-| C++ (embedded) | `cpp/embedded/` (nanopb, no-heap) | reproduces all golden vectors (same `vectors.json`) |
-| Python   | `python/ajar_connector` | reproduces all golden vectors (same `vectors.json`) |
+Ajar accepts events only from a registered identity. One exchange, no account.
 
-All language SDKs assert against the **same** [vendor/contract/vectors.json](vendor/contract/vectors.json)
-and produce byte-identical canonical bytes for every fixture — that
-cross-language identity is the proof. **Five independent protobuf encoders** (Rust
-prost, Go, libprotobuf, nanopb, and Python protobuf) now agree on every hash. The
-C++ builds vendor their crypto (Monocypher Ed25519, no system dependency); the
-embedded nanopb build links no protobuf runtime and allocates nothing on the heap
-on the encode path — the radar/effector-controller path.
-
-## Write your first connector in 20 lines
-
-```rust
-use ajar_connector::{canonical_bytes, seal, ConnectorProfile, Connector, SigningKey};
-use cot_connector::CotConnector;
-
-// 1. Normalize native input (here: a Cursor-on-Target message) to a canonical event.
-let connector = CotConnector::new("ad-radar-7");
-let event = connector.normalize(native_cot_bytes)?;
-
-// 2. Canonicalize and sign with this connector's own Ed25519 key.
-let signing_key = SigningKey::from_bytes(&my_persisted_key_bytes);
-let canonical = canonical_bytes(&event);
-let sealed = seal(&canonical, &signing_key); // 64-byte signature ++ canonical bytes
-
-// 3. Declare the profile Ajar registers for you.
-let profile = ConnectorProfile::new("ad-radar-7", signing_key.verifying_key())
-    .allow_entity_type("mim:aircraft")
-    .rate_limit(200, 20.0);
-```
-
-Run the full reference end-to-end (examples are their own workspace under
-[rust/examples/](rust/examples/)):
+**Step 1. Produce your profile.** Any connector here derives it from your config:
 
 ```bash
-cd rust/examples
-cargo run -p cot-connector --example first_connector
+ajar-asterix --profile ./asterix.toml
 ```
 
-Or stream synthetic tracks into a local Ajar Core over NATS and watch the whole
-path (`connector → NATS → Core → audit + Postgres`) — see
-[examples/synthetic-radar](rust/examples/synthetic-radar/):
-
-```bash
-cd rust/examples
-cargo run -p synthetic-radar -- --dry-run   # build + seal + print, no infra
-cargo run -p synthetic-radar                # publish to a local NATS / Core
+```json
+{ "contract": "v1",
+  "source_id": "acme-radar-1",
+  "allowed_entity_types": ["mim:"],
+  "max_payload_bytes": 65536,
+  "verifying_key_hex": "e28a89…" }
 ```
 
-Or build an event directly with the validating builder:
+Writing your own connector instead? Build the same document with
+`ConnectorProfile` in your language.
 
-```rust
-use ajar_connector::EventBuilder;
+**Step 2. Send it to your operator.** It contains your public key only. Your
+private seed and your source code stay with you.
 
-let event = EventBuilder::new("sensor-123", "mim:aircraft")
-    .new_id()                    // UUIDv7, time-ordered
-    .now()                       // RFC 3339 observation time
-    .confidence(0.98)
-    .policy_tag("class:secret")
-    .attribute("speed", "110")
-    .attribute("heading", "225") // auto-sorted; duplicate keys rejected
-    .build()?;                   // required fields + canonical invariants enforced
-```
+**Step 3. Receive** confirmation that your key and entity types are registered,
+plus the NATS endpoint and credentials.
 
-### …or in Go
+**Step 4. Put the endpoint in your config** (`nats_url`) and run.
 
-```go
-import "github.com/promaka/ajar-connectors/go/ajarconnector"
+---
 
-event, err := ajarconnector.NewEventBuilder("sensor-123", "mim:aircraft").
-    NewID().Now().
-    Confidence(0.98).
-    PolicyTag("class:secret").
-    Attribute("speed", "110").
-    Attribute("heading", "225"). // auto-sorted; duplicate keys rejected
-    Build()
+## Language support
 
-canonical, _ := ajarconnector.CanonicalBytes(event)
-sealed := ajarconnector.Seal(canonical, signingKey) // crypto/ed25519
-```
+| Language | SDK | Conformance |
+|----------|-----|-------------|
+| Rust | `rust/ajar-connector` | reproduces all golden vectors |
+| Go | `go/ajarconnector` | reproduces all golden vectors |
+| C++ (desktop) | `cpp/` (protoc-C++) | reproduces all golden vectors |
+| C++ (embedded) | `cpp/embedded/` (nanopb, no-heap) | reproduces all golden vectors |
+| Python | `python/ajar_connector` | reproduces all golden vectors |
 
-```bash
-# Examples are their own Go module under go/examples:
-cd go/examples && go run ./cot/cmd/first_connector
-cd go/examples && go run ./synthetic-radar -dry-run   # stream synthetic tracks
-```
-
-## The contract & the gate
-
-- The wire contract is vendored verbatim from core into
-  [`vendor/contract/`](vendor/contract/) (`event.proto`, golden `vectors.json`,
-  and `corpus/*.json` fixtures). It is the **source of truth**; do not edit it
-  here — re-vendor when the contract version changes.
-- Rust types are **generated** from `event.proto` (via `prost`, with a vendored
-  `protoc` so a plain `cargo build` needs nothing installed).
-- The acceptance test lives in `rust/conformance`: for every fixture it asserts
-  `SHA-256(canonical_bytes) == canonicalSha256` and
-  `SHA-256(sealed) == sealedSha256`. **Green = byte-compatible with Ajar.**
-
-```bash
-cd rust && cargo test -p conformance --test golden_vectors
-```
-
-## Public API (`ajar-connector`)
-
-- Generated `Event` / `GeoPoint` / `Attribute` types.
-- `EventBuilder` — auto-sorts & dedups attributes, enforces required fields and
-  limits, UUIDv7 / RFC 3339 helpers.
-- `canonical_bytes(&Event) -> Vec<u8>` — deterministic protobuf encoding.
-- `seal(&[u8], &SigningKey) -> Vec<u8>` — detached Ed25519 signature ++ canonical.
-- `verify(&[u8], &VerifyingKey) -> Result<&[u8], SealError>` — the inverse: confirms
-  the bytes were sealed by the holder of that key and are unaltered, returning the
-  canonical event. A recipient can establish provenance with no connector, broker
-  or Core present.
-- `ConnectorProfile` — declaration + deterministic JSON serializer.
-- `Connector` trait — inbound `normalize(&[u8]) -> Result<Event, _>`.
-- `OutboundProfile` trait — `target/slug/version/modeled_fields/lossy_fields/render`,
-  with round-trip (`canonical → target → canonical`) conformance.
-
-## The seal envelope
-
-```
-sealed = ed25519_sign(signing_key, canonical_bytes) ++ canonical_bytes
-         └──────────── 64-byte detached signature ───────────┘
-```
-
-Each production connector holds its **own** signing key; Ajar registers the
-matching public key in the connector's profile. The seed used by the golden
-vectors (32×`0x47`) is a published **TEST** seed — never sign production events
-with it.
+All five assert against the same [vectors.json](vendor/contract/vectors.json) and
+produce byte-identical canonical bytes for every fixture. **Five independent
+protobuf encoders** (prost, Go, libprotobuf, nanopb, Python) agreeing on every
+hash is the proof, because protobuf serialization is not canonical by
+specification. The C++ builds vendor their crypto (Monocypher Ed25519, no system
+dependency); the embedded nanopb build links no protobuf runtime and allocates
+nothing on the heap on the encode path.
 
 ## Reference connectors
 
-The `rust/examples/` above teach the SDK. Alongside them, `rust/connectors/` holds
-**production, standard-format connectors** — one per open wire standard, not per
-system, so any kit already speaking that standard connects by config alone. They
-share a runtime crate ([`connectors/common`](rust/connectors/common)) — config,
-key loading, mTLS NATS, the transport layer, the seal-and-publish loop, health,
-graceful shutdown — so a new connector is a format parser (`FrameParser`) plus a
-few lines of wiring.
+`rust/connectors/` holds production connectors, one per open wire standard rather
+than one per system. Any equipment already speaking that standard connects by
+config alone.
+
+They share a runtime crate, [`connectors/common`](rust/connectors/common), which
+provides config, key loading, mTLS NATS, the transport layer, the seal-and-publish
+loop, health and graceful shutdown. A new connector is therefore a format parser
+(`FrameParser`) plus a few lines of wiring.
 
 | Connector | Standard | What it feeds | Typical transport |
 |-----------|----------|---------------|-------------------|
@@ -234,23 +403,21 @@ few lines of wiring.
 | [mavlink](rust/connectors/mavlink) | MAVLink v1/v2 | small-UAS / drone telemetry | UDP / serial |
 | [stanag4586](rust/connectors/stanag4586) | STANAG 4586 (NATO UAS Control) | military UAS telemetry | UDP |
 | [tak-cot](rust/connectors/tak-cot) | TAK / Cursor-on-Target | ground/air situational-awareness tracks | UDP multicast / unicast |
-| [generic](rust/connectors/generic) | any flat JSON / CSV | the long tail — **no code, just a field mapping** | any of the below |
+| [generic](rust/connectors/generic) | any flat JSON / CSV | the long tail, by field mapping rather than code | any of the below |
 | [tak-egress](rust/connectors/tak-egress) | TAK / CoT (**egress**) | governed COP tracks OUT to a TAK Server, verbatim | NATS → TLS 8089 |
 
-Each maps a standard's **position reports** (and, where present, identity and
-tactical fields) onto Ajar tracks; each connector's README states which message
-types/categories it covers. The **generic** connector needs no Rust at all — a
-`[mapping]` block in its config turns a JSON/CSV source into events. Extending
-coverage is additive.
+Each maps a standard's position reports, and where present its identity and
+tactical fields, onto Ajar tracks. Each connector's README states which message
+types it covers.
 
-**Which connector for your kit?** See **[CONNECTORS.md](CONNECTORS.md)** — a
-catalogue of what each connector is for and the real systems that speak each format
-(radars, AIS transponders, autopilots, UAS ground stations, TAK devices, …).
+[CONNECTORS.md](CONNECTORS.md) catalogues what each connector is for and the real
+systems that speak each format: radars, AIS transponders, autopilots, UAS ground
+stations and TAK devices.
 
 ### Transport is orthogonal to protocol
 
-A connector never hard-codes *how bytes arrive*. The protocol (parsing) and the
-transport (delivery) are separate, so any connector runs on any method by config:
+Parsing and delivery are separate concerns. No connector hard-codes how bytes
+arrive, so any connector runs on any transport by config:
 
 | `kind` | Method | Notes |
 |--------|--------|-------|
@@ -268,8 +435,8 @@ transport (delivery) are separate, so any connector runs on any method by config
 | `ws-client` | WebSocket, connect out | needs the `websocket` feature; hosted live feeds, subscription message and auth headers supported |
 
 DDS is reached through an external gateway that re-publishes onto one of these
-(usually `udp-multicast` or `mqtt`), not as a native kind. Full onboarding —
-including registering the connector with the sovereign's control plane — is in
+(usually `udp-multicast` or `mqtt`), not as a native kind. Full onboarding,
+including registering the connector with the sovereign's control plane, is in
 [ONBOARDING.md](ONBOARDING.md).
 
 Build and test them on their own (they resolve their transport-heavy deps
@@ -282,49 +449,28 @@ cargo build && cargo test
 
 ## Not in scope
 
-The SDK does **not** implement policy, audit, ontology enforcement, correlation,
-or the pipeline — that is core's job. It only produces valid signed events,
-declares profiles, and translates in/out. It never sees secrets beyond a
+The SDK does not implement policy, audit, ontology enforcement, correlation or
+the pipeline. Those belong to Ajar Core. The SDK produces valid signed events,
+declares profiles and translates in and out. It never sees any secret beyond the
 connector's own signing key.
-
-## Deploying a connector (Kubernetes)
-
-For clusters at a C2/hub or a forward outpost, a Helm chart packages a connector
-as a Deployment — wiring up the signing key (from a Secret), the standard config
-(`AJAR_SOURCE_ID`, `NATS_URL`, `AJAR_INGEST_PREFIX`), optional mTLS, and an
-optional egress-only-to-NATS NetworkPolicy. A reference image (multi-stage,
-distroless non-root) is at [deploy/docker/Dockerfile](deploy/docker/Dockerfile):
-
-```bash
-docker build -f deploy/docker/Dockerfile -t registry.you.mil/acme-radar:1.0.0 .
-kubectl create secret generic acme-radar-seed --from-file=seed=acme-radar.seed
-helm install acme-radar deploy/helm/connector \
-  --set image.repository=registry.you.mil/acme-radar --set image.tag=1.0.0 \
-  --set connector.sourceId=acme-radar-1 \
-  --set connector.natsUrl=nats://ajar-ajar-nats:4222 \
-  --set signingSeed.existingSecret=acme-radar-seed
-```
-
-It's generic — you bring your connector image; the chart does the wiring, with a
-hardened security posture matching Core. The same binary also runs fine as a
-plain process or systemd unit at the edge. See
-[deploy/helm/connector](deploy/helm/connector/). (The chart deploys a
-*connector*; NATS and Ajar Core are operator-side, paired with the Core chart in
-`promaka/ajar`.)
 
 ## Stability & versioning
 
-**Build a connector once, and it keeps working — you are never forced to
-upgrade.** A connector is a binary you build and run; whether it stays accepted
-depends only on the **wire contract**, which is frozen (`event.proto` +
-`schema_version="v1"` + the seal envelope), pinned by
-[`vendor/contract/`](vendor/contract/), and proven by the golden vectors. The SDK
-API (`EventBuilder` / `seal` / …) is just a convenience for *building* those
-bytes — if it ever changes, only a deliberate rebuild is affected, never a running
-binary. **Pin the released tag `v0.5.3`, not a branch.**
+Build a connector once and it keeps working. You are never forced to upgrade.
 
-The full guarantee — what we will and won't change within `contract-v1` — is in
-[COMPATIBILITY.md](COMPATIBILITY.md). Security issues: [SECURITY.md](SECURITY.md).
+Whether a connector stays accepted depends only on the wire contract:
+`event.proto`, `schema_version="v1"` and the seal envelope. That contract is
+frozen, pinned by [`vendor/contract/`](vendor/contract/) and proven by the golden
+vectors.
+
+The SDK API (`EventBuilder`, `seal` and the rest) is a convenience for building
+those bytes. If it changes, only a deliberate rebuild is affected, never a
+running binary.
+
+Pin the released tag `v0.5.3`, not a branch.
+
+[COMPATIBILITY.md](COMPATIBILITY.md) states exactly what will and will not change
+within `contract-v1`. Report security issues per [SECURITY.md](SECURITY.md).
 
 ## Contributing & license
 
