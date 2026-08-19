@@ -1,0 +1,75 @@
+# SPDX-License-Identifier: Apache-2.0
+# Publishes the Python SDK to PyPI on a release tag.
+#
+# Chained behind the conformance gate for the same reason the release is chained
+# behind the images: a package that does not reproduce the golden vectors is not
+# a package anyone should be able to install.
+#
+# Authentication is PyPI Trusted Publishing (OIDC) — no API token is stored in
+# this repository, and none can be stolen from it.
+name: publish-python
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  conformance:
+    name: the SDK reproduces contract-v1
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Versions agree across every manifest
+        run: ./scripts/check-versions.sh "${GITHUB_REF_NAME#v}"
+      - run: pip install -e ./python
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build the harness and run the Python SDK against the vectors
+        run: |
+          set -euo pipefail
+          cargo build --release --manifest-path rust/Cargo.toml \
+            -p conformance --bin ajar-conformance
+          cd python
+          PYTHONPATH=. ../rust/target/release/ajar-conformance \
+            run --impl python3 examples/conformance_adapter.py \
+            --report ../python-conformance.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: python-conformance
+          path: python-conformance.json
+
+  publish:
+    name: build + attest + publish to PyPI
+    needs: [conformance]
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write        # OIDC for Trusted Publishing and attestations
+      attestations: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install build
+      - run: python -m build --outdir dist ./python
+      - name: Fail if the built version is not the tag
+        run: |
+          set -euo pipefail
+          ver="${GITHUB_REF_NAME#v}"
+          ls "dist/ajar_connector-$ver.tar.gz" "dist/ajar_connector-$ver-py3-none-any.whl"
+      # Signed, keyless SLSA provenance over the artefacts themselves, matching
+      # the posture of the container images.
+      - uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: "dist/*"
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          attestations: true

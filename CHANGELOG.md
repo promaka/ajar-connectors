@@ -14,6 +14,21 @@ Two version lines are tracked independently (see COMPATIBILITY.md):
 ## [Unreleased]
 
 ### Added
+- The Python SDK is published to PyPI as `ajar-connector` on release, gated on it
+  reproducing the golden vectors first. Authentication is PyPI Trusted Publishing,
+  so no API token exists in this repository to be stolen; artefacts carry signed
+  SLSA provenance and PEP 740 attestations, matching the container images.
+- `docs/embedding-python.md`, for partners linking the SDK into their own service
+  rather than running one of our connectors.
+- `scripts/check-versions.sh` holds every language manifest to the release
+  version, run on each pull request and again before a tag can publish anything.
+
+### Fixed
+- The Python package version was `0.1.0`, five releases behind everything else,
+  so publishing it would have shipped a version number that meant nothing. The
+  C++ project declared no version at all; it now declares one.
+
+### Added
 - `--profile` on every connector prints the profile document the operator
   registers, derived from the config the connector already parses and the key it
   already holds, and exits before opening a transport. Onboarding previously
