@@ -210,12 +210,55 @@ jobs:
             ajar-connectors-*.tar.gz
             ajar-connectors-*.tar.gz.sha256
 
+  # The C++ SDK as one self-contained source tarball. An air-gapped site, or a
+  # partner whose build system is CMake and nothing else, takes this file and
+  # needs nothing from this repository: the vendored contract travels inside it.
+  # Proven by building the extracted tree and running its conformance gate, so a
+  # tarball that cannot reproduce contract-v1 never reaches the release.
+  cpp-tarball:
+    name: package + verify the C++ tarball
+    needs: [connectors]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v7
+      - name: Toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake g++ protobuf-compiler libprotobuf-dev
+      - name: Package
+        run: ./scripts/package-cpp.sh "${GITHUB_REF_NAME#v}" dist
+      - name: The extracted tarball builds and is conformant on its own
+        run: |
+          set -euo pipefail
+          ver="${GITHUB_REF_NAME#v}"
+          work="$(mktemp -d)"
+          tar xzf "dist/ajar-connector-cpp-$ver.tar.gz" -C "$work"
+          cd "$work/ajar-connector-cpp-$ver"
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build -j"$(nproc)"
+          ./build/conformance
+      - uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: dist/ajar-connector-cpp-*.tar.gz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cpp-tarball
+          path: |
+            dist/ajar-connector-cpp-*.tar.gz
+            dist/ajar-connector-cpp-*.tar.gz.sha256
+
   # The GitHub release is created here and nowhere else, after every image it
   # refers to has been pushed. A failed build therefore leaves no release rather
   # than one whose images do not exist.
   release:
     name: publish the release
-    needs: [build-push, connectors, chart, binaries]
+    needs: [build-push, connectors, chart, binaries, cpp-tarball]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
@@ -224,7 +267,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v4
         with:
-          pattern: binaries-*
+          pattern: "{binaries-*,cpp-tarball}"
           merge-multiple: true
           path: dist
       - name: notes for this version, from CHANGELOG.md

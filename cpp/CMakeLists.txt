@@ -23,7 +23,13 @@ else()
   set(AJAR_PROTOC ${Protobuf_PROTOC_EXECUTABLE})
 endif()
 
-set(CONTRACT_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../vendor/contract)
+# In the repository the contract is vendored one level up; a release tarball
+# ships it inside this directory so the extracted tree builds on its own.
+if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/../vendor/contract/event.proto)
+  set(CONTRACT_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../vendor/contract)
+else()
+  set(CONTRACT_DIR ${CMAKE_CURRENT_SOURCE_DIR}/vendor/contract)
+endif()
 set(PROTO ${CONTRACT_DIR}/event.proto)
 set(GEN_DIR ${CMAKE_CURRENT_BINARY_DIR}/generated)
 file(MAKE_DIRECTORY ${GEN_DIR})
