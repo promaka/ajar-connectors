@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
-# Proves a PUBLISHED connector image can reach an mTLS NATS and publish.
+# Proves a connector image built from this checkout can reach an mTLS NATS and
+# publish an event over it.
 #
 # The unit tests exercise the TLS policy but never open a socket, so they stay
 # green whether or not the shipped binary can complete a handshake. A connector
@@ -20,23 +21,27 @@ permissions:
   packages: read
 
 jobs:
-  published-image-publishes-over-mtls:
-    name: a published image publishes over mTLS
+  publishes-over-mtls:
+    name: the connector publishes over mTLS
     runs-on: ubuntu-latest
     # A gate that hangs tells you nothing and blocks the queue. Ten minutes is far
     # more than the seconds this needs, so exceeding it is a fault to look at.
     timeout-minutes: 10
     env:
-      # The image under test. Pinned rather than :latest so the gate states
-      # exactly which artefact it proved.
-      IMAGE: ghcr.io/promaka/ajar-connector-generic:0.5.3
+      # Built from this checkout, so the gate proves the code under review rather
+      # than the last release. A published image cannot demonstrate a fix that is
+      # not in it yet, and pinning one would leave this permanently red on exactly
+      # the change that repairs it. The released artefacts are proven separately
+      # by the release workflow, which builds and pushes them.
+      IMAGE: ajar-connector-generic:under-test
     steps:
       - uses: actions/checkout@v7
-      - uses: docker/login-action@v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build the connector image from this checkout
+        run: |
+          docker build -f deploy/docker/Dockerfile.build \
+            --build-arg WSDIR=rust/connectors \
+            --build-arg PKG=ajar-generic \
+            -t "$IMAGE" .
 
       - name: Mint P-256 certificates
         run: ./.github/scripts/mtls-certs.sh "$GITHUB_WORKSPACE/certs"
@@ -54,7 +59,7 @@ jobs:
           done
           docker logs nats 2>&1 | tail -5
 
-      - name: Publish one event through the published image
+      - name: Publish one event through the image
         run: |
           set -euo pipefail
           # A file source rather than stdin: the container runs detached, so
