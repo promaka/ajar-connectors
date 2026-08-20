@@ -86,7 +86,7 @@ jobs:
             -e AJAR_TLS_CA=/etc/ajar/certs/ca.pem \
             -e AJAR_TLS_CERT=/etc/ajar/certs/client.pem \
             -e AJAR_TLS_KEY=/etc/ajar/certs/client.key \
-            -e RUST_LOG=info \
+            -e RUST_LOG=info -e NO_COLOR=1 \
             -v "$GITHUB_WORKSPACE/certs:/etc/ajar/certs:ro" \
             -v "$GITHUB_WORKSPACE/seed:/etc/ajar/seed:ro" \
             -v "$GITHUB_WORKSPACE/feed.jsonl:/etc/ajar/feed.jsonl:ro" \
@@ -94,8 +94,9 @@ jobs:
             "$IMAGE" /etc/ajar/c.toml
 
           # Poll for the outcome rather than sleeping blind, but bounded.
+          strip() { sed -r 's/\x1B\[[0-9;]*[a-zA-Z]//g'; }
           for i in $(seq 1 30); do
-            docker logs conn > run.log 2>&1 || true
+            docker logs conn 2>&1 | strip > run.log || true
             grep -qE "published=[1-9]" run.log && break
             sleep 1
           done
