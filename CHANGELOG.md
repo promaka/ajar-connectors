@@ -13,6 +13,34 @@ Two version lines are tracked independently (see COMPATIBILITY.md):
 
 ## [Unreleased]
 
+## [0.5.4] - 2026-08-20
+
+### Fixed
+- Connectors install a rustls crypto provider explicitly. rustls 0.23 selects one
+  from crate features only while exactly one is compiled in, so a dependency
+  pulling a second turned that into a failure before the first byte reached the
+  network. The dependency graph is also reduced to one rustls and one provider
+  with every feature enabled.
+
+### Added
+- A CI gate builds a connector image from the checkout, starts NATS with
+  `verify_and_map` and a P-256 client certificate, and asserts the connector
+  completed mTLS and published. The unit tests exercise the TLS policy without
+  opening a socket, so they stayed green whether or not a shipped binary could
+  complete a handshake.
+- `vendor/contract/ontology.json`, hash-pinned beside `event.proto`. Connectors
+  validate their declared mapping against it at startup: an unknown entity type,
+  an attribute no ancestor of that type governs, or a value outside a controlled
+  vocabulary stops the connector with a message naming the offender, rather than
+  being discarded downstream without an error.
+- `docs/mapping-to-mim.md`, which states what to map a feed to: the entity types,
+  the governed attribute names and their units, the controlled vocabularies, and
+  a worked example in C++ and Python.
+
+### Changed
+- The README leads with a contents table and four numbered setup paths, and the
+  C++ guide with the four steps a partner takes in order.
+
 ### Added
 - The Python SDK is published to PyPI as `ajar-connector` on release, gated on it
   reproducing the golden vectors first. Authentication is PyPI Trusted Publishing,
