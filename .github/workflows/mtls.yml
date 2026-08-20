@@ -23,6 +23,9 @@ jobs:
   published-image-publishes-over-mtls:
     name: a published image publishes over mTLS
     runs-on: ubuntu-latest
+    # A gate that hangs tells you nothing and blocks the queue. Ten minutes is far
+    # more than the seconds this needs, so exceeding it is a fault to look at.
+    timeout-minutes: 10
     env:
       # The image under test. Pinned rather than :latest so the gate states
       # exactly which artefact it proved.
@@ -54,30 +57,44 @@ jobs:
       - name: Publish one event through the published image
         run: |
           set -euo pipefail
+          # A file source rather than stdin: the container runs detached, so
+          # nothing depends on holding a pipe open and the step cannot block on
+          # a process that never exits.
           cat > "$GITHUB_WORKSPACE/c.toml" <<'TOML'
           source_id = "ajar-connector"
           nats_url = "tls://127.0.0.1:4222"
           signing_key_path = "/etc/ajar/seed"
           [transport]
-          kind = "stdin"
+          kind = "file"
+          path = "/etc/ajar/feed.jsonl"
+          from_start = true
           [mapping]
           format = "json"
           entity_type = "mim:aircraft"
           lat_field = "lat"
           lon_field = "lon"
           TOML
+          echo '{"lat":25.27,"lon":51.52}' > "$GITHUB_WORKSPACE/feed.jsonl"
           head -c 32 /dev/urandom > "$GITHUB_WORKSPACE/seed"
 
-          echo '{"lat":25.27,"lon":51.52}' | timeout 60 docker run -i --rm \
-            --network host \
+          docker run -d --name conn --network host \
             -e AJAR_TLS_CA=/etc/ajar/certs/ca.pem \
             -e AJAR_TLS_CERT=/etc/ajar/certs/client.pem \
             -e AJAR_TLS_KEY=/etc/ajar/certs/client.key \
             -e RUST_LOG=info \
             -v "$GITHUB_WORKSPACE/certs:/etc/ajar/certs:ro" \
             -v "$GITHUB_WORKSPACE/seed:/etc/ajar/seed:ro" \
+            -v "$GITHUB_WORKSPACE/feed.jsonl:/etc/ajar/feed.jsonl:ro" \
             -v "$GITHUB_WORKSPACE/c.toml:/etc/ajar/c.toml:ro" \
-            "$IMAGE" /etc/ajar/c.toml > run.log 2>&1 || true
+            "$IMAGE" /etc/ajar/c.toml
+
+          # Poll for the outcome rather than sleeping blind, but bounded.
+          for i in $(seq 1 30); do
+            docker logs conn > run.log 2>&1 || true
+            grep -qE "published=[1-9]" run.log && break
+            sleep 1
+          done
+          docker rm -f conn >/dev/null 2>&1 || true
           cat run.log
 
       - name: It must have completed mTLS and published
