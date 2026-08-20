@@ -34,11 +34,12 @@ serde_json.workspace = true
 async-trait.workspace = true
 # Server-side TLS for the http-server transport (same ring-only stack as tak-egress).
 tokio-rustls.workspace = true
+rustls.workspace = true
 rustls-pemfile.workspace = true
 # Feature-gated transport dependencies.
 tokio-serial = { version = "5", optional = true }
-rumqttc = { version = "0.24", optional = true }
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"], optional = true }
+rumqttc = { version = "0.25", default-features = false, features = ["use-rustls-no-provider"], optional = true }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-no-provider"], optional = true }
 # ring, to match the one crypto provider already in the process (see workspace note).
 futures-util = { workspace = true, optional = true }
 tokio-tungstenite = { version = "0.24", default-features = false, features = [

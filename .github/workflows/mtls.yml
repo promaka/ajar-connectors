@@ -1,0 +1,99 @@
+# SPDX-License-Identifier: Apache-2.0
+# Proves a PUBLISHED connector image can reach an mTLS NATS and publish.
+#
+# The unit tests exercise the TLS policy but never open a socket, so they stay
+# green whether or not the shipped binary can complete a handshake. A connector
+# that cannot reach a TLS bus is the sovereign posture failing silently, so this
+# runs the real image against a real server with a real client certificate and
+# asserts an event actually arrives.
+name: mtls
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  published-image-publishes-over-mtls:
+    name: a published image publishes over mTLS
+    runs-on: ubuntu-latest
+    env:
+      # The image under test. Pinned rather than :latest so the gate states
+      # exactly which artefact it proved.
+      IMAGE: ghcr.io/promaka/ajar-connector-generic:0.5.3
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Mint P-256 certificates
+        run: ./.github/scripts/mtls-certs.sh "$GITHUB_WORKSPACE/certs"
+
+      - name: Start a TLS-verifying NATS
+        run: |
+          set -euo pipefail
+          docker run -d --name nats \
+            -v "$GITHUB_WORKSPACE/certs:/certs:ro" \
+            -v "$GITHUB_WORKSPACE/.github/scripts/nats-mtls.conf:/nats.conf:ro" \
+            -p 4222:4222 nats:2-alpine -c /nats.conf
+          for i in $(seq 1 20); do
+            docker logs nats 2>&1 | grep -q "Server is ready" && break
+            sleep 1
+          done
+          docker logs nats 2>&1 | tail -5
+
+      - name: Publish one event through the published image
+        run: |
+          set -euo pipefail
+          cat > "$GITHUB_WORKSPACE/c.toml" <<'TOML'
+          source_id = "ajar-connector"
+          nats_url = "tls://127.0.0.1:4222"
+          signing_key_path = "/etc/ajar/seed"
+          [transport]
+          kind = "stdin"
+          [mapping]
+          format = "json"
+          entity_type = "mim:aircraft"
+          lat_field = "lat"
+          lon_field = "lon"
+          TOML
+          head -c 32 /dev/urandom > "$GITHUB_WORKSPACE/seed"
+
+          echo '{"lat":25.27,"lon":51.52}' | timeout 60 docker run -i --rm \
+            --network host \
+            -e AJAR_TLS_CA=/etc/ajar/certs/ca.pem \
+            -e AJAR_TLS_CERT=/etc/ajar/certs/client.pem \
+            -e AJAR_TLS_KEY=/etc/ajar/certs/client.key \
+            -e RUST_LOG=info \
+            -v "$GITHUB_WORKSPACE/certs:/etc/ajar/certs:ro" \
+            -v "$GITHUB_WORKSPACE/seed:/etc/ajar/seed:ro" \
+            -v "$GITHUB_WORKSPACE/c.toml:/etc/ajar/c.toml:ro" \
+            "$IMAGE" /etc/ajar/c.toml > run.log 2>&1 || true
+          cat run.log
+
+      - name: It must have completed mTLS and published
+        run: |
+          set -euo pipefail
+          grep -q "mTLS enabled" run.log \
+            || { echo "::error::the connector did not take the mTLS path"; exit 1; }
+          grep -q "connected successfully" run.log \
+            || { echo "::error::TLS handshake to NATS did not complete"; docker logs nats | tail -20; exit 1; }
+          grep -qE "published=[1-9]" run.log \
+            || { echo "::error::connected but published nothing"; exit 1; }
+          echo "a published image completed mTLS and published over it"
+
+      - name: NATS must have accepted the client certificate
+        run: |
+          docker logs nats 2>&1 | tee nats.log
+          grep -qiE "TLS handshake error|authentication error" nats.log \
+            && { echo "::error::the server rejected the client"; exit 1; } || true
+          echo "server accepted the client certificate"

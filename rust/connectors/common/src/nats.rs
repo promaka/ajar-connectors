@@ -16,6 +16,8 @@ use anyhow::{bail, Context};
 /// Connect to NATS per the TLS policy above. The initial connect is retried and
 /// the client auto-reconnects after a drop.
 pub async fn connect(url: &str) -> anyhow::Result<async_nats::Client> {
+    install_crypto_provider();
+
     let mut opts = async_nats::ConnectOptions::new().retry_on_initial_connect();
 
     let ca = non_empty_env("AJAR_TLS_CA");
@@ -67,4 +69,26 @@ fn tls_required(url: &str) -> bool {
 
 fn non_empty_env(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|v| !v.trim().is_empty())
+}
+
+/// Install the process-wide rustls crypto provider.
+///
+/// rustls 0.23 picks a provider from crate features only while exactly one is
+/// compiled in. A dependency that pulls in a second one turns that into an
+/// ambiguity resolved at runtime, and a connector that cannot build a TLS config
+/// fails before it reaches the network: locally, in under a millisecond, with the
+/// server logging nothing but an EOF. Installing one explicitly removes the
+/// ambiguity whatever the dependency graph does later.
+///
+/// Idempotent and safe to call from every connector; a second call is ignored.
+fn install_crypto_provider() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        if rustls::crypto::ring::default_provider()
+            .install_default()
+            .is_err()
+        {
+            tracing::debug!("rustls crypto provider was already installed");
+        }
+    });
 }
