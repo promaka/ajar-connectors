@@ -38,7 +38,7 @@ ajar-connector = { path = "../ajar-connector" }
 ajar-connector-common = { path = "common" }
 # Same async-nats build the examples use: core-NATS only + `ring` for TLS.
 # default-features = false avoids a `time` coherence clash on this toolchain.
-async-nats = { version = "0.49", default-features = false, features = ["ring"] }
+async-nats = { version = "0.50", default-features = false, features = ["ring"] }
 # The seal signs with the connector's own Ed25519 key; the SDK takes the dalek
 # type directly, so we hold the key in the same type it expects.
 ed25519-dalek = "3"
@@ -46,9 +46,9 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "time",
 bytes = "1"
 # Multicast needs SO_REUSEADDR/REUSEPORT so a connector can share a group with
 # another consumer (e.g. ATAK) on the same host; tokio's UdpSocket can't set that.
-socket2 = { version = "0.5", features = ["all"] }
+socket2 = { version = "0.6", features = ["all"] }
 serde = { version = "1", features = ["derive"] }
-toml = "0.8"
+toml = "1.1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 anyhow = "1"

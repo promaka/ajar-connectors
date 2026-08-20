@@ -42,12 +42,12 @@ rumqttc = { version = "0.25", default-features = false, features = ["use-rustls-
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-no-provider"], optional = true }
 # ring, to match the one crypto provider already in the process (see workspace note).
 futures-util = { workspace = true, optional = true }
-tokio-tungstenite = { version = "0.24", default-features = false, features = [
+tokio-tungstenite = { version = "0.30", default-features = false, features = [
     "connect",
     "handshake",
     "rustls-tls-webpki-roots",
 ], optional = true }
 
 [dev-dependencies]
-rcgen = { version = "0.13", default-features = false, features = ["ring", "pem"] }
+rcgen = { version = "0.14", default-features = false, features = ["ring", "pem"] }
 proptest = "1"
