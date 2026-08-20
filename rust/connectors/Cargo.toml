@@ -57,6 +57,7 @@ serde_json = "1"
 async-trait = "0.1"
 # Egress-side TLS client (TAK Server streaming input). ring only — a second
 # rustls crypto provider in the process would clash with async-nats's.
+rustls = { version = "0.23", default-features = false, features = ["ring", "tls12", "logging"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
 rustls-pemfile = "2"
 futures-util = "0.3"

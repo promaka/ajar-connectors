@@ -16,6 +16,13 @@ rejected at template time rather than crash-looping in the cluster.
 
 > It does **not** deploy NATS or Ajar Core — those are operator/core-side.
 
+> **Key and certificate permissions.** The image runs as `nonroot` (uid 65532).
+> A signing seed or TLS key mounted with `0600` and a different owner is
+> unreadable inside the container, and the failure is quiet: the connector logs
+> that mTLS is enabled, the TLS config never builds, and the bus logs only a
+> handshake EOF. Mount them from a Secret with `defaultMode: 0444`, or set
+> `fsGroup` to match.
+
 > **Registry access.** The published connector images are private. Your cluster
 > needs a pull secret with `read:packages` for `ghcr.io/promaka`, referenced via
 > `imagePullSecrets`, or the pods will fail to pull with `unauthorized`.

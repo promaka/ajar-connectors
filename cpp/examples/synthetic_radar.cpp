@@ -156,16 +156,17 @@ int main(int argc, char** argv) {
   // ==============================================================================
   std::vector<Track> tracks = {
       // Air (alt in metres) — fastest.
-      {"mim:aircraft", "friendly", "AJX-01", 26.4, 50.9, 11000, 0.3 * M_PI, 0.020},
-      {"mim:aircraft", "", "AJX-02", 25.6, 51.4, 9500, 1.1 * M_PI, 0.018},
-      {"mim:aircraft", "hostile", "AJX-03", 27.2, 49.7, 12500, 1.7 * M_PI, 0.024},
+      // `uid` is deliberately empty here and assigned once at startup below.
+      {"mim:aircraft", "friendly", "AJX-01", 26.4, 50.9, 11000, 0.3 * M_PI, 0.020, {}},
+      {"mim:aircraft", "", "AJX-02", 25.6, 51.4, 9500, 1.1 * M_PI, 0.018, {}},
+      {"mim:aircraft", "hostile", "AJX-03", 27.2, 49.7, 12500, 1.7 * M_PI, 0.024, {}},
       // Surface vessels (sea level, slower).
-      {"mim:surface-vessel", "friendly", "NAV-01", 26.0, 50.4, 0, 0.6 * M_PI, 0.010},
-      {"mim:surface-vessel", "neutral", "NAV-02", 25.3, 51.0, 0, 1.4 * M_PI, 0.008},
-      {"mim:surface-vessel", "hostile", "NAV-03", 26.8, 51.7, 0, 0.1 * M_PI, 0.011},
+      {"mim:surface-vessel", "friendly", "NAV-01", 26.0, 50.4, 0, 0.6 * M_PI, 0.010, {}},
+      {"mim:surface-vessel", "neutral", "NAV-02", 25.3, 51.0, 0, 1.4 * M_PI, 0.008, {}},
+      {"mim:surface-vessel", "hostile", "NAV-03", 26.8, 51.7, 0, 0.1 * M_PI, 0.011, {}},
       // Ground vehicles (near-surface, slow).
-      {"mim:ground-vehicle", "friendly", "GND-01", 25.8, 49.6, 10, 0.9 * M_PI, 0.006},
-      {"mim:ground-vehicle", "hostile", "GND-02", 27.0, 50.2, 15, 1.9 * M_PI, 0.007},
+      {"mim:ground-vehicle", "friendly", "GND-01", 25.8, 49.6, 10, 0.9 * M_PI, 0.006, {}},
+      {"mim:ground-vehicle", "hostile", "GND-02", 27.0, 50.2, 15, 1.9 * M_PI, 0.007, {}},
   };
 
   // Assign each track a stable UUIDv7 once, up front (reused every tick below).
