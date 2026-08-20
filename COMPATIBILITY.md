@@ -84,13 +84,13 @@ migration into your own review cycle instead of discovering it in ours.
 
 ## What you should do to rely on this
 
-1. **Pin a released tag, not a branch.** Depend on a tag (e.g. `v0.5.3`), never
+1. **Pin a released tag, not a branch.** Depend on a tag (e.g. `v0.5.4`), never
    `branch = "main"` — `main` moves. With a pinned tag, even your *next rebuild*
    is reproducible.
-   - Rust: `ajar-connector = { git = "https://github.com/promaka/ajar-connectors", tag = "v0.5.3" }`
-   - Go: `go get github.com/promaka/ajar-connectors/go/ajarconnector@v0.5.3`
-   - Python: `pip install "git+https://github.com/promaka/ajar-connectors.git@v0.5.3#subdirectory=python"`
-   - C++: check out the `v0.5.3` tag (or vendor it) and build per [cpp/README.md](cpp/README.md).
+   - Rust: `ajar-connector = { git = "https://github.com/promaka/ajar-connectors", tag = "v0.5.4" }`
+   - Go: `go get github.com/promaka/ajar-connectors/go/ajarconnector@v0.5.4`
+   - Python: `pip install "git+https://github.com/promaka/ajar-connectors.git@v0.5.4#subdirectory=python"`
+   - C++: check out the `v0.5.4` tag (or vendor it) and build per [cpp/README.md](cpp/README.md).
 
    On an air-gapped or accredited network none of these will resolve. Vendor the
    full dependency closure at the tag on a connected machine and carry it across —
