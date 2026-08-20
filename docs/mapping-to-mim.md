@@ -149,6 +149,8 @@ The class of the thing being reported. What the shipped connectors emit:
 | `mim:vessel` | surface maritime contacts |
 | `mim:sensor` | the sensor or platform itself |
 | `mim:object` | a detection whose class you do not know |
+| `mim:land-vehicle` | ground vehicles |
+| `mim:person`, `mim:unit`, `mim:facility`, `mim:weapon`, `mim:feature` | see the vendored ontology for the full 17 |
 
 **If your source reports a domain rather than a classification, use `mim:object`**
 and put the domain in the `environment` attribute. A radar that says "something in
@@ -241,8 +243,10 @@ operator holds.
 Ask them for two things before you write the mapping:
 
 1. **`ontology-mim-5.3-conformant-1.json`** — the contract your events are
-   validated against. It lists the entity types and attribute names that exist
-   for your deployment. Anything outside it is discarded silently.
+   validated against. It is vendored here as
+   [`vendor/contract/ontology.json`](../vendor/contract/ontology.json) and
+   hash-pinned, so the copy you build against cannot drift. Confirm with your
+   operator that it is the version their deployment runs.
 2. **Confirmation of your entity types** — the exact classes or `x:` prefixes
    registered against your `source_id`.
 
