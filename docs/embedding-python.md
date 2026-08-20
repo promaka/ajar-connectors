@@ -82,6 +82,12 @@ openssl pkcs8 -topk8 -nocrypt -in client-sec1.key -out client.key
 The certificate itself may be RSA or EC; P-256 with TLS 1.3 is what a sovereign
 bus typically presents.
 
+> **Permissions.** If you run in a container as a non-root user, make sure the
+> TLS key and the signing seed are readable by that user. A key mounted `0600`
+> under a different owner gives a TLS failure with no network round trip and only
+> a handshake EOF in the server log, which is easy to mistake for a network or
+> certificate problem.
+
 ## Getting registered
 
 Ajar accepts events only from a registered identity. Send your operator the

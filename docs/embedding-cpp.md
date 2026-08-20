@@ -111,6 +111,12 @@ the CA.
 
 ---
 
+> **Permissions.** If you run in a container as a non-root user, make sure the
+> TLS key and the signing seed are readable by that user. A key mounted `0600`
+> under a different owner gives a TLS failure with no network round trip and only
+> a handshake EOF in the server log, which is easy to mistake for a network or
+> certificate problem.
+
 ## 4. Publish
 
 The SDK seals; you publish. There is no NATS client in the C++ library, so use
