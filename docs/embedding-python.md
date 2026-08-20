@@ -47,6 +47,15 @@ scripts/gen-connector-key.sh acme-radar-1
 It writes the private seed and prints the public half. The private seed stays in
 your secret store; only the public half is ever sent.
 
+## What to map to
+
+The SDK builds and signs; deciding that your record is a `mim:aircraft` and that
+your speed must be metres per second is yours. The entity types, governed
+attribute names, units and controlled vocabularies are in
+**[docs/mapping-to-mim.md](mapping-to-mim.md)**. Read it before you write the
+mapping: a wrong type or a misspelled attribute compiles, seals and publishes,
+and is then discarded without an error.
+
 ## Governed versus ungoverned
 
 `attribute()` is validated against Ajar's ontology. `metadata()` is not, and is
@@ -59,6 +68,25 @@ and treat controlled vocabularies as case-sensitive — `hostility` takes `Frien
 not `friendly`. Native identifiers go in `metadata`, never in `id`.
 
 Full reference: [ATTRIBUTES.md](../rust/connectors/ATTRIBUTES.md).
+
+## Key format
+
+The signing seed is 32 raw bytes or 64 hex characters, and is not affected by
+this. The **TLS client key** is: supply it as **PKCS#8** (`-----BEGIN PRIVATE
+KEY-----`). Convert a SEC1 EC key (`-----BEGIN EC PRIVATE KEY-----`) first:
+
+```bash
+openssl pkcs8 -topk8 -nocrypt -in client-sec1.key -out client.key
+```
+
+The certificate itself may be RSA or EC; P-256 with TLS 1.3 is what a sovereign
+bus typically presents.
+
+> **Permissions.** If you run in a container as a non-root user, make sure the
+> TLS key and the signing seed are readable by that user. A key mounted `0600`
+> under a different owner gives a TLS failure with no network round trip and only
+> a handshake EOF in the server log, which is easy to mistake for a network or
+> certificate problem.
 
 ## Getting registered
 

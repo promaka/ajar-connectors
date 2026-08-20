@@ -13,7 +13,7 @@ if shasum -a 256 --check --status scripts/contract.sha256; then
 else
   echo "ERROR: vendored contract diverges from scripts/contract.sha256" >&2
   echo "If this was an intentional re-vendor from core, update the pin with:" >&2
-  echo "  shasum -a 256 vendor/contract/event.proto vendor/contract/vectors.json vendor/contract/corpus/*.json > scripts/contract.sha256" >&2
+  echo "  shasum -a 256 vendor/contract/event.proto vendor/contract/vectors.json vendor/contract/ontology.json vendor/contract/corpus/*.json > scripts/contract.sha256" >&2
   echo "and bump vendor/contract/CONTRACT_VERSION + PROVENANCE.md." >&2
   exit 1
 fi

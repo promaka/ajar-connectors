@@ -30,6 +30,19 @@ async fn main() -> anyhow::Result<()> {
 
     let mapping = Mapping::load(&path).with_context(|| format!("loading mapping from {path}"))?;
 
+    // A mapping that names something the ontology does not declare would be
+    // accepted by the bus and discarded by Core, so it stops the connector here
+    // instead of running healthily and delivering nothing.
+    ajar_connector_common::ontology::enforce(&ajar_connector_common::ontology::Declared {
+        entity_types: vec![mapping.entity_type.clone()],
+        attributes: mapping.attributes.keys().cloned().collect(),
+        fixed_values: cfg
+            .default_hostility
+            .clone()
+            .map(|v| [("hostility".to_string(), v)].into_iter().collect())
+            .unwrap_or_default(),
+    })?;
+
     // `--profile` prints the document the operator registers and exits, before
     // any transport is opened. The no-code connector emits exactly the type its
     // [mapping] declares, so that is the whole allowed set.

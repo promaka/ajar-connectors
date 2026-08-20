@@ -1,0 +1,839 @@
+{
+  "version": "mim-5.3-conformant-1",
+  "types": [
+    {
+      "id": "mim:concept",
+      "parent": null,
+      "description": "The class of all military or civilian artefacts.",
+      "requires_location": false
+    },
+    {
+      "id": "mim:battlespace-concept",
+      "parent": "mim:concept",
+      "description": "An object or action that has military or civilian significance.",
+      "requires_location": false
+    },
+    {
+      "id": "mim:object",
+      "parent": "mim:battlespace-concept",
+      "description": "An individually identified object that has military or civilian significance; also an as-yet unclassified contact.",
+      "requires_location": false,
+      "attributes": [
+        {
+          "name": "hostility",
+          "datatype": "text",
+          "required": false,
+          "values": [
+            "AssumedFriend",
+            "AssumedHostile",
+            "AssumedInvolved",
+            "AssumedNeutral",
+            "Faker",
+            "Friend",
+            "Hostile",
+            "Involved",
+            "Joker",
+            "Neutral",
+            "Pending",
+            "Suspect",
+            "Unknown"
+          ]
+        },
+        {
+          "name": "callsign",
+          "datatype": "text",
+          "required": false
+        },
+        {
+          "name": "heading",
+          "datatype": "number",
+          "unit": "deg",
+          "required": false,
+          "min": 0.0,
+          "max": 360.0
+        },
+        {
+          "name": "course",
+          "datatype": "number",
+          "unit": "deg",
+          "required": false,
+          "min": 0.0,
+          "max": 360.0
+        },
+        {
+          "name": "speed",
+          "datatype": "number",
+          "unit": "m/s",
+          "required": false,
+          "min": 0.0
+        },
+        {
+          "name": "vertical_rate",
+          "datatype": "number",
+          "unit": "m/s",
+          "required": false
+        },
+        {
+          "name": "environment",
+          "datatype": "text",
+          "required": false,
+          "values": [
+            "AIR",
+            "LAND",
+            "SURFACE",
+            "SUBSURFACE",
+            "SPACE",
+            "UNKNOWN"
+          ]
+        }
+      ],
+      "allows_metadata": true
+    },
+    {
+      "id": "mim:actor",
+      "parent": "mim:object",
+      "description": "A person or a group of persons that is able to perform actions.",
+      "requires_location": false,
+      "attributes": [
+        {
+          "name": "hostility",
+          "datatype": "text",
+          "required": false,
+          "values": [
+            "AssumedFriend",
+            "AssumedHostile",
+            "AssumedInvolved",
+            "AssumedNeutral",
+            "Faker",
+            "Friend",
+            "Hostile",
+            "Involved",
+            "Joker",
+            "Neutral",
+            "Pending",
+            "Suspect",
+            "Unknown"
+          ]
+        },
+        {
+          "name": "callsign",
+          "datatype": "text",
+          "required": false
+        }
+      ],
+      "allows_metadata": true
+    },
+    {
+      "id": "mim:person",
+      "parent": "mim:actor",
+      "description": "A human being of military or civilian significance.",
+      "requires_location": false,
+      "attributes": [
+        {
+          "name": "hostility",
+          "datatype": "text",
+          "required": false,
+          "values": [
+            "AssumedFriend",
+            "AssumedHostile",
+            "AssumedInvolved",
+            "AssumedNeutral",
+            "Faker",
+            "Friend",
+            "Hostile",
+            "Involved",
+            "Joker",
+            "Neutral",
+            "Pending",
+            "Suspect",
+            "Unknown"
+          ]
+        },
+        {
+          "name": "callsign",
+          "datatype": "text",
+          "required": false
+        },
+        {
+          "name": "heading",
+          "datatype": "number",
+          "unit": "deg",
+          "required": false,
+          "min": 0.0,
+          "max": 360.0
+        },
+        {
+          "name": "course",
+          "datatype": "number",
+          "unit": "deg",
+          "required": false,
+          "min": 0.0,
+          "max": 360.0
+        },
+        {
+          "name": "speed",
+          "datatype": "number",
+          "unit": "m/s",
+          "required": false,
+          "min": 0.0
+        },
+        {
+          "name": "vertical_rate",
+          "datatype": "number",
+          "unit": "m/s",
+          "required": false
+        },
+        {
+          "name": "battery",
+          "datatype": "number",
+          "unit": "percent",
+          "required": false,
+          "min": 0.0,
+          "max": 100.0
+        }
+      ],
+      "allows_metadata": true
+    },
+    {
+      "id": "mim:organisation",
+      "parent": "mim:actor",
+      "description": "An administrative or functional structure.",
+      "requires_location": false,
+      "attributes": [
+        {
+          "name": "hostility",
+          "datatype": "text",
+          "required": false,
+          "values": [
+            "AssumedFriend",
+            "AssumedHostile",
+            "AssumedInvolved",
+            "AssumedNeutral",
+            "Faker",
+            "Friend",
+            "Hostile",
+            "Involved",
+            "Joker",
+            "Neutral",
+            "Pending",
+            "Suspect",
+            "Unknown"
+          ]
+        },
+        {
+          "name": "callsign",
+          "datatype": "text",
+          "required": false
+        }
+      ],
+      "allows_metadata": true
+    },
+    {
+      "id": "mim:unit",
+      "parent": "mim:organisation",
+      "description": "A military organisation with an assigned mission and structure.",
+      "requires_location": false,
+      "attributes": [
+        {
+          "name": "hostility",
+          "datatype": "text",
+          "required": false,
+          "values": [
+            "AssumedFriend",
+            "AssumedHostile",
+            "AssumedInvolved",
+            "AssumedNeutral",
+            "Faker",
+            "Friend",
+            "Hostile",
+            "Involved",
+            "Joker",
+            "Neutral",
+            "Pending",
+            "Suspect",
+            "Unknown"
+          ]
+        },
+        {
+          "name": "callsign",
+          "datatype": "text",
+          "required": false
+        },
+        {
+          "name": "heading",
+          "datatype": "number",
+          "unit": "deg",
+          "required": false,
+          "min": 0.0,
+          "max": 360.0
+        },
+        {
+          "name": "course",
+          "datatype": "number",
+          "unit": "deg",
+          "required": false,
+          "min": 0.0,
+          "max": 360.0
+        },
+        {
+          "name": "speed",
+          "datatype": "number",
+          "unit": "m/s",
+          "required": false,
+          "min": 0.0
+        },
+        {
+          "name": "vertical_rate",
+          "datatype": "number",
+          "unit": "m/s",
+          "required": false
+        }
+      ],
+      "allows_metadata": true
+    },
+    {
+      "id": "mim:facility",
+      "parent": "mim:object",
+      "description": "An Object that is built, installed or established to serve some particular purpose, and is identified by the activity it conducts.",
+      "requires_location": true,
+      "attributes": [
+        {
+          "name": "hostility",
+          "datatype": "text",
+          "required": false,
+          "values": [
+            "AssumedFriend",
+            "AssumedHostile",
+            "AssumedInvolved",
+            "AssumedNeutral",
+            "Faker",
+            "Friend",
+            "Hostile",
+            "Involved",
+            "Joker",
+            "Neutral",
+            "Pending",
+            "Suspect",
+            "Unknown"
+          ]
+        },
+        {
+          "name": "callsign",
+          "datatype": "text",
+          "required": false
+        }
+      ],
+      "allows_metadata": true
+    },
+    {
+      "id": "mim:feature",
+      "parent": "mim:object",
+      "description": "An Object that encompasses meteorological, geographic or control features of military significance.",
+      "requires_location": false,
+      "attributes": [
+        {
+          "name": "hostility",
+          "datatype": "text",
+          "required": false,
+          "values": [
+            "AssumedFriend",
+            "AssumedHostile",
+            "AssumedInvolved",
+            "AssumedNeutral",
+            "Faker",
+            "Friend",
+            "Hostile",
+            "Involved",
+            "Joker",
+            "Neutral",
+            "Pending",
+            "Suspect",
+            "Unknown"
+          ]
+        },
+        {
+          "name": "callsign",
+          "datatype": "text",
+          "required": false
+        }
+      ],
+      "allows_metadata": true
+    },
+    {
+      "id": "mim:materiel",
+      "parent": "mim:object",
+      "description": "Equipment, apparatus or supplies of military interest, without distinction as to application for administrative or combat purposes.",
+      "requires_location": false,
+      "attributes": [
+        {
+          "name": "hostility",
+          "datatype": "text",
+          "required": false,
+          "values": [
+            "AssumedFriend",
+            "AssumedHostile",
+            "AssumedInvolved",
+            "AssumedNeutral",
+            "Faker",
+            "Friend",
+            "Hostile",
+            "Involved",
+            "Joker",
+            "Neutral",
+            "Pending",
+            "Suspect",
+            "Unknown"
+          ]
+        },
+        {
+          "name": "callsign",
+          "datatype": "text",
+          "required": false
+        }
+      ],
+      "allows_metadata": true
+    },
+    {
+      "id": "mim:equipment",
+      "parent": "mim:materiel",
+      "description": "Materiel that is neither consumed in use nor loses its identity.",
+      "requires_location": false,
+      "attributes": [
+        {
+          "name": "hostility",
+          "datatype": "text",
+          "required": false,
+          "values": [
+            "AssumedFriend",
+            "AssumedHostile",
+            "AssumedInvolved",
+            "AssumedNeutral",
+            "Faker",
+            "Friend",
+            "Hostile",
+            "Involved",
+            "Joker",
+            "Neutral",
+            "Pending",
+            "Suspect",
+            "Unknown"
+          ]
+        },
+        {
+          "name": "callsign",
+          "datatype": "text",
+          "required": false
+        },
+        {
+          "name": "heading",
+          "datatype": "number",
+          "unit": "deg",
+          "required": false,
+          "min": 0.0,
+          "max": 360.0
+        },
+        {
+          "name": "course",
+          "datatype": "number",
+          "unit": "deg",
+          "required": false,
+          "min": 0.0,
+          "max": 360.0
+        },
+        {
+          "name": "speed",
+          "datatype": "number",
+          "unit": "m/s",
+          "required": false,
+          "min": 0.0
+        },
+        {
+          "name": "vertical_rate",
+          "datatype": "number",
+          "unit": "m/s",
+          "required": false
+        },
+        {
+          "name": "frequency_hz",
+          "datatype": "number",
+          "unit": "Hz",
+          "required": false,
+          "min": 0.0
+        },
+        {
+          "name": "bandwidth_hz",
+          "datatype": "number",
+          "unit": "Hz",
+          "required": false,
+          "min": 0.0
+        },
+        {
+          "name": "power_dbm",
+          "datatype": "number",
+          "unit": "dBm",
+          "required": false
+        }
+      ],
+      "allows_metadata": true
+    },
+    {
+      "id": "mim:aircraft",
+      "parent": "mim:equipment",
+      "description": "Equipment designed for airborne operation.",
+      "requires_location": true,
+      "attributes": [
+        {
+          "name": "hostility",
+          "datatype": "text",
+          "required": false,
+          "values": [
+            "AssumedFriend",
+            "AssumedHostile",
+            "AssumedInvolved",
+            "AssumedNeutral",
+            "Faker",
+            "Friend",
+            "Hostile",
+            "Involved",
+            "Joker",
+            "Neutral",
+            "Pending",
+            "Suspect",
+            "Unknown"
+          ]
+        },
+        {
+          "name": "callsign",
+          "datatype": "text",
+          "required": false
+        },
+        {
+          "name": "heading",
+          "datatype": "number",
+          "unit": "deg",
+          "required": false,
+          "min": 0.0,
+          "max": 360.0
+        },
+        {
+          "name": "course",
+          "datatype": "number",
+          "unit": "deg",
+          "required": false,
+          "min": 0.0,
+          "max": 360.0
+        },
+        {
+          "name": "speed",
+          "datatype": "number",
+          "unit": "m/s",
+          "required": false,
+          "min": 0.0
+        },
+        {
+          "name": "vertical_rate",
+          "datatype": "number",
+          "unit": "m/s",
+          "required": false
+        },
+        {
+          "name": "battery",
+          "datatype": "number",
+          "unit": "percent",
+          "required": false,
+          "min": 0.0,
+          "max": 100.0
+        },
+        {
+          "name": "squawk",
+          "datatype": "text",
+          "required": false
+        }
+      ],
+      "allows_metadata": true
+    },
+    {
+      "id": "mim:vessel",
+      "parent": "mim:equipment",
+      "description": "Equipment designed for waterborne operation.",
+      "requires_location": true,
+      "attributes": [
+        {
+          "name": "hostility",
+          "datatype": "text",
+          "required": false,
+          "values": [
+            "AssumedFriend",
+            "AssumedHostile",
+            "AssumedInvolved",
+            "AssumedNeutral",
+            "Faker",
+            "Friend",
+            "Hostile",
+            "Involved",
+            "Joker",
+            "Neutral",
+            "Pending",
+            "Suspect",
+            "Unknown"
+          ]
+        },
+        {
+          "name": "callsign",
+          "datatype": "text",
+          "required": false
+        },
+        {
+          "name": "heading",
+          "datatype": "number",
+          "unit": "deg",
+          "required": false,
+          "min": 0.0,
+          "max": 360.0
+        },
+        {
+          "name": "course",
+          "datatype": "number",
+          "unit": "deg",
+          "required": false,
+          "min": 0.0,
+          "max": 360.0
+        },
+        {
+          "name": "speed",
+          "datatype": "number",
+          "unit": "m/s",
+          "required": false,
+          "min": 0.0
+        },
+        {
+          "name": "vertical_rate",
+          "datatype": "number",
+          "unit": "m/s",
+          "required": false
+        },
+        {
+          "name": "battery",
+          "datatype": "number",
+          "unit": "percent",
+          "required": false,
+          "min": 0.0,
+          "max": 100.0
+        },
+        {
+          "name": "mmsi",
+          "datatype": "text",
+          "required": false
+        },
+        {
+          "name": "nav_status",
+          "datatype": "text",
+          "required": false
+        },
+        {
+          "name": "vessel_domain",
+          "datatype": "text",
+          "required": false,
+          "values": [
+            "Surface",
+            "Subsurface"
+          ]
+        }
+      ],
+      "allows_metadata": true
+    },
+    {
+      "id": "mim:land-vehicle",
+      "parent": "mim:equipment",
+      "description": "Equipment designed for operation on land.",
+      "requires_location": true,
+      "attributes": [
+        {
+          "name": "hostility",
+          "datatype": "text",
+          "required": false,
+          "values": [
+            "AssumedFriend",
+            "AssumedHostile",
+            "AssumedInvolved",
+            "AssumedNeutral",
+            "Faker",
+            "Friend",
+            "Hostile",
+            "Involved",
+            "Joker",
+            "Neutral",
+            "Pending",
+            "Suspect",
+            "Unknown"
+          ]
+        },
+        {
+          "name": "callsign",
+          "datatype": "text",
+          "required": false
+        },
+        {
+          "name": "heading",
+          "datatype": "number",
+          "unit": "deg",
+          "required": false,
+          "min": 0.0,
+          "max": 360.0
+        },
+        {
+          "name": "course",
+          "datatype": "number",
+          "unit": "deg",
+          "required": false,
+          "min": 0.0,
+          "max": 360.0
+        },
+        {
+          "name": "speed",
+          "datatype": "number",
+          "unit": "m/s",
+          "required": false,
+          "min": 0.0
+        },
+        {
+          "name": "vertical_rate",
+          "datatype": "number",
+          "unit": "m/s",
+          "required": false
+        },
+        {
+          "name": "battery",
+          "datatype": "number",
+          "unit": "percent",
+          "required": false,
+          "min": 0.0,
+          "max": 100.0
+        }
+      ],
+      "allows_metadata": true
+    },
+    {
+      "id": "mim:sensor",
+      "parent": "mim:equipment",
+      "description": "Equipment designed to detect, identify or track objects.",
+      "requires_location": false,
+      "attributes": [
+        {
+          "name": "hostility",
+          "datatype": "text",
+          "required": false,
+          "values": [
+            "AssumedFriend",
+            "AssumedHostile",
+            "AssumedInvolved",
+            "AssumedNeutral",
+            "Faker",
+            "Friend",
+            "Hostile",
+            "Involved",
+            "Joker",
+            "Neutral",
+            "Pending",
+            "Suspect",
+            "Unknown"
+          ]
+        },
+        {
+          "name": "callsign",
+          "datatype": "text",
+          "required": false
+        },
+        {
+          "name": "frequency_hz",
+          "datatype": "number",
+          "unit": "Hz",
+          "required": false,
+          "min": 0.0
+        },
+        {
+          "name": "bandwidth_hz",
+          "datatype": "number",
+          "unit": "Hz",
+          "required": false,
+          "min": 0.0
+        },
+        {
+          "name": "power_dbm",
+          "datatype": "number",
+          "unit": "dBm",
+          "required": false
+        }
+      ],
+      "allows_metadata": true
+    },
+    {
+      "id": "mim:weapon",
+      "parent": "mim:equipment",
+      "description": "Equipment designed to inflict damage on, or destroy, an objective.",
+      "requires_location": false,
+      "attributes": [
+        {
+          "name": "hostility",
+          "datatype": "text",
+          "required": false,
+          "values": [
+            "AssumedFriend",
+            "AssumedHostile",
+            "AssumedInvolved",
+            "AssumedNeutral",
+            "Faker",
+            "Friend",
+            "Hostile",
+            "Involved",
+            "Joker",
+            "Neutral",
+            "Pending",
+            "Suspect",
+            "Unknown"
+          ]
+        },
+        {
+          "name": "callsign",
+          "datatype": "text",
+          "required": false
+        }
+      ],
+      "allows_metadata": true
+    },
+    {
+      "id": "mim:action",
+      "parent": "mim:battlespace-concept",
+      "description": "An activity, or the occurrence of an activity, that may utilise resources and may be focused against an objective.",
+      "requires_location": false,
+      "attributes": [
+        {
+          "name": "hostility",
+          "datatype": "text",
+          "required": false,
+          "values": [
+            "AssumedFriend",
+            "AssumedHostile",
+            "AssumedInvolved",
+            "AssumedNeutral",
+            "Faker",
+            "Friend",
+            "Hostile",
+            "Involved",
+            "Joker",
+            "Neutral",
+            "Pending",
+            "Suspect",
+            "Unknown"
+          ]
+        },
+        {
+          "name": "callsign",
+          "datatype": "text",
+          "required": false
+        }
+      ],
+      "allows_metadata": true
+    }
+  ]
+}
