@@ -29,4 +29,12 @@ mint client "/CN=ajar-connector" "extendedKeyUsage=clientAuth"
 
 head -1 client.key | grep -q "BEGIN PRIVATE KEY" \
   || { echo "client key is not PKCS#8"; exit 1; }
+
+# openssl writes keys 0600 for the creating user. The connector images run as
+# nonroot (uid 65532), so a key mounted straight from here is unreadable inside
+# the container: the TLS config fails to build, locally and in under a
+# millisecond, and the server logs nothing but an EOF. These are throwaway test
+# certificates, so widen them. A real deployment mounts the key from a Secret
+# whose ownership matches the runtime user instead.
+chmod 0644 client.key server.key ca.key
 echo "minted P-256 CA, server and client certificates in $out"
