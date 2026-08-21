@@ -210,6 +210,7 @@ dependencies = [
  "rusqlite",
  "serde",
  "sha2 0.10.9",
+ "socket2 0.5.10",
  "tempfile",
  "tokio",
  "toml",
