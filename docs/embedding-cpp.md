@@ -86,6 +86,25 @@ Four decisions, per record:
 Anything you are unsure about goes in `metadata`, which is ungoverned and always
 kept.
 
+**Check your mapping before you run it.** The SDK validates a mapping, or a
+built event, against the vendored ontology — offline, from the tarball:
+
+```cpp
+for (const auto& fault : ajar::validate(event))
+  std::fprintf(stderr, "%s\n", fault.message().c_str());
+```
+
+The connector template wires this to a flag, so your CI can hold the mapping to
+the contract:
+
+```bash
+./build/connector_template --check   # exit 0 clean, 1 with each fault named
+```
+
+Validation is advisory: it refuses nothing per event. Refusing to start on
+faults is your call at your own initialisation, and the right one for a service
+that would otherwise publish events Ajar discards silently.
+
 ---
 
 ## 3. Get registered

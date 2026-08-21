@@ -13,6 +13,15 @@ Two version lines are tracked independently (see COMPATIBILITY.md):
 
 ## [Unreleased]
 
+### Added
+- C++ mapping validation against the vendored ontology: `ajar::validate()` over
+  a declared mapping or a built event, and a `--check` flag on the connector
+  template for CI. The same checks the Rust runtime applies at startup — unknown
+  entity type, ungoverned attribute, value outside a controlled vocabulary, case
+  slips answered with the correction — now reach embedders linking the SDK, from
+  the release tarball, offline. Validation is advisory at the API level; refusing
+  to start on faults is the embedder's decision.
+
 ## [0.5.4] - 2026-08-20
 
 ### Fixed
