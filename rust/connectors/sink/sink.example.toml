@@ -19,9 +19,8 @@ database = "./ajar-sink.db"
 
 # Publishers this sink will accept, and the verifying key each registered. A
 # source that is not listed is refused: an event nobody can verify is worse than
-# no event at all. Get a connector's key with `scripts/gen-connector-key.sh`, or
-# from the dev seed for the bundled examples.
+# no event at all. Generate a connector's key with `scripts/gen-connector-key.sh`
+# and register the public half it prints; the demo stack mints its own at
+# startup and registers it via sources_dir (see deploy/dev/sink.toml).
 [sources]
-# synthetic-radar's default dev seed (32 x 0x03) — TEST ONLY, never production.
-"demo-radar" = "ed4928c628d1c2c6eae90338905995612959273a5c63f93636c14614ac8737d1"
-# "acme-radar-1" = "<64 hex characters>"
+"acme-radar-1" = "<64-char hex verifying key, from scripts/gen-connector-key.sh>"
