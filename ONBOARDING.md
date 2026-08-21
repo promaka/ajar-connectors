@@ -399,9 +399,10 @@ let seed: [u8; 32] = load_seed_bytes();        // 32 bytes from your secret stor
 let signing_key = SigningKey::from_bytes(&seed);
 ```
 
-> The repo's examples use **dev-only test seeds** (32 bytes of `0x03` for the
-> local demo, `0x47` for the golden vectors). Never sign production events with
-> those.
+> The only published key in this repository is the golden-vector test seed
+> (`0x47…`), which byte-exact conformance requires. Demo and dry-run keys are
+> minted fresh where they run. Never sign production events with a key from any
+> repository.
 
 ## 7. Declare your profile
 
@@ -444,7 +445,7 @@ Either way it produces what Ajar needs:
   "source_id": "tak-field-1",
   "allowed_entity_types": ["mim:", "x:cot:"],
   "max_payload_bytes": 65536,
-  "verifying_key_hex": "be632a73306cf201f8222cd8766a4427f4c7224c0e55018012c28faed60e0892"
+  "verifying_key_hex": "e28a8970753332bd72fef413e6b0b2ef1b4aadda7aa2c141f233712a6876b351"
 }
 ```
 

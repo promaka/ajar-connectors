@@ -46,6 +46,10 @@ struct Config {
     /// this table is refused: an event nobody can verify is worse than no event.
     #[serde(default)]
     sources: HashMap<String, String>,
+    /// Optional directory of `<source_id>.pub` files (64-char hex) merged into
+    /// the registry at startup. For stacks that mint their keys on first run.
+    #[serde(default)]
+    sources_dir: Option<String>,
 }
 
 fn default_subject() -> String {
@@ -61,6 +65,41 @@ impl Config {
 
     /// Decode the configured keys once, so a malformed key is a startup failure
     /// rather than a per-event surprise.
+    /// Merge the [sources] table with any `<source_id>.pub` files in
+    /// `sources_dir`. The directory form exists for the demo stack, where the
+    /// keypair is minted at startup so no key value lives in the repository; a
+    /// production registry is the operator's [sources] table, or Ajar Core.
+    fn all_keys(&self) -> anyhow::Result<HashMap<String, VerifyingKey>> {
+        let mut keys = self.keys()?;
+        if let Some(dir) = &self.sources_dir {
+            for entry in std::fs::read_dir(dir)
+                .map_err(|e| anyhow::anyhow!("reading sources_dir {dir}: {e}"))?
+            {
+                let path = entry?.path();
+                if path.extension().and_then(|e| e.to_str()) != Some("pub") {
+                    continue;
+                }
+                let source = path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .ok_or_else(|| anyhow::anyhow!("unreadable name in {dir}"))?
+                    .to_string();
+                let hex_key = std::fs::read_to_string(&path)?;
+                let bytes = hex::decode(hex_key.trim())
+                    .map_err(|e| anyhow::anyhow!("{}: not hex: {e}", path.display()))?;
+                let arr: [u8; 32] = bytes
+                    .as_slice()
+                    .try_into()
+                    .map_err(|_| anyhow::anyhow!("{}: not 32 bytes", path.display()))?;
+                let key = VerifyingKey::from_bytes(&arr)
+                    .map_err(|e| anyhow::anyhow!("{}: {e}", path.display()))?;
+                tracing::info!(source = %source, file = %path.display(), "registered from sources_dir");
+                keys.insert(source, key);
+            }
+        }
+        Ok(keys)
+    }
+
     fn keys(&self) -> anyhow::Result<HashMap<String, VerifyingKey>> {
         let mut out = HashMap::new();
         for (source, hex_key) in &self.sources {
@@ -88,8 +127,12 @@ async fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let (command, path) = match args.as_slice() {
         [command, path] => (command.as_str(), path.as_str()),
+        // mint takes a third argument, the directory.
+        [command, source, _dir] if command == "mint" => (command.as_str(), source.as_str()),
         _ => {
-            eprintln!("usage: ajar-sink <run|audit|stats> <config.toml>");
+            eprintln!(
+                "usage: ajar-sink <run|audit|stats> <config.toml>  |  mint <source_id> <dir>"
+            );
             return ExitCode::FAILURE;
         }
     };
@@ -98,6 +141,9 @@ async fn main() -> ExitCode {
         "run" => run(path).await,
         "audit" => audit(path),
         "stats" => stats(path),
+        // mint <source_id> <dir>: for the demo stack. `path` is the source_id
+        // here, and the directory follows it.
+        "mint" => mint(path, std::env::args().nth(3).as_deref()),
         other => Err(anyhow::anyhow!("unknown command {other}")),
     };
 
@@ -119,9 +165,11 @@ async fn main() -> ExitCode {
 /// Subscribe and record until interrupted.
 async fn run(path: &str) -> anyhow::Result<bool> {
     let cfg = Config::load(path)?;
-    let keys = cfg.keys()?;
+    let keys = cfg.all_keys()?;
     if keys.is_empty() {
-        anyhow::bail!("no [sources] configured: every event would be refused");
+        anyhow::bail!(
+            "no sources registered ([sources] table or sources_dir): every event would be refused"
+        );
     }
     let mut store = Store::open(std::path::Path::new(&cfg.database))?;
 
@@ -189,7 +237,7 @@ async fn run(path: &str) -> anyhow::Result<bool> {
 fn audit(path: &str) -> anyhow::Result<bool> {
     let cfg = Config::load(path)?;
     let store = Store::open_existing(std::path::Path::new(&cfg.database))?;
-    match store.audit(&cfg.keys()?)? {
+    match store.audit(&cfg.all_keys()?)? {
         Audit::Intact { records, head } => {
             println!("audit: INTACT");
             println!("records: {records}");
@@ -205,6 +253,43 @@ fn audit(path: &str) -> anyhow::Result<bool> {
             Ok(false)
         }
     }
+}
+
+/// Mint a keypair for the demo stack: `<dir>/<source_id>.seed` (private, 0600)
+/// and `<dir>/<source_id>.pub` (hex, what the sink registers). Exists so the
+/// demo repository carries no key value at all; a real deployment generates
+/// keys with scripts/gen-connector-key.sh and registers them with the operator.
+/// Refuses to overwrite: a restart must not rotate identity under a running
+/// stack.
+fn mint(source_id: &str, dir: Option<&str>) -> anyhow::Result<bool> {
+    let dir = dir.ok_or_else(|| anyhow::anyhow!("usage: ajar-sink mint <source_id> <dir>"))?;
+    let seed_path = std::path::Path::new(dir).join(format!("{source_id}.seed"));
+    let pub_path = std::path::Path::new(dir).join(format!("{source_id}.pub"));
+    if seed_path.exists() {
+        println!("mint: {} already exists, keeping it", seed_path.display());
+        return Ok(true);
+    }
+    std::fs::create_dir_all(dir)?;
+
+    let mut seed = [0u8; 32];
+    std::fs::File::open("/dev/urandom")
+        .and_then(|mut f| std::io::Read::read_exact(&mut f, &mut seed))
+        .map_err(|e| anyhow::anyhow!("reading /dev/urandom: {e}"))?;
+    let key = ajar_connector::SigningKey::from_bytes(&seed);
+
+    std::fs::write(&seed_path, seed)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&seed_path, std::fs::Permissions::from_mode(0o600))?;
+    }
+    std::fs::write(&pub_path, hex::encode(key.verifying_key().to_bytes()))?;
+    println!(
+        "mint: {} (private) and {} (registered by the sink)",
+        seed_path.display(),
+        pub_path.display()
+    );
+    Ok(true)
 }
 
 /// Summarise what is held.

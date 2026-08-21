@@ -4,9 +4,9 @@ nats_url = "nats://nats:4222"
 subject = "ajar.ingest.>"
 database = "/var/lib/ajar/ajar-sink.db"
 
-[sources]
-# synthetic-radar's documented dev seed (32 x 0x03) — TEST ONLY.
-"demo-radar" = "ed4928c628d1c2c6eae90338905995612959273a5c63f93636c14614ac8737d1"
-
-# The seed itself is deploy/dev/demo-radar.seed (32 x 0x03, published test key).
-# A real deployment registers a key the publisher generated and never shared.
+# The demo's publisher key is minted at startup (see compose.yml); its public
+# half appears in /keys as demo-radar.pub and is registered from sources_dir.
+# A production sink registers operator-supplied keys in [sources] instead:
+#   [sources]
+#   "acme-radar-1" = "<64-char hex verifying key>"
+sources_dir = "/keys"

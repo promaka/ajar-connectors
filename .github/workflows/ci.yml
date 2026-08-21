@@ -30,6 +30,18 @@ jobs:
       - name: Manifest versions agree
         run: ./scripts/check-versions.sh
 
+  secrets:
+    name: no key material beyond the published test vectors
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Full history: a secret in an old commit is still a secret.
+          fetch-depth: 0
+      - name: gitleaks over the full history
+        run: |
+          docker run --rm -v "$PWD:/repo" -w /repo             ghcr.io/gitleaks/gitleaks:v8.24.3             git --config .gitleaks.toml --no-banner --redact .
+
   rust:
     name: fmt + clippy + test + conformance
     runs-on: ubuntu-latest

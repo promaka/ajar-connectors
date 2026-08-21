@@ -27,7 +27,8 @@
 //!
 //! Env: `NATS_URL`, `AJAR_SOURCE_ID` (connector identity, default `demo-radar`),
 //! `AJAR_INGEST_PREFIX`, `AJAR_RATE_PER_MIN` (records/min, default 600),
-//! `AJAR_SIGNING_SEED` (32-byte Ed25519 signing seed; required unless --dry-run),
+//! `AJAR_SIGNING_SEED` (32-byte Ed25519 signing seed; required unless --dry-run,
+//! where an ephemeral throwaway key is minted per run),
 //! `AJAR_TLS_CA` / `AJAR_TLS_CERT` / `AJAR_TLS_KEY` (enable mTLS),
 //! `AJAR_HEALTH_ADDR` (Prometheus `/metrics` + `/healthz`).
 
@@ -39,9 +40,16 @@ use std::time::{Duration, Instant};
 
 use ajar_connector::{canonical_bytes, seal, EventBuilder, SigningKey};
 
-/// Dev-only fallback signing seed: 32 bytes of `0x03` (documented TEST seed).
-/// Reachable only under `--dry-run`; publishing requires `AJAR_SIGNING_SEED`.
-const DEV_SEED: [u8; 32] = [0x03; 32];
+/// An ephemeral throwaway seed for `--dry-run`, fresh each run — reachable only
+/// where nothing is published, so no key value needs to exist in this
+/// repository at all. Publishing requires `AJAR_SIGNING_SEED`.
+fn ephemeral_seed() -> [u8; 32] {
+    let mut seed = [0u8; 32];
+    std::fs::File::open("/dev/urandom")
+        .and_then(|mut f| std::io::Read::read_exact(&mut f, &mut seed))
+        .expect("[synthetic-radar] reading /dev/urandom");
+    seed
+}
 
 #[derive(Default)]
 struct Metrics {
@@ -191,9 +199,11 @@ fn load_seed(dry_run: bool) -> Result<[u8; 32], Box<dyn Error>> {
                 .into()
             })
         }
-        SeedSource::Dev => {
-            eprintln!("[synthetic-radar] no AJAR_SIGNING_SEED — using the dev seed (dry-run only)");
-            Ok(DEV_SEED)
+        SeedSource::Ephemeral => {
+            eprintln!(
+                "[synthetic-radar] no AJAR_SIGNING_SEED — minted an ephemeral throwaway key (dry-run only)"
+            );
+            Ok(ephemeral_seed())
         }
         SeedSource::Refuse => Err(
             "set AJAR_SIGNING_SEED to your 32-byte key file (see scripts/gen-connector-key.sh). \
@@ -211,8 +221,9 @@ fn load_seed(dry_run: bool) -> Result<[u8; 32], Box<dyn Error>> {
 enum SeedSource {
     /// Read the seed from this path.
     File(String),
-    /// The published test seed. Only ever selected when nothing is published.
-    Dev,
+    /// An ephemeral throwaway key, minted per run. Only ever selected when
+    /// nothing is published.
+    Ephemeral,
     /// No seed and events would be published: refuse rather than sign.
     Refuse,
 }
@@ -220,7 +231,7 @@ enum SeedSource {
 fn seed_source(dry_run: bool, configured: Option<&str>) -> SeedSource {
     match configured {
         Some(path) if !path.is_empty() => SeedSource::File(path.to_string()),
-        _ if dry_run => SeedSource::Dev,
+        _ if dry_run => SeedSource::Ephemeral,
         _ => SeedSource::Refuse,
     }
 }
@@ -436,7 +447,7 @@ mod tests {
     /// seed and publish. Checked over every flag arrangement crossed with every
     /// state the seed variable can be in, rather than trusting one branch.
     #[test]
-    fn no_invocation_both_signs_with_the_dev_seed_and_publishes() {
+    fn no_invocation_both_signs_with_an_unregistered_key_and_publishes() {
         let flag_sets: &[&[&str]] = &[
             &[],
             &["--ticks", "1"],
@@ -463,8 +474,8 @@ mod tests {
                 if !dry {
                     assert_ne!(
                         source,
-                        SeedSource::Dev,
-                        "{flags:?} with seed {configured:?} publishes but selected the dev seed"
+                        SeedSource::Ephemeral,
+                        "{flags:?} with seed {configured:?} publishes but selected the ephemeral key"
                     );
                 }
                 // And the converse worth stating: a configured seed always wins,
@@ -483,9 +494,9 @@ mod tests {
     }
 
     #[test]
-    fn the_dev_seed_is_reachable_only_in_dry_run() {
-        assert_eq!(seed_source(true, None), SeedSource::Dev);
-        assert_eq!(seed_source(true, Some("")), SeedSource::Dev);
+    fn the_ephemeral_key_is_reachable_only_in_dry_run() {
+        assert_eq!(seed_source(true, None), SeedSource::Ephemeral);
+        assert_eq!(seed_source(true, Some("")), SeedSource::Ephemeral);
     }
 
     #[test]

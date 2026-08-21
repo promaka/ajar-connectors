@@ -179,8 +179,12 @@ fn load_seed(dry_run: bool) -> [u8; 32] {
             parse_seed(&bytes).expect("signing seed must be 32 raw bytes or 64 hex chars")
         }
         Err(_) if dry_run => {
-            eprintln!("[connector] no AJAR_SIGNING_SEED set — using a DEV seed (dry-run only)");
-            [0x03; 32]
+            eprintln!("[connector] no AJAR_SIGNING_SEED set — ephemeral throwaway key (dry-run only)");
+            let mut seed = [0u8; 32];
+            std::fs::File::open("/dev/urandom")
+                .and_then(|mut f| std::io::Read::read_exact(&mut f, &mut seed))
+                .expect("reading /dev/urandom");
+            seed
         }
         Err(_) => panic!(
             "set AJAR_SIGNING_SEED to your key file (32 raw bytes or 64 hex chars; see scripts/gen-connector-key.sh)"

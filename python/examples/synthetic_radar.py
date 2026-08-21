@@ -26,9 +26,19 @@ import sys
 
 from ajar_connector import EventBuilder, SigningKey, canonical_bytes, seal
 
-# Dev-only seed (32 x 0x03): matches the default Core's dev connector profile.
-# Documented TEST seed — never sign production events with it.
-DEV_SEED = bytes([0x03]) * 32
+def load_seed():
+    """AJAR_SIGNING_SEED names a 32-byte seed file (the demo stack mints one);
+    unset, an ephemeral throwaway key is minted for this run. No fixed key value
+    exists in this repository, so an unset seed signs events only a registry
+    that has never seen the key would refuse — which is the honest default."""
+    path = os.environ.get("AJAR_SIGNING_SEED")
+    if path:
+        seed = open(path, "rb").read()
+        if len(seed) != 32:
+            raise SystemExit("AJAR_SIGNING_SEED file must be exactly 32 bytes")
+        return seed
+    print("[synthetic-radar] no AJAR_SIGNING_SEED — ephemeral throwaway key", file=sys.stderr)
+    return os.urandom(32)
 
 
 class Track:
@@ -64,7 +74,7 @@ async def main() -> None:
     prefix = os.environ.get("AJAR_INGEST_PREFIX", "ajar.ingest")
     nats_url = os.environ.get("NATS_URL", "nats://127.0.0.1:4222")
     subject = f"{prefix}.{source_id}"
-    key = SigningKey.from_seed(DEV_SEED)
+    key = SigningKey.from_seed(load_seed())
 
     nc = None
     if dry_run:

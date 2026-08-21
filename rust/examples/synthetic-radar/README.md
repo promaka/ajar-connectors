@@ -15,8 +15,8 @@ the event with the SDK's `EventBuilder`, **sealing** it, and publishing the
 sealed bytes to NATS subject `ajar.ingest.<source>`. The volume is configurable;
 it streams **thousands of records a minute** (default ~3000/min, 50 aircraft).
 
-> **Example only.** This carries a **dev-only** signing seed (32 bytes of
-> `0x03`) and picks a transport (NATS). The `ajar-connector` crate stays minimal
+> **Example only.** This signs with the seed file named by `AJAR_SIGNING_SEED`
+> (an ephemeral throwaway key in `--dry-run`) and picks a transport (NATS). The `ajar-connector` crate stays minimal
 > and transport-free — the NATS client lives here, in the example. It uses the
 > real [`async-nats`](https://crates.io/crates/async-nats) client (the same one
 > Ajar Core uses), so it models the pattern a vendor copies.
@@ -72,8 +72,9 @@ The defaults are tuned to reach a stock local Core with **zero core changes**:
 
 - **`source` = `demo-connector`** matches the Core's `AJAR_SOURCE_ID`, so the
   subject (`ajar.ingest.demo-connector`) is the one Core is listening on.
-- **dev seed `[0x03; 32]`** matches the Core's registered dev connector profile,
-  so the sealed signature verifies. Documented test seed — never production.
+- **`AJAR_SIGNING_SEED`** names the seed whose public half the receiving
+  registry (the dev sink, or Core) has registered, so the sealed signature
+  verifies. The demo stack mints one at startup; none lives in this repository.
 - **`entity_type = "mim:aircraft"`** with a **`location`** (the seed ontology
   requires position for aircraft) and **no attributes** (the seed `mim:aircraft`
   has no attribute schema yet, so any attribute is rejected as
