@@ -30,6 +30,33 @@ your data ──▶ build Event ──▶ canonical bytes ──▶ seal (Ed2551
 
 Read 1 and 2, then jump to your one setup section, then 7 to 9.
 
+## See it work in five minutes
+
+No hardware, no registration, no Ajar Core. One command starts a bus, a signed
+publisher and a verifying sink that records every event into a hash-chained
+store:
+
+```bash
+docker compose -f deploy/dev/compose.yml up --build
+```
+
+Prove the record, and try to fake it:
+
+```bash
+docker compose -f deploy/dev/compose.yml run --rm sink audit /etc/ajar/sink.toml
+# audit: INTACT — every signature and every link verified from stored bytes alone
+```
+
+To see the picture, the sink renders each verified event as Cursor-on-Target on
+ATAK's mesh SA multicast group: open ATAK or WinTAK on the same network and the
+tracks appear, no server and no setup. From a container that needs host
+networking (Linux: add `-f deploy/dev/compose.map.yml`); without Docker, the
+same loop runs as three bare binaries — see [deploy/dev](deploy/dev).
+
+Every marker on that map is an event sealed at source, verified against a
+registered key, and chained into an auditable record. Delete a row from the
+database and `audit` names the exact record that is missing.
+
 ---
 
 ## 1. What you need before you start

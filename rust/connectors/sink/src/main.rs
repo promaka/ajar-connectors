@@ -20,6 +20,7 @@
 //! ajar-sink stats sink.toml     # what is held, per source
 //! ```
 
+mod cot_out;
 mod store;
 
 use std::collections::HashMap;
@@ -50,6 +51,26 @@ struct Config {
     /// the registry at startup. For stacks that mint their keys on first run.
     #[serde(default)]
     sources_dir: Option<String>,
+    /// Optional: render each verified event as CoT onto mesh SA multicast, so a
+    /// TAK client on this network shows the picture. Demo eyes, not an egress
+    /// path; see cot_out.rs.
+    #[serde(default)]
+    cot: Option<CotConfig>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct CotConfig {
+    /// Multicast group:port; ATAK's default mesh SA group if omitted.
+    #[serde(default = "default_cot_group")]
+    multicast: String,
+    /// IPv4 address of the interface the TAK clients share. Unset uses the OS
+    /// default route, which on a multi-homed host may not be the one you mean.
+    #[serde(default)]
+    interface: Option<String>,
+}
+
+fn default_cot_group() -> String {
+    cot_out::DEFAULT_GROUP.to_string()
 }
 
 fn default_subject() -> String {
@@ -65,6 +86,10 @@ impl Config {
 
     /// Decode the configured keys once, so a malformed key is a startup failure
     /// rather than a per-event surprise.
+    fn cot(&self) -> Option<&CotConfig> {
+        self.cot.as_ref()
+    }
+
     /// Merge the [sources] table with any `<source_id>.pub` files in
     /// `sources_dir`. The directory form exists for the demo stack, where the
     /// keypair is minted at startup so no key value lives in the repository; a
@@ -173,7 +198,10 @@ async fn run(path: &str) -> anyhow::Result<bool> {
     }
     let mut store = Store::open(std::path::Path::new(&cfg.database))?;
 
-    let client = nats::connect(&cfg.nats_url).await?;
+    // The env override exists for compose overlays that move the sink onto the
+    // host network, where the bus's compose DNS name stops resolving.
+    let nats_url = std::env::var("AJAR_SINK_NATS_URL").unwrap_or_else(|_| cfg.nats_url.clone());
+    let client = nats::connect(&nats_url).await?;
     let mut sub = client.subscribe(cfg.subject.clone()).await?;
     tracing::info!(
         subject = %cfg.subject,
@@ -182,6 +210,15 @@ async fn run(path: &str) -> anyhow::Result<bool> {
         held = store.count()?,
         "sink ready"
     );
+
+    let cot = match cfg.cot() {
+        Some(c) => {
+            let out = cot_out::CotOut::open(&c.multicast, c.interface.as_deref())?;
+            tracing::info!(group = %c.multicast, "rendering verified events as CoT mesh SA");
+            Some(out)
+        }
+        None => None,
+    };
 
     let (mut accepted, mut refused) = (0u64, 0u64);
     loop {
@@ -203,6 +240,13 @@ async fn run(path: &str) -> anyhow::Result<bool> {
                             hash = %hex::encode(appended.record_hash),
                             "recorded"
                         );
+                        if let Some(out) = &cot {
+                            // Best-effort by design: the record is already durable,
+                            // and a demo map must never stall the audit path.
+                            if let Err(e) = out.send(&event) {
+                                tracing::debug!(error = %e, "cot render skipped");
+                            }
+                        }
                         if accepted % 100 == 0 {
                             tracing::info!(accepted, refused, "recording");
                         }

@@ -14,6 +14,13 @@ Two version lines are tracked independently (see COMPATIBILITY.md):
 ## [Unreleased]
 
 ### Added
+- The development sink can render each verified event as Cursor-on-Target onto
+  ATAK's mesh SA multicast group, so a TAK client on the same network shows the
+  live picture with no server and no setup. Off unless configured; events
+  without a location are skipped rather than mapped at (0,0); the outgoing
+  interface is pinnable because multicast on a multi-homed host otherwise leaves
+  on the default route and fails silently. The README gains a five-minute
+  demo section around it.
 - C++ mapping validation against the vendored ontology: `ajar::validate()` over
   a declared mapping or a built event, and a `--check` flag on the connector
   template for CI. The same checks the Rust runtime applies at startup — unknown

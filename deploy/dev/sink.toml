@@ -10,3 +10,12 @@ database = "/var/lib/ajar/ajar-sink.db"
 #   [sources]
 #   "acme-radar-1" = "<64-char hex verifying key>"
 sources_dir = "/keys"
+
+# Render each verified event as CoT onto ATAK's mesh SA multicast group, so a
+# TAK client on this network shows the picture. Delete this section to run the
+# stack headless. From a container, multicast reaches LAN clients only with
+# host networking (Linux: `-f compose.map.yml`); on any host, the bare-binary
+# path in the README works without Docker.
+[cot]
+multicast = "239.2.3.1:6969"
+# interface = "192.168.1.20"   # the interface your TAK clients share

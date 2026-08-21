@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Overlay: put the sink on the host network so its CoT multicast reaches TAK
+# clients on the LAN (Linux hosts only — Docker Desktop cannot host-network).
+#
+#   docker compose -f deploy/dev/compose.yml -f deploy/dev/compose.map.yml up --build
+services:
+  sink:
+    network_mode: host
+    environment:
+      # On the host network the bus is on localhost, not the compose DNS name.
+      AJAR_SINK_NATS_URL: "nats://127.0.0.1:4222"
