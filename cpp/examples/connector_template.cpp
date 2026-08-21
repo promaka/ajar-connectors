@@ -96,8 +96,26 @@ std::array<std::uint8_t, 32> load_seed(bool dry_run) {
 
 int main(int argc, char** argv) {
   bool dry_run = false;
-  for (int i = 1; i < argc; ++i)
+  bool check_only = false;
+  for (int i = 1; i < argc; ++i) {
     if (std::strcmp(argv[i], "--dry-run") == 0) dry_run = true;
+    if (std::strcmp(argv[i], "--check") == 0) check_only = true;
+  }
+
+  // --check validates what EDIT 2 actually builds against the vendored
+  // ontology, then exits — no key, no feed, no network. Run it in CI so a
+  // mapping mistake fails the build instead of publishing events Ajar
+  // silently discards.
+  if (check_only) {
+    const ajar::Event probe = to_event("check", MyRecord{});
+    const auto faults = ajar::validate(probe);
+    for (const auto& f : faults)
+      std::fprintf(stderr, "[check] %s\n", f.message().c_str());
+    std::fprintf(stderr, "[check] %s against ontology %s\n",
+                 faults.empty() ? "mapping is clean" : "mapping has faults",
+                 ajar::ontology_version());
+    return faults.empty() ? 0 : 1;
+  }
 
   const std::string source_id = env_or("AJAR_SOURCE_ID", "demo-connector");
   const std::string prefix = env_or("AJAR_INGEST_PREFIX", "ajar.ingest");

@@ -112,6 +112,57 @@ class EventBuilder {
   bool strict_entity_namespace_ = true;
 };
 
+// Checking a mapping against the vendored ontology, before events are built.
+//
+// Ajar's ingest is graceful: an entity type or attribute name the ontology does
+// not declare is discarded rather than rejected, so a typo has no symptom — the
+// connector runs, seals and publishes while its tracks never appear. Validation
+// answers that at startup instead. It is advisory: nothing here throws or
+// refuses per event; refusing to start on faults is the embedder's decision at
+// their own initialisation.
+//
+// The ontology is compiled into the library from the vendored, hash-pinned
+// vendor/contract/ontology.json, so validation is offline and cannot drift from
+// the contract the release shipped with.
+
+// One thing a declared mapping gets wrong.
+struct ValidationFault {
+  enum class Kind {
+    UnknownEntityType,  // the ontology does not declare this type
+    UnknownAttribute,   // no ancestor of the declared type governs this name
+    NotInVocabulary,    // a fixed value outside a controlled, case-sensitive set
+  };
+  Kind kind;
+  std::string subject;               // the entity type or attribute name at fault
+  std::string value;                 // NotInVocabulary: the offending value
+  std::string suggestion;            // same name with the correct case, if that is the mistake
+  std::vector<std::string> allowed;  // NotInVocabulary: the valid values
+
+  // A sentence naming the fault and the correction, for logs and CI output.
+  std::string message() const;
+};
+
+// What a mapping proposes to emit. `fixed_values` are attribute values known at
+// configuration time (an enrichment like hostility), checkable before any event.
+struct DeclaredMapping {
+  std::string entity_type;
+  std::vector<std::string> attributes;
+  std::vector<std::pair<std::string, std::string>> fixed_values;
+};
+
+// Every fault in the mapping, empty when it is clean. An x:vendor:type is the
+// operator's to register and produces no faults. Attribute inheritance is
+// followed, so an aircraft may set anything mim:object declares.
+std::vector<ValidationFault> validate(const DeclaredMapping& mapping);
+
+// The same check against a built event: its entity type, attribute names and
+// attribute values. Suits a template's --check mode, where validating the real
+// output beats validating a declaration that can drift from it.
+std::vector<ValidationFault> validate(const Event& event);
+
+// The version string of the vendored ontology, e.g. "mim-5.3-conformant-1".
+const char* ontology_version();
+
 // A connector's published self-declaration: what it may emit and how Ajar
 // authenticates it. Serializes deterministically (verifying key as lowercase
 // hex); byte-identical to the Rust and Go profile JSON.

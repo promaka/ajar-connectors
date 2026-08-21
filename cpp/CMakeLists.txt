@@ -42,6 +42,14 @@ add_custom_command(
   DEPENDS ${PROTO}
   COMMENT "Generating C++ from vendored event.proto")
 
+# Embed the vendored ontology so mapping validation is offline and cannot
+# drift from the contract this build shipped with. Configure-time is right:
+# the file is hash-pinned and a change to it must rebuild the library.
+file(READ ${CONTRACT_DIR}/ontology.json AJAR_ONTOLOGY_HEX HEX)
+string(REGEX REPLACE "([0-9a-f][0-9a-f])" "0x\\1," AJAR_ONTOLOGY_BYTES "${AJAR_ONTOLOGY_HEX}")
+configure_file(src/ontology_data.h.in ${GEN_DIR}/ontology_data.h @ONLY)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${CONTRACT_DIR}/ontology.json)
+
 include(GNUInstallDirs)
 
 # Vendored, heap-free crypto shared by desktop and embedded builds.
@@ -60,6 +68,7 @@ add_library(ajar_connector STATIC
   src/seal.cpp
   src/builder.cpp
   src/profile.cpp
+  src/validate.cpp
   ${GEN_DIR}/event.pb.cc)
 target_include_directories(ajar_connector PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -85,6 +94,9 @@ target_compile_definitions(conformance PRIVATE
   AJAR_CONTRACT_DIR="${CONTRACT_DIR}")
 
 # Round-trip test for the example.
+add_executable(validate_test conformance/validate_test.cpp)
+target_link_libraries(validate_test PRIVATE ajar_connector)
+
 add_executable(cot_roundtrip examples/cot_roundtrip.cpp)
 target_link_libraries(cot_roundtrip PRIVATE cot_connector)
 
@@ -133,6 +145,8 @@ target_compile_definitions(embedded_conformance PRIVATE AJAR_CONTRACT_DIR="${CON
 enable_testing()
 add_test(NAME conformance COMMAND conformance)
 add_test(NAME cot_roundtrip COMMAND cot_roundtrip)
+add_test(NAME validate COMMAND validate_test)
+add_test(NAME template_check COMMAND connector_template --check)
 add_test(NAME embedded_conformance COMMAND embedded_conformance)
 if(cnats_FOUND)
   # Broker-free smoke: builds + seals a couple of ticks and exits.

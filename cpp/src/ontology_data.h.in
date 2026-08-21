@@ -1,0 +1,8 @@
+// SPDX-License-Identifier: Apache-2.0
+// Generated at configure time from the vendored, hash-pinned ontology.json.
+// Compiled into the library so validation needs no file and no network.
+#ifndef AJAR_ONTOLOGY_DATA_H
+#define AJAR_ONTOLOGY_DATA_H
+static const char kAjarOntologyJson[] = {@AJAR_ONTOLOGY_BYTES@};
+static const unsigned long kAjarOntologyJsonLen = sizeof(kAjarOntologyJson);
+#endif
