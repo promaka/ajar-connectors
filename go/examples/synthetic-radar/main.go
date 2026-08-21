@@ -27,6 +27,7 @@ package main
 
 import (
 	"crypto/ed25519"
+	"crypto/rand"
 	"flag"
 	"fmt"
 	"log"
@@ -75,14 +76,22 @@ func spawnHealth() {
 	}()
 }
 
-// devSeed is a dev-only signing seed: 32 bytes of 0x03. It matches the default
-// Core's registered dev connector profile, so the local demo's signatures are
-// accepted with zero core changes. Like the golden-vectors 0x47 seed, it is a
-// documented TEST seed — NEVER use it for production signing.
-func devSeed() []byte {
+// loadSeed reads the 32-byte seed file named by AJAR_SIGNING_SEED (the demo
+// stack mints one); unset, it mints an ephemeral throwaway key for this run.
+// No fixed key value exists in this repository: an unregistered ephemeral key
+// signs events a registry would refuse, which is the honest default.
+func loadSeed() []byte {
+	if path := os.Getenv("AJAR_SIGNING_SEED"); path != "" {
+		seed, err := os.ReadFile(path)
+		if err != nil {
+			log.Fatalf("read AJAR_SIGNING_SEED %s: %v", path, err)
+		}
+		return seed
+	}
+	log.Println("[synthetic-radar] no AJAR_SIGNING_SEED — ephemeral throwaway key")
 	seed := make([]byte, ed25519.SeedSize)
-	for i := range seed {
-		seed[i] = 0x03
+	if _, err := rand.Read(seed); err != nil {
+		log.Fatalf("minting an ephemeral seed: %v", err)
 	}
 	return seed
 }
@@ -144,7 +153,7 @@ func main() {
 	// source must equal the Core's AJAR_SOURCE_ID; the subject is the one the
 	// Core's ingest is listening on.
 	subject := prefix + "." + sourceID
-	key := ed25519.NewKeyFromSeed(devSeed())
+	key := ed25519.NewKeyFromSeed(loadSeed())
 
 	spawnHealth() // no-op unless AJAR_HEALTH_ADDR is set
 

@@ -120,8 +120,8 @@ def _load_seed(dry_run: bool) -> bytes:
             raise SystemExit("AJAR_SIGNING_SEED file must be exactly 32 bytes")
         return seed
     if dry_run:
-        print("[connector] no AJAR_SIGNING_SEED set — using a DEV seed (dry-run only)", file=sys.stderr)
-        return bytes([0x03]) * 32
+        print("[connector] no AJAR_SIGNING_SEED set — ephemeral throwaway key (dry-run only)", file=sys.stderr)
+        return os.urandom(32)
     raise SystemExit("set AJAR_SIGNING_SEED to your 32-byte key file (see scripts/gen-connector-key.sh)")
 
 

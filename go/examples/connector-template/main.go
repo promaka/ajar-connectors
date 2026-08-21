@@ -22,6 +22,7 @@ package main
 import (
 	"bufio"
 	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -186,10 +187,10 @@ func loadSeed(dryRun bool) []byte {
 		return seed
 	}
 	if dryRun {
-		log.Println("[connector] no AJAR_SIGNING_SEED set — using a DEV seed (dry-run only)")
+		log.Println("[connector] no AJAR_SIGNING_SEED set — ephemeral throwaway key (dry-run only)")
 		seed := make([]byte, ed25519.SeedSize)
-		for i := range seed {
-			seed[i] = 0x03
+		if _, err := rand.Read(seed); err != nil {
+			log.Fatalf("minting an ephemeral seed: %v", err)
 		}
 		return seed
 	}

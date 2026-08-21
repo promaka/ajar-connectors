@@ -23,6 +23,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <random>
 #include <iostream>
 #include <sstream>
 #include <stdexcept>
@@ -84,9 +85,10 @@ std::array<std::uint8_t, 32> load_seed(bool dry_run) {
     return seed;
   }
   if (dry_run) {
-    std::fprintf(stderr, "[connector] no AJAR_SIGNING_SEED set — using a DEV seed (dry-run only)\n");
+    std::fprintf(stderr, "[connector] no AJAR_SIGNING_SEED set — ephemeral throwaway key (dry-run only)\n");
     std::array<std::uint8_t, 32> seed{};
-    seed.fill(0x03);
+    std::random_device rd;
+    for (auto& b : seed) b = static_cast<std::uint8_t>(rd());
     return seed;
   }
   throw std::runtime_error("set AJAR_SIGNING_SEED to your 32-byte seed file (see scripts/gen-connector-key.sh)");

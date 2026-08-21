@@ -305,9 +305,11 @@ once ([scripts/gen-connector-key.sh](scripts/gen-connector-key.sh)):
 - the **public key** (32 bytes) you send to the operator to register against your
   `source_id`.
 
-The repo's examples use published **test seeds** (`0x47…` for golden vectors,
-`0x03…` for the local demo). Those are for reproducibility only. Never sign
-production events with them.
+The golden vectors use one published **test seed** (`0x47…`), which byte-exact
+conformance requires, in the same way RFC 8032 publishes its vector keys. Every
+other key in the system is generated where it is used: the demo stack mints a
+fresh keypair at startup, dry-run modes mint an ephemeral throwaway per run, and
+production seeds are operator-generated and never committed.
 
 
 ## 7. The connector profile: your registration declaration

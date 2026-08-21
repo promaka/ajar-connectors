@@ -26,6 +26,9 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <stdexcept>
+#include <fstream>
+#include <random>
 #include <cstdlib>
 #include <cstring>
 #include <string>
@@ -38,12 +41,21 @@
 
 namespace {
 
-// Dev-only signing seed: 32 bytes of 0x03. Matches the default Core's registered
-// dev connector profile, so the local demo's signatures are accepted with zero
-// core changes. Documented TEST seed (cf. golden 0x47) — never production.
-std::array<std::uint8_t, 32> dev_seed() {
+// The seed file named by AJAR_SIGNING_SEED (the demo stack mints one), or an
+// ephemeral throwaway key for this run. No fixed key value exists in this
+// repository: an unregistered ephemeral key signs events a registry would
+// refuse, which is the honest default for an example.
+std::array<std::uint8_t, 32> load_seed() {
   std::array<std::uint8_t, 32> s{};
-  s.fill(0x03);
+  if (const char* path = std::getenv("AJAR_SIGNING_SEED")) {
+    std::ifstream f(path, std::ios::binary);
+    if (!f.read(reinterpret_cast<char*>(s.data()), s.size()) || f.gcount() != 32)
+      throw std::runtime_error("AJAR_SIGNING_SEED file must be exactly 32 bytes");
+    return s;
+  }
+  std::fprintf(stderr, "[synthetic-radar] no AJAR_SIGNING_SEED — ephemeral throwaway key\n");
+  std::random_device rd;
+  for (auto& b : s) b = static_cast<std::uint8_t>(rd());
   return s;
 }
 
@@ -104,7 +116,7 @@ int main(int argc, char** argv) {
   // source must equal the Core's AJAR_SOURCE_ID; the subject is the one the
   // Core's ingest is listening on.
   const std::string subject = prefix + "." + source_id;
-  const ajar::SigningKey key = ajar::SigningKey::from_seed(dev_seed());
+  const ajar::SigningKey key = ajar::SigningKey::from_seed(load_seed());
 
   // Connect the real NATS client (skipped in --dry-run, which needs no infra).
   natsConnection* conn = nullptr;

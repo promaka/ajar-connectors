@@ -14,8 +14,8 @@ event with the SDK's `EventBuilder`, **seals** it, and publishes the sealed
 bytes to NATS subject `ajar.ingest.<source>` via the real
 [`nats.go`](https://github.com/nats-io/nats.go) client.
 
-> **Example only.** Carries a **dev-only** signing seed (32 bytes of `0x03`)
-> and picks a transport (NATS). The `ajarconnector` package stays minimal and
+> **Example only.** Signs with the seed file named by `AJAR_SIGNING_SEED`, or
+> an ephemeral throwaway key when unset, and picks a transport (NATS). The `ajarconnector` package stays minimal and
 > transport-free — the NATS client lives here. The examples are a **separate Go
 > module** (`go/examples/`, with `replace … => ../`) so `nats.go` never lands in
 > the SDK module's `go.mod`.
@@ -47,8 +47,9 @@ The defaults reach a stock local Core with **zero core changes**:
 
 - **`source` = `demo-connector`** matches the Core's `AJAR_SOURCE_ID`, so the
   subject (`ajar.ingest.demo-connector`) is the one Core is listening on.
-- **dev seed `[0x03; 32]`** matches the Core's registered dev connector profile,
-  so the sealed signature verifies. Documented test seed — never production.
+- **`AJAR_SIGNING_SEED`** names the seed whose public half the receiving
+  registry has registered, so the sealed signature verifies. The demo stack
+  mints one at startup; none lives in this repository.
 - **`entity_type = "mim:aircraft"`** with a **`location`** (the seed ontology
   requires position for aircraft) and **no attributes** (the seed `mim:aircraft`
   has no attribute schema yet, so any attribute is rejected as

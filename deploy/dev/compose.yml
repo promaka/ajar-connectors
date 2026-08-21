@@ -28,6 +28,20 @@ services:
       timeout: 2s
       retries: 10
 
+  # Mints a FRESH random keypair on first start: the private seed for the
+  # publisher, the public half for the sink's registry. No key value exists in
+  # this repository at all — the demo performs real key registration instead of
+  # shipping a known pair, which is also the honest picture of production, where
+  # the operator registers each publisher's public key.
+  mint-demo-key:
+    build:
+      context: ../..
+      dockerfile: deploy/dev/Dockerfile.sink
+    entrypoint: ["/usr/local/bin/ajar-sink"]
+    command: ["mint", "demo-radar", "/keys"]
+    volumes:
+      - demo-keys:/keys
+
   # A publisher: synthetic multi-domain tracks, signed with the documented dev
   # seed. Swap in any connector by pointing it at the same NATS.
   demo-radar:
@@ -38,15 +52,16 @@ services:
       NATS_URL: "nats://nats:4222"
       AJAR_SOURCE_ID: "demo-radar"
       AJAR_RATE_PER_MIN: "600"
-      # The publisher will not sign without a seed. The one mounted here is the
-      # documented TEST seed, matching the public key in sink.toml — the stack
-      # says so out loud rather than a connector quietly defaulting to it.
-      AJAR_SIGNING_SEED: "/etc/ajar/demo-radar.seed"
+      # The publisher will not sign without a seed: the TEST seed minted above,
+      # supplied out loud rather than a connector quietly defaulting to it.
+      AJAR_SIGNING_SEED: "/keys/demo-radar.seed"
     volumes:
-      - ./demo-radar.seed:/etc/ajar/demo-radar.seed:ro
+      - demo-keys:/keys:ro
     depends_on:
       nats:
         condition: service_healthy
+      mint-demo-key:
+        condition: service_completed_successfully
     restart: unless-stopped
 
   # Verify, persist, chain.
@@ -58,12 +73,16 @@ services:
     volumes:
       - ./sink.toml:/etc/ajar/sink.toml:ro
       - sink-data:/var/lib/ajar
+      - demo-keys:/keys:ro
     environment:
       RUST_LOG: "info"
     depends_on:
       nats:
         condition: service_healthy
+      mint-demo-key:
+        condition: service_completed_successfully
     restart: unless-stopped
 
 volumes:
   sink-data:
+  demo-keys:

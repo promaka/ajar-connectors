@@ -24,7 +24,8 @@ event with the SDK's `EventBuilder`, **seals** it, and publishes the sealed
 bytes to NATS subject `ajar.ingest.<source>` via the real
 [nats.c](https://github.com/nats-io/nats.c) (`cnats`) client.
 
-> **Example only.** Carries a **dev-only** signing seed (32 bytes of `0x03`)
+> **Example only.** Signs with the seed file named by `AJAR_SIGNING_SEED`, or
+> an ephemeral throwaway key when unset,
 > and picks a transport (NATS). The SDK library stays transport-free — the NATS
 > client is linked into this example only. The `synthetic_radar` target is built
 > **only if cnats is found** (`brew install cnats`, or build nats.c from source),
@@ -56,8 +57,9 @@ The defaults reach a stock local Core with **zero core changes**:
 
 - **`source` = `demo-connector`** matches the Core's `AJAR_SOURCE_ID`, so the
   subject (`ajar.ingest.demo-connector`) is the one Core is listening on.
-- **dev seed `[0x03; 32]`** matches the Core's registered dev connector profile,
-  so the sealed signature verifies. Documented test seed — never production.
+- **`AJAR_SIGNING_SEED`** names the seed whose public half the receiving
+  registry has registered, so the sealed signature verifies. The demo stack
+  mints one at startup; none lives in this repository.
 - **`entity_type = "mim:aircraft"`** with a **`location`** (the seed ontology
   requires position for aircraft) and **no attributes** (the seed `mim:aircraft`
   has no attribute schema yet → any attribute is rejected as `UnknownAttribute`).

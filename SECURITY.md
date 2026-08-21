@@ -40,7 +40,7 @@ any public disclosure.
 
 - **Ajar Core** (verification, policy, ontology, storage) — that lives in the
   private `promaka/ajar` repo; report Core issues through that project.
-- The **published test seeds** (`0x47…`, `0x03…`). These are intentionally public
+- The **published conformance seed** (`0x47…`). It is intentionally public
   and documented as test-only — using them to sign is operator/connector
   misconfiguration, not a vulnerability in the SDK. Production connectors must
   load their own secret seed (see [ONBOARDING.md §6](ONBOARDING.md)).
@@ -57,3 +57,20 @@ any public disclosure.
 - Only the **public** key leaves your control — it goes in the connector profile
   you register with the operator.
 </content>
+
+## Key material
+
+No private key, certificate or credential has ever been committed to this
+repository, and CI proves it stays that way: gitleaks scans the full git
+history on every pull request, and `.gitignore` refuses `*.key` and `*.seed`.
+
+One published constant exists: the conformance test seed (32 bytes of 0x47) in
+`vendor/contract/vectors.json`. Byte-exact golden vectors require every SDK to
+sign with the same seed, the same practice as RFC 8032's published test
+vectors. It authorises nothing: no production registry will ever contain its
+public half. Every other key in the system is minted where it runs — the demo
+stack mints a fresh keypair at startup, dry-run modes mint an ephemeral
+throwaway per run, and production seeds are operator-generated.
+
+The allowlist in `.gitleaks.toml` names exactly what is permitted and the
+reason each entry exists.
