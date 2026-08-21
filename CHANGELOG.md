@@ -13,7 +13,14 @@ Two version lines are tracked independently (see COMPATIBILITY.md):
 
 ## [Unreleased]
 
+## [0.5.5] - 2026-08-21
+
 ### Added
+- `ajar-sink`, a development and evaluation sink: verifies each sealed event
+  against its publisher's registered key, persists it, links every record into a
+  hash chain, and proves the record afterwards with `audit`. Ships in the Linux
+  release tarballs. A compose stack under `deploy/dev` runs the whole loop on
+  one machine.
 - The development sink can render each verified event as Cursor-on-Target onto
   ATAK's mesh SA multicast group, so a TAK client on the same network shows the
   live picture with no server and no setup. Off unless configured; events
@@ -28,6 +35,13 @@ Two version lines are tracked independently (see COMPATIBILITY.md):
   slips answered with the correction — now reach embedders linking the SDK, from
   the release tarball, offline. Validation is advisory at the API level; refusing
   to start on faults is the embedder's decision.
+
+### Changed
+- The only key value in the repository is now the conformance seed the golden
+  vectors publish. The demo stack mints a fresh keypair at startup and registers
+  it through the sink's new `sources_dir`; dry-run modes across all four
+  language examples mint an ephemeral throwaway key per run. CI scans the full
+  git history with gitleaks on every pull request.
 
 ## [0.5.4] - 2026-08-20
 
