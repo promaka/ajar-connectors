@@ -188,7 +188,7 @@ async fn run(path: &str) -> anyhow::Result<bool> {
 /// Re-verify every signature and every link, from the stored bytes alone.
 fn audit(path: &str) -> anyhow::Result<bool> {
     let cfg = Config::load(path)?;
-    let store = Store::open(std::path::Path::new(&cfg.database))?;
+    let store = Store::open_existing(std::path::Path::new(&cfg.database))?;
     match store.audit(&cfg.keys()?)? {
         Audit::Intact { records, head } => {
             println!("audit: INTACT");
@@ -210,7 +210,7 @@ fn audit(path: &str) -> anyhow::Result<bool> {
 /// Summarise what is held.
 fn stats(path: &str) -> anyhow::Result<bool> {
     let cfg = Config::load(path)?;
-    let store = Store::open(std::path::Path::new(&cfg.database))?;
+    let store = Store::open_existing(std::path::Path::new(&cfg.database))?;
     println!("database: {}", cfg.database);
     println!("records: {}", store.count()?);
     println!("head: {}", hex::encode(store.head()?));

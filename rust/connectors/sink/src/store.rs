@@ -73,6 +73,22 @@ impl Store {
             }
         }
         let db = Connection::open(path)?;
+        Self::init(db)
+    }
+
+    /// Open an existing database without creating one. The audit and stats
+    /// commands use this: SQLite otherwise creates an empty file on open, and an
+    /// empty chain audits clean — so an auditor who mistypes the path would be
+    /// told the record is INTACT when they never looked at it.
+    pub fn open_existing(path: &Path) -> anyhow::Result<Store> {
+        if !path.is_file() {
+            anyhow::bail!("no database at {} — check the path", path.display());
+        }
+        let db = Connection::open(path)?;
+        Self::init(db)
+    }
+
+    fn init(db: Connection) -> anyhow::Result<Store> {
         // WAL keeps readers (an audit, a query) from blocking the ingest path.
         db.pragma_update(None, "journal_mode", "WAL")?;
         db.pragma_update(None, "synchronous", "FULL")?;
@@ -415,5 +431,15 @@ mod tests {
             store.audit(&HashMap::new()).unwrap(),
             Audit::Intact { records: 0, .. }
         ));
+    }
+
+    #[test]
+    fn open_existing_refuses_a_missing_database() {
+        // SQLite creates on open, and an empty chain audits clean — so a
+        // mistyped path must be an error, never an INTACT verdict.
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("nope.db");
+        assert!(Store::open_existing(&missing).is_err());
+        assert!(!missing.exists(), "the refusal must not create the file");
     }
 }
