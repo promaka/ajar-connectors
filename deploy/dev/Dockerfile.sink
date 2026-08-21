@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# The verifying sink for the development stack. Build from the REPO ROOT.
+FROM rust:1.96-bookworm AS build
+WORKDIR /build
+COPY rust ./rust
+COPY vendor ./vendor
+RUN cargo build --release --manifest-path rust/connectors/Cargo.toml -p ajar-sink
+
+FROM gcr.io/distroless/cc-debian12:nonroot
+LABEL org.opencontainers.image.title="ajar-sink (development)" \
+      org.opencontainers.image.description="Verifies sealed events, persists them, and proves the audit chain. Development and evaluation only; not a governance plane." \
+      org.opencontainers.image.source="https://github.com/promaka/ajar-connectors" \
+      org.opencontainers.image.licenses="Apache-2.0"
+COPY --from=build /build/rust/connectors/target/release/ajar-sink /usr/local/bin/ajar-sink
+USER 65532:65532
+ENTRYPOINT ["/usr/local/bin/ajar-sink"]
