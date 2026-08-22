@@ -133,7 +133,7 @@ impl CotParser {
                 },
                 Ok(XmlEvent::Text(t)) if in_confidence => {
                     in_confidence = false;
-                    let text = t.unescape().unwrap_or_default();
+                    let text = t.xml10_content().unwrap_or_default();
                     if confidence.is_none() {
                         confidence = normalize_confidence(text.trim());
                     }

@@ -28,7 +28,7 @@ time = { version = "0.3", features = ["formatting"] }
 
 [dev-dependencies]
 ed25519-dalek.workspace = true
-sha2 = "0.10"
+sha2 = "0.11"
 hex.workspace = true
 proptest = "1"
 uuid = "1"

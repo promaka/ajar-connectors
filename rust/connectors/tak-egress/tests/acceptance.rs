@@ -40,22 +40,19 @@ struct Pki {
 }
 
 fn mint_pki(tag: &str) -> Pki {
+    // rcgen 0.14: signing is done by an Issuer, which carries params + key.
     let ca_key = rcgen::KeyPair::generate().unwrap();
     let mut ca_params = rcgen::CertificateParams::new(Vec::new()).unwrap();
     ca_params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
-    let ca_cert = ca_params.self_signed(&ca_key).unwrap();
+    let ca = rcgen::CertifiedIssuer::self_signed(ca_params, ca_key).unwrap();
 
     let server_key = rcgen::KeyPair::generate().unwrap();
     let server_params = rcgen::CertificateParams::new(vec!["localhost".to_string()]).unwrap();
-    let server_cert = server_params
-        .signed_by(&server_key, &ca_cert, &ca_key)
-        .unwrap();
+    let server_cert = server_params.signed_by(&server_key, &ca).unwrap();
 
     let client_key = rcgen::KeyPair::generate().unwrap();
     let client_params = rcgen::CertificateParams::new(vec!["egress-relay".to_string()]).unwrap();
-    let client_cert = client_params
-        .signed_by(&client_key, &ca_cert, &ca_key)
-        .unwrap();
+    let client_cert = client_params.signed_by(&client_key, &ca).unwrap();
 
     let dir = std::env::temp_dir().join(format!("ajar-tak-egress-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
@@ -64,12 +61,12 @@ fn mint_pki(tag: &str) -> Pki {
         let mut f = std::fs::File::create(dir.join(name)).unwrap();
         f.write_all(text.as_bytes()).unwrap();
     };
-    write("ca.crt", ca_cert.pem());
+    write("ca.crt", ca.pem());
     write("client.crt", client_cert.pem());
     write("client.key", client_key.serialize_pem());
 
     let mut roots = RootCertStore::empty();
-    roots.add(ca_cert.der().clone()).unwrap();
+    roots.add(ca.der().clone()).unwrap();
     let verifier = WebPkiClientVerifier::builder(Arc::new(roots))
         .build()
         .unwrap();

@@ -756,7 +756,7 @@ mod tests {
         let cert_path = dir.join(format!("{stem}.crt"));
         let key_path = dir.join(format!("{stem}.key"));
         std::fs::write(&cert_path, issued.cert.pem()).unwrap();
-        std::fs::write(&key_path, issued.key_pair.serialize_pem()).unwrap();
+        std::fs::write(&key_path, issued.signing_key.serialize_pem()).unwrap();
         let der = CertificateDer::from(issued.cert.der().to_vec());
         (
             cert_path.to_string_lossy().into_owned(),

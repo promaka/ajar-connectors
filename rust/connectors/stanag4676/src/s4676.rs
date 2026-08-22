@@ -198,7 +198,7 @@ impl S4676Parser {
                     stack.pop();
                 }
                 Ok(XmlEvent::Text(t)) => {
-                    let text = t.unescape().unwrap_or_default();
+                    let text = t.xml10_content().unwrap_or_default();
                     let text = text.trim();
                     if !text.is_empty() {
                         let cur = stack.last().map(Vec::as_slice).unwrap_or(b"");
