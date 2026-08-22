@@ -13,6 +13,8 @@ Two version lines are tracked independently (see COMPATIBILITY.md):
 
 ## [Unreleased]
 
+## [0.5.6] - 2026-08-22
+
 ### Added
 - `ajar-generic-egress`: governed events out of Ajar, delivered to a consumer
   endpoint as JSON in the consumer's field names. Every payload is verified
