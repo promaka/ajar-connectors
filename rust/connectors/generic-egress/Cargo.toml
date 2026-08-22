@@ -1,0 +1,35 @@
+# SPDX-License-Identifier: Apache-2.0
+[package]
+name = "ajar-generic-egress"
+description = "Governed events out of Ajar, delivered as consumer-shaped JSON over HTTP — verification before delivery, by field mapping rather than code."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[[bin]]
+name = "ajar-generic-egress"
+path = "src/main.rs"
+
+[dependencies]
+ajar-connector.workspace = true
+ajar-connector-common.workspace = true
+async-nats.workspace = true
+tokio.workspace = true
+futures-util.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+anyhow.workspace = true
+hex.workspace = true
+bytes.workspace = true
+prost = "0.14"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-no-provider", "json"] }
+
+[dev-dependencies]
+tempfile = "3"

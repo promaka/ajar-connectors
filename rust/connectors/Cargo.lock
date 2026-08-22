@@ -144,6 +144,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "ajar-generic-egress"
+version = "0.5.5"
+dependencies = [
+ "ajar-connector",
+ "ajar-connector-common",
+ "anyhow",
+ "async-nats",
+ "bytes",
+ "futures-util",
+ "hex",
+ "prost",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "ajar-gmti"
 version = "0.5.5"
 dependencies = [

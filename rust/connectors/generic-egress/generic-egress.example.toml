@@ -1,0 +1,43 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Governed events out of Ajar, delivered as consumer-shaped JSON. Copy, adjust:
+#   ajar-generic-egress ./generic-egress.toml
+
+# Ajar's NATS endpoint; production is tls://… with this consumer's
+# subscribe-only client certificate (AJAR_TLS_* env, CN = registered identity).
+nats_url = "tls://ajar.example.mil:4222"
+
+# Governed egress subject: ajar.egress.<format>.<source>, or a wildcard under
+# it. Must sit under ajar.egress. — the effector cue channel is structurally
+# out of reach. The certificate decides what this consumer may actually see.
+subject = "ajar.egress.json.>"
+
+# Core's egress verifying key, from the operator's handover pack (64-char hex,
+# or a path to the key file). REQUIRED: every payload is verified under this
+# key before it is mapped or delivered. There is no way to switch this off.
+egress_verifying_key = "<64-char hex from the handover pack>"
+
+[deliver]
+# Each governed event is one HTTP POST of one JSON object.
+url = "https://consumer.example.com/ajar/events"
+# attempts = 2                       # bounded; failures are counted, never silent
+[deliver.headers]
+Authorization = "Bearer <token the consumer issued>"
+
+# Consumer field name = event path. Paths: id, source_id, entity_type,
+# timestamp, lat, lon, alt_m, confidence, policy_tags, attr:<name>, meta:<name>.
+#
+# Three things are in EVERY delivered object regardless of this mapping: the
+# event id, the policy tags (markings), and the governance block. Mapping their
+# paths renames them; nothing removes them.
+[mapping]
+trackId = "meta:source_uid"
+kind = "entity_type"
+latitude = "lat"
+longitude = "lon"
+speedMs = "attr:speed"
+marking = "policy_tags"
+
+# Governed content the mapping does not name: "include" (delivered under
+# `unmapped`) or "refuse" (event rejected and counted). No silent drop exists.
+# unmapped = "include"
