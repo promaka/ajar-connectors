@@ -83,7 +83,7 @@ impl WsSource {
         }
         let (mut socket, _response) = connect_async(request).await?;
         if let Some(subscribe) = &self.subscribe {
-            socket.send(Message::Text(subscribe.clone())).await?;
+            socket.send(Message::Text(subscribe.clone().into())).await?;
             tracing::debug!(url = %self.url, "subscription sent");
         }
         Ok(socket)
@@ -98,8 +98,8 @@ impl FrameSource for WsSource {
             let socket = self.socket.as_mut().expect("connected above");
 
             let payload = match socket.next().await {
-                Some(Ok(Message::Text(text))) => text.into_bytes(),
-                Some(Ok(Message::Binary(bytes))) => bytes,
+                Some(Ok(Message::Text(text))) => text.as_bytes().to_vec(),
+                Some(Ok(Message::Binary(bytes))) => bytes.to_vec(),
                 // Control frames carry no feed data; the protocol layer answers
                 // pings itself, so there is nothing to hand upward.
                 Some(Ok(Message::Ping(_) | Message::Pong(_) | Message::Frame(_))) => continue,
@@ -243,7 +243,7 @@ mod tests {
             if let Ok(Some(Ok(Message::Text(text)))) =
                 tokio::time::timeout(Duration::from_millis(500), socket.next()).await
             {
-                *seen_subscribe.lock().await = Some(text);
+                *seen_subscribe.lock().await = Some(text.to_string());
             }
             for m in messages {
                 let _ = socket.send(m).await;
@@ -260,8 +260,8 @@ mod tests {
         let port = feed(
             vec![
                 Message::Text("{\"lat\":1.5}".into()),
-                Message::Ping(vec![]),
-                Message::Binary(vec![0xDE, 0xAD]),
+                Message::Ping(vec![].into()),
+                Message::Binary(vec![0xDE, 0xAD].into()),
             ],
             seen.clone(),
         )
@@ -305,7 +305,7 @@ mod tests {
         let seen = std::sync::Arc::new(tokio::sync::Mutex::new(None));
         let port = feed(
             vec![
-                Message::Binary(vec![0xAA; 128]),
+                Message::Binary(vec![0xAA; 128].into()),
                 Message::Text("small".into()),
             ],
             seen.clone(),
