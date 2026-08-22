@@ -24,11 +24,11 @@ One tarball. It carries the contract inside it, so you need CMake, a C++17
 compiler and `protoc`, and nothing else from us.
 
 ```bash
-curl -LO https://github.com/promaka/ajar-connectors/releases/download/v0.5.5/ajar-connector-cpp-0.5.5.tar.gz
-curl -LO https://github.com/promaka/ajar-connectors/releases/download/v0.5.5/ajar-connector-cpp-0.5.5.tar.gz.sha256
-sha256sum -c ajar-connector-cpp-0.5.5.tar.gz.sha256
+curl -LO https://github.com/promaka/ajar-connectors/releases/download/v0.5.6/ajar-connector-cpp-0.5.6.tar.gz
+curl -LO https://github.com/promaka/ajar-connectors/releases/download/v0.5.6/ajar-connector-cpp-0.5.6.tar.gz.sha256
+sha256sum -c ajar-connector-cpp-0.5.6.tar.gz.sha256
 
-tar xzf ajar-connector-cpp-0.5.5.tar.gz && cd ajar-connector-cpp-0.5.5
+tar xzf ajar-connector-cpp-0.5.6.tar.gz && cd ajar-connector-cpp-0.5.6
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j
 ```
 
