@@ -24,6 +24,7 @@ members = [
     "stanag4586",
     "sink",
     "tak-egress",
+    "generic-egress",
 ]
 
 [workspace.package]

@@ -13,6 +13,16 @@ Two version lines are tracked independently (see COMPATIBILITY.md):
 
 ## [Unreleased]
 
+### Added
+- `ajar-generic-egress`: governed events out of Ajar, delivered to a consumer
+  endpoint as JSON in the consumer's field names. Every payload is verified
+  under Core's egress signature before it is mapped or delivered, with no off
+  switch. The event id, the policy markings and the governance block are present
+  in every delivered object regardless of mapping; unmapped governed content is
+  delivered or refused, never silently dropped. Subscriptions are confined to
+  `ajar.egress.` so the effector cue channel is structurally out of reach.
+  Delivery is at-most-once on the live leg, bounded, with every loss counted.
+
 ## [0.5.5] - 2026-08-21
 
 ### Added

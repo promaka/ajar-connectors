@@ -132,3 +132,11 @@ Don't see your format? If it is a released and testable standard it may be a
 candidate; [FEASIBILITY.md](FEASIBILITY.md) sets out how we decide what to build and
 what we deliberately leave alone. If it is a modern JSON or CSV feed, `ajar-generic`
 most likely covers it today with a configuration change.
+## generic-egress
+
+Governed events out of Ajar as consumer-shaped JSON over HTTP. Verifies Core's
+egress signature before every delivery, renames fields to the consumer's names
+without being able to remove identity or markings, and refuses the effector cue
+channel structurally. The egress counterpart of the generic ingress connector:
+integration by mapping, not code.
+
