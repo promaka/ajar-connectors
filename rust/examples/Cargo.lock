@@ -13,7 +13,7 @@ dependencies = [
 
 [[package]]
 name = "ajar-connector"
-version = "0.5.5"
+version = "0.5.6"
 dependencies = [
  "ed25519-dalek",
  "hex",
@@ -135,7 +135,7 @@ dependencies = [
 
 [[package]]
 name = "conformance"
-version = "0.5.5"
+version = "0.5.6"
 dependencies = [
  "ajar-connector",
  "base64 0.23.1",
@@ -147,7 +147,7 @@ dependencies = [
 
 [[package]]
 name = "conformance-adapter"
-version = "0.5.5"
+version = "0.5.6"
 dependencies = [
  "ajar-connector",
  "conformance",
@@ -157,7 +157,7 @@ dependencies = [
 
 [[package]]
 name = "connector-template"
-version = "0.5.5"
+version = "0.5.6"
 dependencies = [
  "ajar-connector",
  "async-nats",
@@ -192,7 +192,7 @@ checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
 
 [[package]]
 name = "cot-connector"
-version = "0.5.5"
+version = "0.5.6"
 dependencies = [
  "ajar-connector",
 ]
@@ -1249,7 +1249,7 @@ dependencies = [
 
 [[package]]
 name = "synthetic-radar"
-version = "0.5.5"
+version = "0.5.6"
 dependencies = [
  "ajar-connector",
  "async-nats",
