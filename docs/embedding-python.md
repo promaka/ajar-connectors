@@ -107,6 +107,33 @@ profile document — `source_id`, the entity-type prefixes you will emit, and yo
 You receive confirmation plus the NATS endpoint and credentials. Your source code
 never leaves your environment.
 
+## Consuming egress: governed events into your service
+
+The same envelope, the other direction: Core re-signs every event that passes
+governance, and you verify with the egress key from your operator's handover
+pack — the same `verify()` you already have:
+
+```python
+from ajar_connector import Event, verify
+
+EGRESS_KEY = bytes.fromhex(open("egress.pub").read().strip())  # handover pack
+seen = set()                                                    # dedupe on id
+
+async def on_message(msg):        # your NATS subscription: ajar.egress.<fmt>.>
+    try:
+        canonical = verify(msg.data, EGRESS_KEY)
+    except Exception:
+        return                    # count it; never parse an unverified payload
+    event = Event(); event.ParseFromString(canonical)
+    if event.id in seen:
+        return                    # redelivery is normal on the durable leg
+    seen.add(event.id)
+    handle(event)                 # markings included
+```
+
+Three rules: verify before use, dedupe on `event.id`, and **never subscribe
+`ajar.cue.>`** — effector cues are a separate channel by hard rule.
+
 ## Proving your bytes
 
 Before you go live, prove your build produces the bytes Ajar accepts. Offline, no

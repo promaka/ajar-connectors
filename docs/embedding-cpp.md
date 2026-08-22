@@ -183,6 +183,43 @@ end, offline and with no Ajar Core:
 ajar-conformance run --impl ./your-adapter
 ```
 
+## Consuming egress: governed events into your binary
+
+The same envelope, the other direction: Core re-signs every event that passes
+governance, and you verify it with the egress key from your operator's handover
+pack. One function is the whole trust check:
+
+```cpp
+// Subscribe with your own NATS client to ajar.egress.<format>.>   (NEVER
+// ajar.cue.> — effector cues are a separate channel by hard rule.)
+static bool egress_subject_ok(const std::string& s) {
+  return s.rfind("ajar.egress.", 0) == 0;
+}
+
+void on_message(const std::vector<std::uint8_t>& sealed) {
+  static std::set<std::string> seen;                     // dedupe on event id
+  const auto canonical = ajar::verify(sealed, kEgressKey);
+  if (!canonical) return;                                // count it; never use it
+  ajar::Event event;
+  event.ParseFromString(*canonical);
+  if (!seen.insert(event.id()).second) return;           // redelivery is normal
+  handle(event);                                         // markings included
+}
+```
+
+Three rules, and you are done:
+
+1. **Verify before use, no exceptions.** A payload that fails `verify()` is
+   counted and dropped, never parsed as data.
+2. **Dedupe on `event.id()`.** Delivery today is at-most-once and gap-possible;
+   the durable leg upgrades it to at-least-once, making redelivery normal.
+3. **Never subscribe `ajar.cue.>`.** Track-sharing and effector cues are
+   deliberately separate channels.
+
+Measured on one core (release build, this SDK): ~11,700 verifies/sec — about a
+million events every 90 seconds per core, and verification of distinct events
+parallelises linearly.
+
 ## Constrained targets
 
 For MCUs and similar, [`cpp/embedded/`](../cpp/embedded/) builds the same

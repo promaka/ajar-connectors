@@ -15,6 +15,7 @@
 #include <array>
 #include <cstdint>
 #include <stdexcept>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -70,6 +71,22 @@ std::string canonical_bytes(const Event& event);
 // Seals canonical bytes: 64-byte detached Ed25519 signature followed by the
 // canonical bytes (sealed = sign(key, canonical) ++ canonical).
 std::vector<std::uint8_t> seal(const std::string& canonical, const SigningKey& key);
+
+// Verifies a sealed envelope and returns the canonical bytes it carries, or
+// std::nullopt when it is refused: too short to carry a signature, or the
+// signature does not check under `verifying_key`.
+//
+// The envelope is direction-agnostic, so this is both halves of the trust
+// model in one call. Ingress: pass a producer's registered key and prove
+// origin. Egress: pass Core's egress key from the handover pack and prove the
+// event passed governance unaltered. Decode the returned bytes with the
+// generated Event type.
+//
+// Built for the hot path: one Ed25519 check, no exception on refusal, no lock,
+// no allocation beyond the returned copy. Verification of distinct events is
+// embarrassingly parallel.
+std::optional<std::string> verify(const std::vector<std::uint8_t>& sealed,
+                                  const std::array<std::uint8_t, 32>& verifying_key);
 
 // Ergonomic, fail-closed Event construction. Auto-sorts attributes, rejects
 // duplicate keys, enforces required fields and limits, offers UUIDv7 / RFC 3339

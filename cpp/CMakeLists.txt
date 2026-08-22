@@ -97,6 +97,9 @@ target_compile_definitions(conformance PRIVATE
 add_executable(validate_test conformance/validate_test.cpp)
 target_link_libraries(validate_test PRIVATE ajar_connector)
 
+add_executable(verify_test conformance/verify_test.cpp)
+target_link_libraries(verify_test PRIVATE ajar_connector)
+
 add_executable(cot_roundtrip examples/cot_roundtrip.cpp)
 target_link_libraries(cot_roundtrip PRIVATE cot_connector)
 
@@ -146,6 +149,7 @@ enable_testing()
 add_test(NAME conformance COMMAND conformance)
 add_test(NAME cot_roundtrip COMMAND cot_roundtrip)
 add_test(NAME validate COMMAND validate_test)
+add_test(NAME seal_verify COMMAND verify_test)
 add_test(NAME template_check COMMAND connector_template --check)
 add_test(NAME embedded_conformance COMMAND embedded_conformance)
 if(cnats_FOUND)
