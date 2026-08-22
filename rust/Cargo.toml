@@ -37,3 +37,13 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 base64 = "0.23"
 thiserror = "2"
+
+# Curve math in debug builds is two orders of magnitude slower, which starves
+# the verify-throughput floor for reasons that have nothing to do with our
+# code. The crypto crates are always optimised; ours keep debug info.
+[profile.test.package.curve25519-dalek]
+opt-level = 3
+[profile.test.package.ed25519-dalek]
+opt-level = 3
+[profile.test.package.sha2]
+opt-level = 3
