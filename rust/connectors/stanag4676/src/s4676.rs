@@ -262,6 +262,9 @@ impl S4676Parser {
             }
             if let Some(uid) = &source_uid {
                 b = b.metadata("source_uid", uid.clone());
+                // The track UUID is the stable track id — the governed correlation
+                // key a consumer keys on (`track_id`), not just provenance metadata.
+                b = b.attribute("track_id", uid.clone());
             }
             if let Some(cls) = classification {
                 b = b.policy_tag(cls.to_string());
@@ -706,6 +709,11 @@ mod tests {
             assert_eq!(tactical(ev, "track_status"), Some("update")); // MAINTAINING
             assert_eq!(
                 tactical(ev, "source_uid"),
+                Some("0c58cbc0-0db6-4578-8a48-05a1d9e04e19")
+            );
+            // The track UUID is also the governed correlation key.
+            assert_eq!(
+                tactical(ev, "track_id"),
                 Some("0c58cbc0-0db6-4578-8a48-05a1d9e04e19")
             );
             assert_eq!(tactical(ev, "environment"), Some("AIR"));
