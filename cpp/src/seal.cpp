@@ -28,4 +28,15 @@ std::vector<std::uint8_t> seal(const std::string& canonical, const SigningKey& k
   return out;
 }
 
+std::optional<std::string> verify(const std::vector<std::uint8_t>& sealed,
+                                  const std::array<std::uint8_t, 32>& verifying_key) {
+  if (sealed.size() < kSealSignatureLen) return std::nullopt;
+  const std::uint8_t* sig = sealed.data();
+  const std::uint8_t* canonical = sealed.data() + kSealSignatureLen;
+  const std::size_t len = sealed.size() - kSealSignatureLen;
+  if (crypto_ed25519_check(sig, verifying_key.data(), canonical, len) != 0)
+    return std::nullopt;
+  return std::string(reinterpret_cast<const char*>(canonical), len);
+}
+
 }  // namespace ajar
