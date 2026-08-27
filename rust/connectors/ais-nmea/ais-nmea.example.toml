@@ -29,3 +29,11 @@ connect = "ais-feed.example.mil:5631"
 # ...or a local receiver that UDP-broadcasts sentences (one per datagram):
 #   kind = "udp"
 #   bind = "0.0.0.0:10110"
+
+# ARPA radar targets ($--TTM) on the same feed are decoded too: geolocated from
+# own-ship GGA/RMC fixes on the bus, or from this fixed site for a shore-mounted
+# radar. Without either, range/bearing ride as metadata and no position is
+# guessed.
+# [sensor]
+# lat = 60.39
+# lon = 5.32

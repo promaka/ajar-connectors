@@ -36,7 +36,12 @@ async fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    let parser = AisParser::new(cfg.source_id.clone(), cfg.enrichment());
+    let mut parser = AisParser::new(cfg.source_id.clone(), cfg.enrichment());
+    // A shore-mounted ARPA's fixed site geolocates its TTM targets when no GPS
+    // shares the bus; afloat, the feed's own GGA/RMC fixes win.
+    if let Some(site) = &cfg.sensor {
+        parser = parser.with_site(site.lat, site.lon);
+    }
     let source = open_source(&cfg.transport)
         .await
         .context("opening transport")?;
