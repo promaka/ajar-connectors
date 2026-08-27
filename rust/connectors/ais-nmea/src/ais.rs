@@ -262,6 +262,8 @@ pub struct AisParser {
     carry: Mutex<CarryCache>,
     /// Carry-forward sentences dropped over the per-MMSI cap, since start.
     dropped: Arc<AtomicU64>,
+    /// ARPA radar targets and the own-ship fix they are measured from.
+    radar: crate::ttm::TtmState,
 }
 
 impl AisParser {
@@ -273,7 +275,16 @@ impl AisParser {
             identities: Mutex::new(IdentityCache::default()),
             carry: Mutex::new(CarryCache::default()),
             dropped: Arc::new(AtomicU64::new(0)),
+            radar: crate::ttm::TtmState::new(None),
         }
+    }
+
+    /// A fixed observer site for the radar targets, for a shore-mounted ARPA —
+    /// the same convention as the ASTERIX CAT048 connector. A live GPS fix on
+    /// the feed always wins over this.
+    pub fn with_site(mut self, lat: f64, lon: f64) -> Self {
+        self.radar = crate::ttm::TtmState::new(Some((lat, lon)));
+        self
     }
 
     /// Parse one NMEA sentence. Returns an enriched position for a position report;
@@ -281,14 +292,15 @@ impl AisParser {
     /// unmapped type, or a buffered fragment.
     pub fn parse_sentence(&self, frame: &[u8]) -> Result<Option<AisPosition>, AisError> {
         let s = std::str::from_utf8(frame).map_err(|_| AisError::NotAscii)?;
-        let s = s.trim();
+        let original = s.trim();
+        let s = strip_tag_block(original);
         if !(s.starts_with('!') || s.starts_with('$')) {
             return Err(AisError::NotNmea);
         }
         verify_checksum(s)?;
-        // The verbatim (whitespace-trimmed) sentence, carried into the payload of
-        // whatever position event this message contributes to.
-        let raw = s.as_bytes().to_vec();
+        // The verbatim (whitespace-trimmed) frame, tag block included when one
+        // was present — the payload preserves the wire, not our parse of it.
+        let raw = original.as_bytes().to_vec();
 
         let star = s.find('*').unwrap_or(s.len());
         let fields: Vec<&str> = s[1..star].split(',').collect();
@@ -643,6 +655,29 @@ impl AisParser {
 
 impl FrameParser for AisParser {
     fn parse(&self, frame: &[u8]) -> Result<Vec<Event>, ParseError> {
+        // Radar family first: TTM targets plus the GGA/RMC own-ship fixes that
+        // geolocate them share the bus with AIS and are checksummed the same.
+        if let Ok(s) = std::str::from_utf8(frame) {
+            let s = strip_tag_block(s.trim());
+            if (s.starts_with('$') || s.starts_with('!')) && crate::ttm::TtmState::wants(&s[1..]) {
+                verify_checksum(s).map_err(box_err)?;
+                let star = s.find('*').unwrap_or(s.len());
+                let fields: Vec<&str> = s[1..star].split(',').collect();
+                return match self
+                    .radar
+                    .handle(&fields, s.as_bytes().to_vec())
+                    .map_err(box_err)?
+                {
+                    Some(target) => {
+                        let event =
+                            crate::ttm::to_event(&self.source_id, &self.enrichment, &target)
+                                .map_err(|e| Box::new(AisError::Build(e)) as ParseError)?;
+                        Ok(vec![event])
+                    }
+                    None => Ok(Vec::new()),
+                };
+            }
+        }
         match self.parse_sentence(frame).map_err(box_err)? {
             Some(pos) => Ok(vec![self.to_event_now(&pos).map_err(box_err)?]),
             None => Ok(Vec::new()),
@@ -652,6 +687,20 @@ impl FrameParser for AisParser {
     fn counters(&self) -> Vec<(&'static str, Arc<AtomicU64>)> {
         vec![("connector_dropped_carryforward_total", self.dropped.clone())]
     }
+}
+
+/// Strip an NMEA 4.0 TAG block (`\...\` before the sentence), which live
+/// aggregated feeds prepend for source and timestamp routing. The block has its
+/// own checksum covering only itself; the sentence keeps its own, which is the
+/// one this parser verifies. The verbatim frame INCLUDING the tag block is what
+/// lands in the signed payload, so the routing context is preserved.
+fn strip_tag_block(s: &str) -> &str {
+    if let Some(rest) = s.strip_prefix('\\') {
+        if let Some(end) = rest.find('\\') {
+            return &rest[end + 1..];
+        }
+    }
+    s
 }
 
 fn box_err(e: AisError) -> ParseError {
@@ -1043,5 +1092,17 @@ mod tests {
     #[test]
     fn garbage_never_panics_and_is_rejected() {
         assert!(parser().parse_sentence(b"\xff\x00not nmea").is_err());
+    }
+
+    #[test]
+    fn a_tag_blocked_sentence_from_a_live_feed_parses_and_keeps_the_block() {
+        // Captured verbatim from the Norwegian coastal administration's public
+        // feed: an NMEA 4.0 TAG block (source id + unix time) before the
+        // sentence. The block must not break parsing, and the signed payload
+        // must carry the frame as it arrived, block included.
+        let framed = br"\s:2573335,c:1787847115*0D\!BSVDM,1,1,,A,13n2@S00000kU7DU6k09vVad08PC,0*30";
+        let pos = parser().parse_sentence(framed).unwrap().unwrap();
+        let ev = parser().to_event_at(&pos, "2026-08-27T12:00:00Z").unwrap();
+        assert_eq!(ev.payload, framed.to_vec());
     }
 }

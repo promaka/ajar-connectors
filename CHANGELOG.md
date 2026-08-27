@@ -14,6 +14,16 @@ Two version lines are tracked independently (see COMPATIBILITY.md):
 ## [Unreleased]
 
 ### Added
+- The AIS/NMEA connector decodes ARPA radar tracked targets (`$--TTM`) from the
+  same feed: the radar picture beside the transponder picture, one connector,
+  one config. Targets are geolocated from own-ship GGA/RMC fixes on the bus, or
+  from a fixed `[sensor]` site for a shore-mounted radar; without an observer,
+  or with a relative bearing, the measurement rides as metadata and no position
+  is guessed. Targets are `mim:object` on the surface — a radar return is a
+  detection, not a classification — with the radar's target number as the
+  stable native identity.
+
+### Added
 - `ajar-generic-egress`: governed events out of Ajar, delivered to a consumer
   endpoint as JSON in the consumer's field names. Every payload is verified
   under Core's egress signature before it is mapped or delivered, with no off

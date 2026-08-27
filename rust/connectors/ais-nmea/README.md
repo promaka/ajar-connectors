@@ -55,6 +55,38 @@ Every sentence's NMEA checksum is verified, the 6-bit payload is bounds-checked,
 and the parser never panics — every failure is a typed error that is counted and
 logged. Trust is established downstream by the seal.
 
+## Radar targets on the same feed
+
+Bridge radars with target tracking emit their contacts as `$--TTM` sentences on
+the same NMEA bus that carries AIS, so this connector decodes both: the
+transponder picture and the radar picture — what the radar actually sees,
+transponder or not — from one feed and one config.
+
+A TTM position is a range and true bearing from own ship, geolocated against
+own-ship `GGA`/`RMC` fixes on the bus, or against a fixed `[sensor]` site for a
+shore-mounted radar. Without an observer, or when the bearing is relative, the
+measurement rides as metadata and no position is guessed. Targets are
+`mim:object` with `environment = SURFACE`: a radar return is a detection, not a
+classification.
+
+## Try it against live traffic
+
+The Norwegian Coastal Administration publishes its AIS network as open data, as
+a raw NMEA stream:
+
+```toml
+[transport]
+kind = "tcp-client"
+connect = "153.44.253.27:5631"
+framing = "line"
+```
+
+Real vessels arrive within seconds — sealed, verified and chained if you run
+the development sink beside it. Sentences on aggregated feeds carry NMEA 4.0
+TAG blocks (`\s:...,c:...*hh\`) before the sentence; the connector strips them
+for parsing and preserves the frame verbatim, block included, in the signed
+payload.
+
 ## Conformance
 
 `cargo test` proves byte-identity to the SDK, that the seal verifies under the
