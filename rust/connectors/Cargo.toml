@@ -61,5 +61,5 @@ async-trait = "0.1"
 # rustls crypto provider in the process would clash with async-nats's.
 rustls = { version = "0.23", default-features = false, features = ["ring", "tls12", "logging"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
-rustls-pemfile = "2"
+rustls-pki-types = { version = "1", features = ["std"] }
 futures-util = "0.3"

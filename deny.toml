@@ -1,0 +1,75 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Dependency policy, enforced by cargo-deny in CI on every pull request.
+# Four gates: security advisories, licences, duplicate versions, and where
+# dependencies may come from at all.
+
+[graph]
+all-features = true
+
+[advisories]
+# A RUSTSEC advisory against anything in the lockfiles fails the build. An
+# exception here must carry a reason and should be time-boxed, not permanent.
+version = 2
+yanked = "deny"
+ignore = [
+  # rustls-pemfile is unmaintained; parsing moved into rustls-pki-types. Our
+  # direct use is migrated. This reaches the tree only through rumqttc's
+  # optional mqtt feature, unmaintained-not-vulnerable, parsing config the
+  # operator wrote. Drop when rumqttc releases without it.
+  { id = "RUSTSEC-2025-0134", reason = "transitive via rumqttc (optional mqtt) only; direct use migrated" },
+  # rustls-webpki 0.102.x certificate-validation advisories, patched in 0.103.
+  # rumqttc, at its latest release, pins ^0.102.8, so cargo cannot lift it; the
+  # fix is upstream's. Exposure is bounded: mqtt is feature-gated and OFF in
+  # every shipped image and binary, so these reach only a consumer who builds
+  # --features mqtt and runs MQTT over TLS. Drop all four when rumqttc moves.
+  { id = "RUSTSEC-2026-0049", reason = "optional mqtt feature only; rumqttc pins 0.102; not in shipped artefacts" },
+  { id = "RUSTSEC-2026-0098", reason = "optional mqtt feature only; rumqttc pins 0.102; not in shipped artefacts" },
+  { id = "RUSTSEC-2026-0099", reason = "optional mqtt feature only; rumqttc pins 0.102; not in shipped artefacts" },
+  { id = "RUSTSEC-2026-0104", reason = "optional mqtt feature only; rumqttc pins 0.102; not in shipped artefacts" },
+]
+
+[licenses]
+# The repository is Apache-2.0; everything it pulls in must be compatible.
+# A copyleft licence arriving transitively fails the build rather than
+# arriving silently — this repo's provenance story depends on that.
+version = 2
+allow = [
+  "Apache-2.0",
+  "MIT",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "Zlib",
+  "Unicode-3.0",
+  "CC0-1.0",
+  "BSL-1.0",
+  "OpenSSL",
+  # MPL-2.0 is file-level copyleft: fine to depend on unmodified, which is the
+  # only way serialport (the optional serial transport) is used.
+  "MPL-2.0",
+  # The Mozilla root-store data licence, via the WebSocket transport's TLS
+  # defaults. Permissive, data-only.
+  "CDLA-Permissive-2.0",
+]
+# One allow-list serves three workspaces; a licence legitimately absent from
+# one of them is not a finding.
+unused-allowed-license = "allow"
+
+[[licenses.clarify]]
+# ring carries its licence in a nonstandard file; this is the accepted
+# clarification from cargo-deny's own documentation.
+crate = "ring"
+expression = "MIT AND ISC AND OpenSSL"
+license-files = [{ path = "LICENSE", hash = 0xbd0eed23 }]
+
+[bans]
+# Duplicate versions of one crate are a warning, not an error: transitive
+# graphs drift, and Dependabot consolidates them on its cadence.
+multiple-versions = "warn"
+
+[sources]
+# crates.io only. A git or alternative-registry dependency appearing in the
+# graph is a supply-chain event that deserves a failed build and a review.
+unknown-registry = "deny"
+unknown-git = "deny"

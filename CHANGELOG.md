@@ -13,16 +13,23 @@ Two version lines are tracked independently (see COMPATIBILITY.md):
 
 ## [Unreleased]
 
+### Added
+- `cargo-deny` runs on every pull request across all three workspaces:
+  RUSTSEC advisories, a licence allow-list, duplicate-version warnings, and
+  crates.io as the only permitted dependency source. Exceptions are recorded
+  with their reasons in `deny.toml`.
+- The Linux release tarballs include the demo publisher alongside the
+  connectors and the sink, so the publish, verify, chain and audit loop runs
+  from the artefacts alone on an air-gapped host.
+
 ### Fixed
 - Releases now create a `go/vX.Y.Z` tag alongside the release tag. Go resolves
   a module in a subdirectory through a tag carrying the directory prefix, so
   this is what makes `go get .../go/ajarconnector@vX.Y.Z` resolve; `go/v0.5.6`
   is published for the current release.
-
-### Added
-- The Linux release tarballs include the demo publisher alongside the
-  connectors and the sink, so the publish, verify, chain and audit loop runs
-  from the artefacts alone on an air-gapped host.
+- TLS certificate and key parsing moves from the unmaintained `rustls-pemfile`
+  (RUSTSEC-2025-0134) onto `rustls-pki-types`. Yanked `chacha20` and `spin`
+  versions are updated out of the lockfiles.
 
 ## [0.5.6] - 2026-08-22
 

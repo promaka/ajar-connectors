@@ -30,6 +30,24 @@ jobs:
       - name: Manifest versions agree
         run: ./scripts/check-versions.sh
 
+  dependencies:
+    name: advisories + licences + sources (cargo-deny)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          manifest-path: rust/Cargo.toml
+          arguments: --config deny.toml
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          manifest-path: rust/connectors/Cargo.toml
+          arguments: --config deny.toml
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          manifest-path: rust/examples/Cargo.toml
+          arguments: --config deny.toml
+
   secrets:
     name: no key material beyond the published test vectors
     runs-on: ubuntu-latest

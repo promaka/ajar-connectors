@@ -12,6 +12,7 @@
 //! Protocol v0). Optional protobuf-v1 negotiation is a possible later addition;
 //! today the link writes exactly the bytes it is given.
 
+use rustls_pki_types::pem::PemObject;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -126,7 +127,7 @@ impl TakLink {
 
 fn load_certs(path: &str) -> anyhow::Result<Vec<CertificateDer<'static>>> {
     let data = std::fs::read(path).map_err(|e| anyhow::anyhow!("reading {path}: {e}"))?;
-    let certs: Result<Vec<_>, _> = rustls_pemfile::certs(&mut data.as_slice()).collect();
+    let certs: Result<Vec<_>, _> = CertificateDer::pem_slice_iter(&data).collect();
     let certs = certs.map_err(|e| anyhow::anyhow!("parsing certificates in {path}: {e}"))?;
     if certs.is_empty() {
         anyhow::bail!("no certificates found in {path}");
@@ -136,7 +137,6 @@ fn load_certs(path: &str) -> anyhow::Result<Vec<CertificateDer<'static>>> {
 
 fn load_key(path: &str) -> anyhow::Result<PrivateKeyDer<'static>> {
     let data = std::fs::read(path).map_err(|e| anyhow::anyhow!("reading {path}: {e}"))?;
-    rustls_pemfile::private_key(&mut data.as_slice())
-        .map_err(|e| anyhow::anyhow!("parsing private key in {path}: {e}"))?
-        .ok_or_else(|| anyhow::anyhow!("no private key found in {path}"))
+    PrivateKeyDer::from_pem_slice(&data)
+        .map_err(|e| anyhow::anyhow!("parsing private key in {path}: {e}"))
 }
