@@ -191,6 +191,10 @@ jobs:
           set -euo pipefail
           cargo build --release --target ${{ matrix.target }} \
             --manifest-path rust/connectors/Cargo.toml --bins
+          # The demo publisher, so an air-gapped evaluator can run the whole
+          # loop — publisher, sink, audit — from the artefacts alone.
+          cargo build --release --target ${{ matrix.target }} \
+            --manifest-path rust/examples/Cargo.toml -p synthetic-radar
       - name: Collect into one archive
         run: |
           set -euo pipefail
@@ -199,6 +203,7 @@ jobs:
           mkdir -p "$out"
           find rust/connectors/target/${{ matrix.target }}/release -maxdepth 1 -type f \
             -name 'ajar-*' ! -name '*.d' -exec cp {} "$out/" \;
+          cp rust/examples/target/${{ matrix.target }}/release/synthetic-radar "$out/"
           ls -la "$out"
           test "$(ls -1 "$out" | wc -l)" -gt 0 || { echo "::error::no binaries collected"; exit 1; }
           tar czf "$out.tar.gz" "$out"
@@ -293,3 +298,16 @@ jobs:
             --notes-file notes.md \
             --verify-tag \
             dist/*
+      # Go resolves a module in a subdirectory through a tag carrying the
+      # directory prefix, so every release creates go/vX.Y.Z beside vX.Y.Z;
+      # without it, `go get ...@vX.Y.Z` cannot resolve the module. Skipped when
+      # the tag exists so a re-run cannot fail on its own tag.
+      - name: Tag the Go module
+        run: |
+          set -euo pipefail
+          if git rev-parse "go/${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            echo "go/${GITHUB_REF_NAME} already exists"
+          else
+            git tag "go/${GITHUB_REF_NAME}" "${GITHUB_SHA}"
+            git push origin "go/${GITHUB_REF_NAME}"
+          fi
