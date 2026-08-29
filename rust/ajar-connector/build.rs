@@ -8,8 +8,18 @@
 use std::path::PathBuf;
 
 fn main() {
-    let proto = PathBuf::from("../../vendor/contract/event.proto");
-    let include = PathBuf::from("../../vendor/contract");
+    // In the repository the contract lives at vendor/contract, the single
+    // source of truth shared by every SDK; the published crate carries its own
+    // copy under contract/, held byte-identical by scripts/check-contract.sh.
+    let repo = PathBuf::from("../../vendor/contract");
+    let (proto, include) = if repo.join("event.proto").is_file() {
+        (repo.join("event.proto"), repo)
+    } else {
+        (
+            PathBuf::from("contract/event.proto"),
+            PathBuf::from("contract"),
+        )
+    };
 
     println!("cargo:rerun-if-changed={}", proto.display());
 

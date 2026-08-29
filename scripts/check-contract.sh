@@ -8,6 +8,13 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# The crate ships its own copy of the proto so a published package builds
+# standalone; it must stay byte-identical to the vendored source of truth.
+if ! cmp -s vendor/contract/event.proto rust/ajar-connector/contract/event.proto; then
+  echo "ERROR: rust/ajar-connector/contract/event.proto diverges from vendor/contract/event.proto" >&2
+  exit 1
+fi
+
 if shasum -a 256 --check --status scripts/contract.sha256; then
   echo "contract OK: vendored files match scripts/contract.sha256"
 else

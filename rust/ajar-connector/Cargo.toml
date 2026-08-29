@@ -8,7 +8,8 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-readme = "../../README.md"
+readme = "README.md"
+include = ["src/**", "build.rs", "contract/**", "README.md"]
 keywords = ["ajar", "connector", "protobuf", "ed25519", "defence"]
 categories = ["encoding", "api-bindings"]
 
