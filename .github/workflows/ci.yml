@@ -39,15 +39,23 @@ jobs:
         with:
           components: llvm-tools-preview
       - uses: taiki-e/install-action@cargo-llvm-cov
-      # Floors sit a little under the measured baseline so hardware variance
-      # never flakes, while a real drop — new code arriving untested — fails.
-      # Baselines on 2026-08-29: sdk 68%, connectors 77%, examples 26%.
+      # Shipped library and connector code holds an 85% line floor. Binary
+      # entrypoints are scoped out of the measurement with the reason on
+      # record: main.rs glue is proven by the CI gates that run the real
+      # binaries (mTLS, chart deploy, conformance), not by unit tests. The
+      # examples are teaching templates, run by dry-run gates rather than
+      # tested, and carry a presence floor only.
+      # Measured on 2026-08-29: sdk 92%, connectors 86%, examples 26%.
       - name: SDK workspace
         working-directory: rust
-        run: cargo llvm-cov --workspace --all-features --fail-under-lines 64
+        run: >
+          cargo llvm-cov --workspace --all-features
+          --ignore-filename-regex '/main\.rs$' --fail-under-lines 90
       - name: Connectors workspace
         working-directory: rust/connectors
-        run: cargo llvm-cov --workspace --all-features --fail-under-lines 73
+        run: >
+          cargo llvm-cov --workspace --all-features
+          --ignore-filename-regex '/main\.rs$' --fail-under-lines 85
       - name: Examples workspace
         working-directory: rust/examples
         run: cargo llvm-cov --workspace --all-features --fail-under-lines 22
