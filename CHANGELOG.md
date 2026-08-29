@@ -14,6 +14,11 @@ Two version lines are tracked independently (see COMPATIBILITY.md):
 ## [Unreleased]
 
 ### Added
+- Line coverage is measured in CI on every pull request, per workspace, with a
+  floor under each measured baseline: a change that lowers coverage fails the
+  build. Baselines at introduction: SDK 68%, connectors 77%, examples 26%.
+
+### Added
 - `cargo-deny` runs on every pull request across all three workspaces:
   RUSTSEC advisories, a licence allow-list, duplicate-version warnings, and
   crates.io as the only permitted dependency source. Exceptions are recorded

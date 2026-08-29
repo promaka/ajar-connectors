@@ -30,6 +30,28 @@ jobs:
       - name: Manifest versions agree
         run: ./scripts/check-versions.sh
 
+  coverage:
+    name: line coverage against the floors
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - uses: taiki-e/install-action@cargo-llvm-cov
+      # Floors sit a little under the measured baseline so hardware variance
+      # never flakes, while a real drop — new code arriving untested — fails.
+      # Baselines on 2026-08-29: sdk 68%, connectors 77%, examples 26%.
+      - name: SDK workspace
+        working-directory: rust
+        run: cargo llvm-cov --workspace --all-features --fail-under-lines 64
+      - name: Connectors workspace
+        working-directory: rust/connectors
+        run: cargo llvm-cov --workspace --all-features --fail-under-lines 73
+      - name: Examples workspace
+        working-directory: rust/examples
+        run: cargo llvm-cov --workspace --all-features --fail-under-lines 22
+
   dependencies:
     name: advisories + licences + sources (cargo-deny)
     runs-on: ubuntu-latest
