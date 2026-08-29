@@ -84,12 +84,13 @@ migration into your own review cycle instead of discovering it in ours.
 
 ## What you should do to rely on this
 
-1. **Pin a released tag, not a branch.** Depend on a tag (e.g. `v0.5.7`), never
-   `branch = "main"` — `main` moves. With a pinned tag, even your *next rebuild*
-   is reproducible.
-   - Rust: `ajar-connector = { git = "https://github.com/promaka/ajar-connectors", tag = "v0.5.7" }`
+1. **Pin a released version, not a branch.** Depend on an exact release
+   (`0.5.7`, or the tag `v0.5.7` where the install goes through git), never
+   `branch = "main"` — `main` moves. With a pinned release, even your *next
+   rebuild* is reproducible.
+   - Rust: `ajar-connector = "0.5.7"` (crates.io)
    - Go: `go get github.com/promaka/ajar-connectors/go/ajarconnector@v0.5.7`
-   - Python: `pip install "git+https://github.com/promaka/ajar-connectors.git@v0.5.7#subdirectory=python"`
+   - Python: `pip install ajar-connector==0.5.7` (PyPI)
    - C++: check out the `v0.5.7` tag (or vendor it) and build per [cpp/README.md](cpp/README.md).
 
    On an air-gapped or accredited network none of these will resolve. Vendor the

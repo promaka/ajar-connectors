@@ -98,7 +98,8 @@ Options B, C and D run as a separate binary. Option A runs inside your process.
 
 Your process, your deployment. The SDK builds, seals and verifies. You publish.
 
-**Step 1. Get the SDK.**
+**Step 1. Get the SDK.** Rust, Python and Go install straight from their
+package registries in step 2. C++ builds from source:
 
 ```bash
 git clone --depth 1 --branch v0.5.7 https://github.com/promaka/ajar-connectors
@@ -108,8 +109,8 @@ git clone --depth 1 --branch v0.5.7 https://github.com/promaka/ajar-connectors
 
 | Language | Command |
 |---|---|
-| Rust | `ajar-connector = { git = "https://github.com/promaka/ajar-connectors", tag = "v0.5.7" }` |
-| Python | `pip install ./ajar-connectors/python` |
+| Rust | `ajar-connector = "0.5.7"` |
+| Python | `pip install ajar-connector==0.5.7` |
 | Go | `go get github.com/promaka/ajar-connectors/go/ajarconnector@v0.5.7` |
 | C++ | `cmake -S cpp -B build && cmake --build build && cmake --install build --prefix /opt/ajar` |
 
