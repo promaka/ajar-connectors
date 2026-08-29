@@ -1,0 +1,36 @@
+# SPDX-License-Identifier: Apache-2.0
+[package]
+name = "ajar-doctor"
+description = "Preflight diagnostics for Ajar connectors: checks the config, key, registration, endpoint, TLS and clock, and says which onboarding step failed in plain words."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[[bin]]
+name = "ajar-doctor"
+path = "src/main.rs"
+
+[dependencies]
+ajar-connector-common.workspace = true
+ed25519-dalek.workspace = true
+tokio.workspace = true
+tokio-rustls.workspace = true
+rustls.workspace = true
+rustls-pki-types.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+hex.workspace = true
+# Reads the fields rustls will not show us: subject CN, SAN list and the
+# validity window, which turn a bare handshake failure into a named cause.
+x509-parser = "0.17"
+
+[dev-dependencies]
+# Mints a throwaway CA + server/client certs so the failure matrix needs no
+# external PKI or fixtures. ring only, as everywhere else in this workspace.
+rcgen = { version = "0.14", default-features = false, features = ["ring", "pem"] }
+# Shifts certificate validity windows to fabricate the expired and postdated cases.
+time = "0.3"

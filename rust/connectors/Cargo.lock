@@ -111,6 +111,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "ajar-doctor"
+version = "0.5.7"
+dependencies = [
+ "ajar-connector-common",
+ "anyhow",
+ "ed25519-dalek",
+ "hex",
+ "rcgen",
+ "rustls",
+ "rustls-pki-types",
+ "serde_json",
+ "time",
+ "tokio",
+ "tokio-rustls",
+ "x509-parser 0.17.0",
+]
+
+[[package]]
 name = "ajar-generic"
 version = "0.5.7"
 dependencies = [
@@ -1713,7 +1731,7 @@ dependencies = [
  "ring",
  "rustls-pki-types",
  "time",
- "x509-parser",
+ "x509-parser 0.18.1",
  "yasna",
 ]
 
@@ -2910,6 +2928,23 @@ name = "writeable"
 version = "0.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1ffae5123b2d3fc086436f8834ae3ab053a283cfac8fe0a0b8eaae044768a4c4"
+
+[[package]]
+name = "x509-parser"
+version = "0.17.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4569f339c0c402346d4a75a9e39cf8dad310e287eef1ff56d4c68e5067f53460"
+dependencies = [
+ "asn1-rs",
+ "data-encoding",
+ "der-parser",
+ "lazy_static",
+ "nom",
+ "oid-registry",
+ "rusticata-macros",
+ "thiserror",
+ "time",
+]
 
 [[package]]
 name = "x509-parser"
