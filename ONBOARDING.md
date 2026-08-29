@@ -319,15 +319,14 @@ setup on the operator's side:
 
 ## 5. Build it
 
-Pick a language and add the SDK. (Until packages are published, depend on this
-repo via git.) **Pin the released tag `v0.5.7`, not a branch** — that's what makes
-your build reproducible and means you're never forced to upgrade (see
-[COMPATIBILITY.md](COMPATIBILITY.md)).
+Pick a language and add the SDK. **Pin the released version `0.5.7`, not a
+branch** — that's what makes your build reproducible and means you're never
+forced to upgrade (see [COMPATIBILITY.md](COMPATIBILITY.md)).
 
 **Rust** — in your `Cargo.toml`:
 ```toml
 [dependencies]
-ajar-connector = { git = "https://github.com/promaka/ajar-connectors", tag = "v0.5.7" }
+ajar-connector = "0.5.7"
 ```
 
 **Go**:
@@ -335,10 +334,9 @@ ajar-connector = { git = "https://github.com/promaka/ajar-connectors", tag = "v0
 go get github.com/promaka/ajar-connectors/go/ajarconnector@v0.5.7
 ```
 
-**Python** — install from the repo (until it's published to PyPI):
+**Python**:
 ```bash
-# straight from GitHub, pinned to the tag:
-pip install "git+https://github.com/promaka/ajar-connectors.git@v0.5.7#subdirectory=python"
+pip install ajar-connector==0.5.7
 # …or, if you've cloned the repo, an editable install:
 cd python && pip install -e .
 ```
