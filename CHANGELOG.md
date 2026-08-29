@@ -14,6 +14,19 @@ Two version lines are tracked independently (see COMPATIBILITY.md):
 ## [Unreleased]
 
 ### Added
+- Line coverage is measured in CI on every pull request and shipped library
+  and connector code holds an 85% floor: a change that lowers coverage fails
+  the build. Binary entrypoints are scoped out of the measurement, being
+  proven by the CI gates that run the real binaries. At introduction the SDK
+  measures 92% and the connectors workspace 86%.
+- The transport layer gains an integration suite against real sockets, files,
+  directories and child processes: appends and rotation for the file tail,
+  settled drops for the directory watch, respawn-on-exit for exec, reconnect
+  for the TCP client, pushers for the TCP server, datagram framing for UDP,
+  the health endpoint's counters, and the fail-closed TLS policy including
+  every partial-configuration state.
+
+### Added
 - `cargo-deny` runs on every pull request across all three workspaces:
   RUSTSEC advisories, a licence allow-list, duplicate-version warnings, and
   crates.io as the only permitted dependency source. Exceptions are recorded

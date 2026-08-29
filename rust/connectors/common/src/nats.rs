@@ -92,3 +92,57 @@ fn install_crypto_provider() {
         }
     });
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Env-var tests share process state, so one test walks every case in
+    // sequence rather than racing siblings.
+    #[tokio::test]
+    async fn the_tls_policy_fails_closed_in_every_partial_state() {
+        for k in [
+            "AJAR_TLS_CA",
+            "AJAR_TLS_CERT",
+            "AJAR_TLS_KEY",
+            "AJAR_REQUIRE_TLS",
+        ] {
+            std::env::remove_var(k);
+        }
+
+        // tls:// demands TLS material; refusing beats silent cleartext.
+        let err = connect("tls://bus.example:4222")
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("refusing"), "{err}");
+
+        // The flag alone demands it too.
+        std::env::set_var("AJAR_REQUIRE_TLS", "1");
+        assert!(connect("nats://bus.example:4222").await.is_err());
+        std::env::remove_var("AJAR_REQUIRE_TLS");
+
+        // A partial set is a slip, not a downgrade.
+        std::env::set_var("AJAR_TLS_CA", "/etc/ajar/ca.pem");
+        let err = connect("nats://bus.example:4222")
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("partial"), "{err}");
+        std::env::remove_var("AJAR_TLS_CA");
+
+        assert!(tls_required("tls://x") && tls_required("  TLS://x"));
+        assert!(!tls_required("nats://x"));
+        for (v, want) in [
+            ("1", true),
+            ("true", true),
+            ("no", false),
+            ("0", false),
+            ("", false),
+        ] {
+            std::env::set_var("AJAR_REQUIRE_TLS", v);
+            assert_eq!(tls_required("nats://x"), want, "{v:?}");
+        }
+        std::env::remove_var("AJAR_REQUIRE_TLS");
+    }
+}
