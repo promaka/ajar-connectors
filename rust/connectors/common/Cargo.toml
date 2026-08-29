@@ -35,7 +35,7 @@ async-trait.workspace = true
 # Server-side TLS for the http-server transport (same ring-only stack as tak-egress).
 tokio-rustls.workspace = true
 rustls.workspace = true
-rustls-pemfile.workspace = true
+rustls-pki-types.workspace = true
 # Feature-gated transport dependencies.
 tokio-serial = { version = "5", optional = true }
 rumqttc = { version = "0.25", default-features = false, features = ["use-rustls-no-provider"], optional = true }

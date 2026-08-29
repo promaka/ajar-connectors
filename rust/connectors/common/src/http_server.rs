@@ -16,6 +16,7 @@
 //! hostile nor a merely broken client can grow memory, and a connection that stops
 //! making progress is closed on a timeout rather than held open.
 
+use rustls_pki_types::pem::PemObject;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -218,7 +219,7 @@ fn tls_acceptor(cert: &str, key: &str, client_ca: Option<&str>) -> anyhow::Resul
 
 fn load_certs(path: &str) -> anyhow::Result<Vec<CertificateDer<'static>>> {
     let data = std::fs::read(path).map_err(|e| anyhow::anyhow!("reading {path}: {e}"))?;
-    let certs: Result<Vec<_>, _> = rustls_pemfile::certs(&mut data.as_slice()).collect();
+    let certs: Result<Vec<_>, _> = CertificateDer::pem_slice_iter(&data).collect();
     let certs = certs.map_err(|e| anyhow::anyhow!("parsing certificates in {path}: {e}"))?;
     if certs.is_empty() {
         anyhow::bail!("no certificates found in {path}");
@@ -228,9 +229,8 @@ fn load_certs(path: &str) -> anyhow::Result<Vec<CertificateDer<'static>>> {
 
 fn load_key(path: &str) -> anyhow::Result<PrivateKeyDer<'static>> {
     let data = std::fs::read(path).map_err(|e| anyhow::anyhow!("reading {path}: {e}"))?;
-    rustls_pemfile::private_key(&mut data.as_slice())
-        .map_err(|e| anyhow::anyhow!("parsing private key in {path}: {e}"))?
-        .ok_or_else(|| anyhow::anyhow!("no private key found in {path}"))
+    PrivateKeyDer::from_pem_slice(&data)
+        .map_err(|e| anyhow::anyhow!("parsing private key in {path}: {e}"))
 }
 
 /// A configured path always compares with a single leading slash and no trailing
