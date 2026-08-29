@@ -26,6 +26,9 @@ Two version lines are tracked independently (see COMPATIBILITY.md):
   authorization refusal after a good handshake), and clock skew against the
   server certificate's validity window. Every failure prints what to do, not
   just what went wrong. Read-only on the wire: it never publishes an event.
+  With a config file it reads exactly what the connector reads; with none it
+  reads `NATS_URL`, `AJAR_SOURCE_ID` and `AJAR_SIGNING_SEED`, so a connector
+  embedded in your own process is diagnosed with zero files.
   Each diagnosis is pinned by an integration suite that fabricates its failure
   mode against real listeners on loopback.
 

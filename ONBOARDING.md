@@ -566,6 +566,7 @@ event, so it is safe against a production endpoint.
 ```bash
 ajar-doctor connector.toml
 ajar-doctor connector.toml --sources-dir /keys   # when the sink runs on a box you can see
+ajar-doctor   # no file: reads NATS_URL, AJAR_SOURCE_ID, AJAR_SIGNING_SEED (SDK embedders)
 ```
 
 Exit 0 means everything checkable from your side checks out; the next place to

@@ -48,10 +48,6 @@ async fn main() {
             _ => usage(),
         }
     }
-    let Some(config_path) = config_path else {
-        usage()
-    };
-
     let opts = Options {
         config_path,
         sources_dir,
@@ -61,7 +57,7 @@ async fn main() {
     println!(
         "ajar-doctor {} checking {}\n",
         env!("CARGO_PKG_VERSION"),
-        opts.config_path
+        opts.config_path.as_deref().unwrap_or("the environment")
     );
     let findings = ajar_doctor::run(&opts).await;
     let (text, healthy) = report::render(&findings);

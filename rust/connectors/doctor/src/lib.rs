@@ -22,8 +22,12 @@ use report::Finding;
 
 /// What a run needs to know.
 pub struct Options {
-    /// Path to the connector's own config TOML, the same file the connector runs with.
-    pub config_path: String,
+    /// Path to the connector's own config TOML, the same file the connector
+    /// runs with. `None` reads the environment instead: `NATS_URL`,
+    /// `AJAR_SOURCE_ID` and `AJAR_SIGNING_SEED`, the same variables the
+    /// examples and the embedding guides use, so an SDK embedder needs no
+    /// file at all.
+    pub config_path: Option<String>,
     /// A local sink's registered-keys directory, when the operator's sink runs
     /// on a box you can see. Enables a real registration check instead of a note.
     pub sources_dir: Option<String>,
@@ -31,31 +35,52 @@ pub struct Options {
     pub timeout: Duration,
 }
 
+/// The four facts every check runs against, however they were supplied.
+struct Inputs {
+    source_id: String,
+    nats_url: String,
+    signing_key_path: String,
+    subject_prefix: String,
+}
+
 /// Run every check and return the findings in onboarding order.
 pub async fn run(opts: &Options) -> Vec<Finding> {
     let mut out = Vec::new();
 
-    // Step 1: the config file, exactly as the connector would read it.
-    let cfg = match common::Config::load(&opts.config_path) {
-        Ok(cfg) => {
-            out.push(Finding::ok(
-                "config",
-                format!(
-                    "source {:?} publishes to {}.{} at {}",
-                    cfg.source_id, cfg.subject_prefix, cfg.source_id, cfg.nats_url
-                ),
-            ));
-            cfg
-        }
-        Err(e) => {
-            out.push(Finding::fail(
+    // Step 1: the connector's own configuration, from its config file or from
+    // the environment an SDK embedder runs with.
+    let resolved = match &opts.config_path {
+        Some(path) => match common::Config::load(path) {
+            Ok(cfg) => Ok(Inputs {
+                source_id: cfg.source_id,
+                nats_url: cfg.nats_url,
+                signing_key_path: cfg.signing_key_path,
+                subject_prefix: cfg.subject_prefix,
+            }),
+            Err(e) => Err(Finding::fail(
                 "config",
                 format!("{e:#}"),
                 "The doctor reads the same file the connector runs with. Fix the error \
                  above; the example config next to each connector \
                  (e.g. tak-cot.example.toml) shows every required field."
                     .to_string(),
+            )),
+        },
+        None => inputs_from_env(),
+    };
+    let cfg = match resolved {
+        Ok(inputs) => {
+            out.push(Finding::ok(
+                "config",
+                format!(
+                    "source {:?} publishes to {}.{} at {}",
+                    inputs.source_id, inputs.subject_prefix, inputs.source_id, inputs.nats_url
+                ),
             ));
+            inputs
+        }
+        Err(finding) => {
+            out.push(finding);
             for step in [
                 "signing key",
                 "registration",
@@ -136,7 +161,44 @@ pub async fn run(opts: &Options) -> Vec<Finding> {
     out
 }
 
-fn check_signing_key(out: &mut Vec<Finding>, cfg: &common::Config) -> Option<String> {
+/// Resolve the doctor's inputs from the environment: the variables the
+/// examples and embedding guides use, so a partner who built the SDK into
+/// their own process (with no connector config file) can still run the
+/// doctor with zero files.
+fn inputs_from_env() -> Result<Inputs, Finding> {
+    let get = |name: &str| std::env::var(name).ok().filter(|v| !v.trim().is_empty());
+    let missing: Vec<&str> = [
+        ("NATS_URL", get("NATS_URL")),
+        ("AJAR_SOURCE_ID", get("AJAR_SOURCE_ID")),
+        ("AJAR_SIGNING_SEED", get("AJAR_SIGNING_SEED")),
+    ]
+    .iter()
+    .filter(|(_, v)| v.is_none())
+    .map(|(n, _)| *n)
+    .collect();
+    if !missing.is_empty() {
+        return Err(Finding::fail(
+            "config",
+            format!(
+                "no config file given and the environment is incomplete: {} not set",
+                missing.join(", ")
+            ),
+            "Either pass the connector's config file (ajar-doctor connector.toml) or export \
+             the three variables your embedded connector runs with: NATS_URL (the operator's \
+             endpoint), AJAR_SOURCE_ID (your registered source id) and AJAR_SIGNING_SEED \
+             (the path to your 32-byte seed file)."
+                .to_string(),
+        ));
+    }
+    Ok(Inputs {
+        source_id: get("AJAR_SOURCE_ID").expect("checked"),
+        nats_url: get("NATS_URL").expect("checked"),
+        signing_key_path: get("AJAR_SIGNING_SEED").expect("checked"),
+        subject_prefix: "ajar.ingest".to_string(),
+    })
+}
+
+fn check_signing_key(out: &mut Vec<Finding>, cfg: &Inputs) -> Option<String> {
     let key = match common::key::load(&cfg.signing_key_path) {
         Ok(k) => k,
         Err(e) => {
@@ -207,7 +269,7 @@ fn check_signing_key(out: &mut Vec<Finding>, cfg: &common::Config) -> Option<Str
 
 fn check_registration(
     out: &mut Vec<Finding>,
-    cfg: &common::Config,
+    cfg: &Inputs,
     sources_dir: Option<&str>,
     derived: Option<&str>,
 ) {
@@ -294,7 +356,7 @@ fn check_registration(
 
 async fn check_endpoint(
     out: &mut Vec<Finding>,
-    cfg: &common::Config,
+    cfg: &Inputs,
     timeout: Duration,
 ) -> (Option<net::Endpoint>, Option<net::ServerInfo>) {
     let ep = match net::parse_url(&cfg.nats_url) {
@@ -444,7 +506,7 @@ fn check_policy(
 
 fn check_certificate_files(
     out: &mut Vec<Finding>,
-    cfg: &common::Config,
+    cfg: &Inputs,
     ca: &str,
     cert: &str,
     key: &str,

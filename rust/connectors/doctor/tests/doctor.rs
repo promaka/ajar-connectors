@@ -365,7 +365,7 @@ async fn the_full_run_names_the_broken_onboarding_step() {
     // A config that does not parse blocks everything, and says so.
     let broken = write(&dir, "broken.toml", "source_id = \"x\"\n# nothing else");
     let findings = ajar_doctor::run(&Options {
-        config_path: broken,
+        config_path: Some(broken),
         sources_dir: None,
         timeout: Duration::from_secs(2),
     })
@@ -418,7 +418,7 @@ async fn the_full_run_names_the_broken_onboarding_step() {
         ),
     );
     let findings = ajar_doctor::run(&Options {
-        config_path: config.clone(),
+        config_path: Some(config.clone()),
         sources_dir: Some(sources.to_str().unwrap().to_string()),
         timeout: Duration::from_secs(2),
     })
@@ -441,7 +441,7 @@ async fn the_full_run_names_the_broken_onboarding_step() {
     };
     std::fs::write(sources.join("acme-radar-1.pub"), &derived).unwrap();
     let findings = ajar_doctor::run(&Options {
-        config_path: config.clone(),
+        config_path: Some(config.clone()),
         sources_dir: Some(sources.to_str().unwrap().to_string()),
         timeout: Duration::from_secs(2),
     })
@@ -453,7 +453,7 @@ async fn the_full_run_names_the_broken_onboarding_step() {
     // A stale sibling .pub next to the seed: the classic rotated-one-half slip.
     std::fs::write(dir.join("acme-radar-1.pub"), "cd".repeat(32)).unwrap();
     let findings = ajar_doctor::run(&Options {
-        config_path: config,
+        config_path: Some(config),
         sources_dir: None,
         timeout: Duration::from_secs(2),
     })
@@ -477,7 +477,7 @@ async fn the_full_run_names_the_broken_onboarding_step() {
         ),
     );
     let findings = ajar_doctor::run(&Options {
-        config_path: config2,
+        config_path: Some(config2),
         sources_dir: None,
         timeout: Duration::from_secs(2),
     })
@@ -485,6 +485,43 @@ async fn the_full_run_names_the_broken_onboarding_step() {
     let (text, healthy) = report::render(&findings);
     assert!(!healthy);
     assert!(text.contains("ajar-sink mint"), "{text}");
+
+    // With no config file at all, the doctor reads the environment the
+    // embedding guides use; missing variables are named, present ones work.
+    for name in ["NATS_URL", "AJAR_SOURCE_ID", "AJAR_SIGNING_SEED"] {
+        std::env::remove_var(name);
+    }
+    let findings = ajar_doctor::run(&Options {
+        config_path: None,
+        sources_dir: None,
+        timeout: Duration::from_secs(2),
+    })
+    .await;
+    let (text, healthy) = report::render(&findings);
+    assert!(!healthy);
+    assert!(
+        text.contains("NATS_URL, AJAR_SOURCE_ID, AJAR_SIGNING_SEED"),
+        "{text}"
+    );
+
+    // The stale sibling .pub from the phase above would (rightly) fail the
+    // key check; this phase is about the environment path, so clear it.
+    std::fs::remove_file(dir.join("acme-radar-1.pub")).unwrap();
+    std::env::set_var("NATS_URL", format!("nats://127.0.0.1:{port}"));
+    std::env::set_var("AJAR_SOURCE_ID", "acme-radar-1");
+    std::env::set_var("AJAR_SIGNING_SEED", &seed_path);
+    let findings = ajar_doctor::run(&Options {
+        config_path: None,
+        sources_dir: None,
+        timeout: Duration::from_secs(2),
+    })
+    .await;
+    let (text, healthy) = report::render(&findings);
+    assert!(healthy, "{text}");
+    assert!(text.contains("speaks NATS"), "{text}");
+    for name in ["NATS_URL", "AJAR_SOURCE_ID", "AJAR_SIGNING_SEED"] {
+        std::env::remove_var(name);
+    }
 
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -557,7 +594,7 @@ async fn the_full_run_walks_the_mtls_path_end_to_end() {
         ),
     );
     let opts = |config_path: &str| Options {
-        config_path: config_path.to_string(),
+        config_path: Some(config_path.to_string()),
         sources_dir: None,
         timeout: Duration::from_secs(3),
     };

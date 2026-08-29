@@ -327,8 +327,11 @@ Set `AJAR_HEALTH_ADDR=0.0.0.0:9110` on any method. Gives `/healthz` and
 `ajar-doctor connector.toml` checks the setup step by step (config, signing
 key, registration, endpoint, TLS, clock) and says which onboarding step is
 broken and what to do, reading the same config and `AJAR_TLS_*` environment
-the connector uses. Read-only on the wire, so it is safe against a production
-endpoint. Ships in the release binaries next to the connectors.
+the connector uses. With no config file it reads `NATS_URL`, `AJAR_SOURCE_ID`
+and `AJAR_SIGNING_SEED` instead, so a connector embedded in your own code
+(option A) is diagnosed with zero files. Read-only on the wire, so it is safe
+against a production endpoint. Ships in the release binaries next to the
+connectors.
 
 ---
 
