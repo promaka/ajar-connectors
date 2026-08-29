@@ -27,7 +27,8 @@ event = (
 )
 
 sealed = seal(canonical_bytes(event), key)          # 64-byte signature ++ canonical
-await nats.publish(f"ajar.ingest.acme-radar-1", sealed)
+await nats.publish(f"ajar.ingest.acme-radar-1", sealed,
+                   headers=ingest_headers(event))  # broker-side dedupe
 ```
 
 That is the whole SDK surface for ingress: build, seal, publish.

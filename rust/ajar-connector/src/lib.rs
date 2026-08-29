@@ -51,6 +51,20 @@ pub mod event {
     include!(concat!(env!("OUT_DIR"), "/ajar.event.v1.rs"));
 }
 
+/// The NATS header the ingest broker dedupes on. Publish every sealed event
+/// with this header set to the event's `id` (see [`ingest_headers`]): the
+/// broker keeps a duplicate window keyed on it, so a retransmission or
+/// reconnect race is dropped instead of stored twice. The SDK deliberately
+/// has no transport dependency, so this is the contract as data; your NATS
+/// client sets the header.
+pub const NATS_MSG_ID_HEADER: &str = "Nats-Msg-Id";
+
+/// The headers an ingest publish must carry for `event`, as plain pairs your
+/// NATS client can adopt: `[("Nats-Msg-Id", event.id)]`.
+pub fn ingest_headers(event: &Event) -> [(&'static str, String); 1] {
+    [(NATS_MSG_ID_HEADER, event.id.clone())]
+}
+
 pub use builder::EventBuilder;
 pub use canonical::canonical_bytes;
 pub use connector::{Connector, OutboundProfile};
@@ -61,3 +75,20 @@ pub use seal::{seal, verify, SealError, SEAL_SIGNATURE_LEN};
 
 // Re-exported so connector authors don't have to match our exact dep versions.
 pub use ed25519_dalek::{self, SigningKey, VerifyingKey};
+
+#[cfg(test)]
+mod header_tests {
+    use super::*;
+
+    #[test]
+    fn ingest_headers_carry_the_event_id_under_the_broker_dedupe_key() {
+        let event = EventBuilder::new("t-1", "mim:drone")
+            .new_id()
+            .now()
+            .build()
+            .expect("build");
+        let [(name, value)] = ingest_headers(&event);
+        assert_eq!(name, "Nats-Msg-Id");
+        assert_eq!(value, event.id);
+    }
+}

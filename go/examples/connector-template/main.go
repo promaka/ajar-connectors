@@ -132,7 +132,14 @@ func main() {
 		}
 		sealed := ajarconnector.Seal(canonical, key)
 		if nc != nil {
-			if err := nc.Publish(subject, sealed); err != nil {
+			// Nats-Msg-Id = event id: the broker's duplicate window drops
+			// retransmissions keyed on it.
+			msg := &nats.Msg{
+				Subject: subject,
+				Data:    sealed,
+				Header:  nats.Header(ajarconnector.IngestHeaders(ev)),
+			}
+			if err := nc.PublishMsg(msg); err != nil {
 				log.Printf("[connector] publish error (continuing): %v", err)
 				publishErrorsTotal.Add(1)
 				continue

@@ -158,7 +158,11 @@ from ajar_connector import canonical_bytes, seal
 sealed = seal(canonical_bytes(event), key)
 ```
 
-**Step 6. Publish it** to `ajar.ingest.<source_id>` with your own NATS client.
+**Step 6. Publish it** to `ajar.ingest.<source_id>` with your own NATS client,
+with the message header `Nats-Msg-Id` set to the event's `id`. The broker uses
+that header to drop duplicate deliveries (retries, reconnect races) inside its
+duplicate window; without it, a retransmission becomes a second stored event.
+The prebuilt connectors set it automatically.
 
 **Step 7.** Go to [section 8](#8-prove-your-bytes-are-correct).
 

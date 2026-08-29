@@ -24,7 +24,7 @@ import math
 import os
 import sys
 
-from ajar_connector import EventBuilder, SigningKey, canonical_bytes, seal
+from ajar_connector import EventBuilder, SigningKey, canonical_bytes, ingest_headers, seal, ingest_headers
 
 def load_seed():
     """AJAR_SIGNING_SEED names a 32-byte seed file (the demo stack mints one);
@@ -110,7 +110,10 @@ async def main() -> None:
             # 2. seal, 3. publish
             sealed = seal(canonical_bytes(event), key)
             if nc is not None:
-                await nc.publish(subject, sealed)
+                # Nats-Msg-Id = event id: the broker's duplicate window drops
+                # retransmissions keyed on it.
+                await nc.publish(subject, sealed,
+                                 headers=ingest_headers(event))
             tag = "" if nc is not None else "  [dry-run]"
             print(f"{event.id} {t.label:>6}  lat={t.lat:8.4f} lon={t.lon:8.4f} "
                   f"alt={t.alt_m:7.0f}m  -> {subject} ({len(sealed)} sealed bytes){tag}")
