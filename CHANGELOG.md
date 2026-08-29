@@ -15,6 +15,26 @@ Two version lines are tracked independently (see COMPATIBILITY.md):
 
 ### Added
 
+- Store-and-forward disk spool (#76), for forward-deployed connectors on
+  intermittent links. With `[spool]` configured, a connector that cannot reach
+  NATS queues sealed events in a bounded on-disk segment log instead of
+  shedding them, and replays them in order when the link returns: minutes of
+  outage become replication lag, not loss. The spooled bytes are the sealed
+  envelope exactly as the bus would have carried it, signed before publish, so
+  replayed events verify under the connector's registered key with no
+  re-signing and the observed_at/received_at delta is the replay evidence.
+  The drain is paced (`drain_rate`, set from the operator's registered rate)
+  because over-rate events are shed by the ingest limiter, and the replay
+  cursor advances only on a JetStream publish acknowledgement (falling back
+  to publish+flush against a plain-NATS sink). Bounding is drop-oldest, with
+  drops counted; records that fail signature verification on drain (disk
+  corruption) are counted and skipped, never published. Spool depth and drain
+  progress are exposed on `/metrics`. The acceptance gate runs a real
+  nats-server in CI: killed mid-stream, restarted, every outage event
+  delivered byte-identical exactly once at the paced rate.
+
+### Added
+
 - `ajar-doctor`: one command to run when a connector publishes nothing. It
   walks the onboarding steps in order against the connector's own config and
   environment: config parse, signing key format and permissions, registration

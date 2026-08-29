@@ -37,6 +37,7 @@ pub mod nats;
 pub mod ontology;
 pub mod profile;
 mod runtime;
+pub mod spool;
 pub mod stdin;
 mod stream;
 pub mod tcp;
@@ -58,6 +59,11 @@ pub mod ws;
 pub const MAX_FRAME_BYTES: usize = 64 * 1024;
 
 pub use config::{Config, Enrichment, Framing, SensorSite, Transport};
+
+/// The seal's signature prefix length (re-exported for the spool drain).
+pub(crate) fn seal_signature_len() -> usize {
+    ajar_connector::SEAL_SIGNATURE_LEN
+}
 pub use profile::Profile;
 pub use runtime::{run, FrameParser, FrameSource, ParseError};
 

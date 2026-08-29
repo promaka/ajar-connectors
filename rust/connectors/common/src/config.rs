@@ -52,6 +52,12 @@ pub struct Config {
     /// positions.
     #[serde(default)]
     pub sensor: Option<SensorSite>,
+    /// Optional store-and-forward disk spool for intermittent links: when the
+    /// publish path stalls, sealed events queue in a bounded directory and a
+    /// paced drain replays them when the link returns, byte-identical. Unset
+    /// keeps today's behavior (shed with a counter). See `[spool]` docs.
+    #[serde(default)]
+    pub spool: Option<crate::spool::SpoolConfig>,
 }
 
 /// A sensor's fixed geodetic site (WGS-84), used to geolocate sensor-relative

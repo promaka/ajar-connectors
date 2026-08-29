@@ -326,7 +326,26 @@ Set `AJAR_HEALTH_ADDR=0.0.0.0:9110` on any method. Gives `/healthz` and
 `/metrics` with `connector_received_total`, `connector_published_total` and
 `connector_rejected_total`.
 
-### 7e. When nothing flows
+### 7e. Intermittent links (store-and-forward)
+
+For a forward-deployed connector on a link that comes and goes, add a bounded
+disk spool. While the endpoint is unreachable, sealed events queue in the
+directory instead of being shed; when the link returns they replay in order,
+byte-identical (they were signed before publish, so provenance survives the
+outage), paced so the backlog cannot trip the operator's rate limit:
+
+```toml
+[spool]
+dir = "/var/lib/ajar/spool"   # a real disk, not tmpfs
+max_bytes = 268435456          # bound; oldest segment dropped beyond it, counted
+drain_rate = 50.0              # events/sec on replay: 70-80% of your registered rate
+```
+
+Without `[spool]` the behavior is unchanged: a stalled publish sheds the event
+and counts it. Spool depth and drain progress appear on `/metrics`
+(`connector_spooled_total`, `connector_drained_total`).
+
+### 7f. When nothing flows
 
 `ajar-doctor connector.toml` checks the setup step by step (config, signing
 key, registration, endpoint, TLS, clock) and says which onboarding step is
