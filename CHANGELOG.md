@@ -13,6 +13,8 @@ Two version lines are tracked independently (see COMPATIBILITY.md):
 
 ## [Unreleased]
 
+## [0.5.7] - 2026-08-29
+
 ### Added
 
 - Line coverage is measured in CI on every pull request and shipped library
