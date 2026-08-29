@@ -14,6 +14,7 @@ Two version lines are tracked independently (see COMPATIBILITY.md):
 ## [Unreleased]
 
 ### Added
+
 - Line coverage is measured in CI on every pull request and shipped library
   and connector code holds an 85% floor: a change that lowers coverage fails
   the build. Binary entrypoints are scoped out of the measurement, being
@@ -25,6 +26,12 @@ Two version lines are tracked independently (see COMPATIBILITY.md):
   for the TCP client, pushers for the TCP server, datagram framing for UDP,
   the health endpoint's counters, and the fail-closed TLS policy including
   every partial-configuration state.
+- The Rust SDK is published to crates.io as `ajar-connector` on release, gated
+  on the golden vectors, with crates.io Trusted Publishing so no long-lived
+  credential exists in the repository. The crate carries its own copy of the
+  vendored `event.proto`, held byte-identical to `vendor/contract` by the
+  contract guard, so a published package builds standalone with no system
+  protoc.
 
 ### Added
 - `cargo-deny` runs on every pull request across all three workspaces:
