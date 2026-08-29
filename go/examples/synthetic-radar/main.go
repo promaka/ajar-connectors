@@ -218,10 +218,17 @@ func main() {
 			}
 			sealed := ajarconnector.Seal(canonical, key)
 
-			// 3. Publish the sealed bytes to the ingest subject. Non-fatal: a
-			//    transport blip is logged and skipped, the connector keeps going.
+			// 3. Publish the sealed bytes to the ingest subject, with
+			//    Nats-Msg-Id = event id so the broker's duplicate window can
+			//    drop retransmissions. Non-fatal: a transport blip is logged
+			//    and skipped, the connector keeps going.
 			if nc != nil {
-				if err := nc.Publish(subject, sealed); err != nil {
+				msg := &nats.Msg{
+					Subject: subject,
+					Data:    sealed,
+					Header:  nats.Header(ajarconnector.IngestHeaders(event)),
+				}
+				if err := nc.PublishMsg(msg); err != nil {
 					log.Printf("[synthetic-radar] publish error (continuing): %v", err)
 					publishErrorsTotal.Add(1)
 					continue

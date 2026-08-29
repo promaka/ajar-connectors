@@ -28,7 +28,7 @@ import sys
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-from ajar_connector import EventBuilder, SigningKey, canonical_bytes, seal
+from ajar_connector import EventBuilder, SigningKey, canonical_bytes, ingest_headers, seal
 from ajar_connector.event_pb2 import Event
 
 # Process counters, surfaced at /metrics.
@@ -163,7 +163,9 @@ async def main() -> None:
         sealed = seal(canonical, key)  # sign it
         if nc is not None:
             try:
-                await nc.publish(subject, sealed)  # publish it
+                # Nats-Msg-Id = event id: broker-side duplicate protection.
+                await nc.publish(subject, sealed,
+                                 headers=ingest_headers(event))
             except Exception as e:  # noqa: BLE001 — keep running on a transport blip
                 print(f"[connector] publish error (continuing): {e}", file=sys.stderr)
                 _METRICS["publish_errors"] += 1

@@ -15,7 +15,26 @@ from .event_pb2 import Attribute, Event, GeoPoint
 from .profile import ConnectorProfile
 from .seal import SEAL_SIGNATURE_LEN, SealVerificationError, SigningKey, seal, verify
 
+#: The NATS header the ingest broker dedupes on. Publish every sealed event
+#: with this header set to the event's id; the broker drops retransmissions
+#: keyed on it inside its duplicate window.
+NATS_MSG_ID_HEADER = "Nats-Msg-Id"
+
+
+def ingest_headers(event) -> dict:
+    """The headers an ingest publish must carry for ``event``.
+
+    The SDK has no transport dependency, so this returns a plain dict your
+    NATS client passes through, e.g.::
+
+        await nc.publish(subject, sealed, headers=ingest_headers(event))
+    """
+    return {NATS_MSG_ID_HEADER: event.id}
+
+
 __all__ = [
+    "NATS_MSG_ID_HEADER",
+    "ingest_headers",
     "Attribute",
     "BuildError",
     "Connector",

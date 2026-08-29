@@ -118,8 +118,13 @@ pub async fn run(
                     // publishes nothing; a batched frame publishes each in turn.
                     Ok(events) => {
                         for event in events {
+                            let headers = ingest_headers(&event.id);
                             let sealed = seal(&canonical_bytes(&event), &key);
-                            let publish = client.publish(subject.clone(), bytes::Bytes::from(sealed));
+                            let publish = client.publish_with_headers(
+                                subject.clone(),
+                                headers,
+                                bytes::Bytes::from(sealed),
+                            );
                             match tokio::time::timeout(PUBLISH_DEADLINE, publish).await {
                                 Ok(Ok(())) => {
                                     metrics.published.fetch_add(1, Ordering::Relaxed);
@@ -193,5 +198,28 @@ async fn shutdown_signal() {
     #[cfg(not(unix))]
     {
         let _ = tokio::signal::ctrl_c().await;
+    }
+}
+
+/// Headers for an ingest publish. `Nats-Msg-Id` carries the event id so the
+/// broker's duplicate window (Core's ingest stream sets 120s) dedupes retries
+/// and reconnect races for free; without the header the window is inert. The
+/// id is already unique per event (UUIDv7 from the builder), so no state is
+/// needed here.
+pub fn ingest_headers(event_id: &str) -> async_nats::HeaderMap {
+    let mut headers = async_nats::HeaderMap::new();
+    headers.insert("Nats-Msg-Id", event_id);
+    headers
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn every_ingest_publish_carries_the_event_id_for_broker_dedupe() {
+        let headers = super::ingest_headers("0198b1c0-aaaa-bbbb-cccc-121212121212");
+        assert_eq!(
+            headers.get("Nats-Msg-Id").map(|v| v.as_str()),
+            Some("0198b1c0-aaaa-bbbb-cccc-121212121212")
+        );
     }
 }

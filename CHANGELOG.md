@@ -32,6 +32,17 @@ Two version lines are tracked independently (see COMPATIBILITY.md):
   Each diagnosis is pinned by an integration suite that fabricates its failure
   mode against real listeners on loopback.
 
+### Fixed
+
+- Every connector publish now sets the `Nats-Msg-Id` header to the event id.
+  Core's ingest stream has always kept a 120-second duplicate window keyed on
+  that header; no publisher sent it, so retransmissions and reconnect races
+  could be stored twice. The shared runtime and the Rust, Go and Python
+  examples set it on every publish, and each SDK now carries the contract as
+  code for embedders publishing with their own NATS client:
+  `ingest_headers(event)` (`IngestHeaders` in Go) returns the headers an
+  ingest publish must carry, alongside the `NATS_MSG_ID_HEADER` constant.
+
 ## [0.5.7] - 2026-08-29
 
 ### Added

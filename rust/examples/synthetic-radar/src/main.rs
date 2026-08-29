@@ -316,11 +316,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
             }
             let event = builder.build()?;
 
-            // 2. seal, 3. publish
+            // 2. seal, 3. publish. Nats-Msg-Id carries the event id so the
+            // broker's duplicate window can drop retransmissions.
             let sealed = seal(&canonical_bytes(&event), &key);
             if let Some(client) = &client {
+                let mut headers = async_nats::HeaderMap::new();
+                headers.insert("Nats-Msg-Id", event.id.as_str());
                 if let Err(e) = client
-                    .publish(subject.clone(), bytes::Bytes::from(sealed))
+                    .publish_with_headers(subject.clone(), headers, bytes::Bytes::from(sealed))
                     .await
                 {
                     eprintln!("[synthetic-radar] publish error (continuing): {e}");
