@@ -12,6 +12,7 @@
 resolver = "2"
 members = [
     "common",
+    "doctor",
     "tak-cot",
     "ais-nmea",
     "mavlink",

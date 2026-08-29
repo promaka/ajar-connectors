@@ -32,7 +32,7 @@ pub mod exec;
 pub mod file;
 pub mod health;
 pub mod http_server;
-mod key;
+pub mod key;
 pub mod nats;
 pub mod ontology;
 pub mod profile;

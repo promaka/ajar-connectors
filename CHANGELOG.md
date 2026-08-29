@@ -13,6 +13,25 @@ Two version lines are tracked independently (see COMPATIBILITY.md):
 
 ## [Unreleased]
 
+### Added
+
+- `ajar-doctor`: one command to run when a connector publishes nothing. It
+  walks the onboarding steps in order against the connector's own config and
+  environment: config parse, signing key format and permissions, registration
+  (against a local sink's `sources_dir`, or printing the exact public key the
+  operator must hold), DNS and TCP reach, the fail-closed TLS policy table,
+  certificate files (pair match, CN = `source_id`, validity), a live TLS
+  handshake with named causes (wrong CA, missing or mismatched SAN, expired or
+  postdated certificates, a server refusing the client certificate, an
+  authorization refusal after a good handshake), and clock skew against the
+  server certificate's validity window. Every failure prints what to do, not
+  just what went wrong. Read-only on the wire: it never publishes an event.
+  With a config file it reads exactly what the connector reads; with none it
+  reads `NATS_URL`, `AJAR_SOURCE_ID` and `AJAR_SIGNING_SEED`, so a connector
+  embedded in your own process is diagnosed with zero files.
+  Each diagnosis is pinned by an integration suite that fabricates its failure
+  mode against real listeners on loopback.
+
 ## [0.5.7] - 2026-08-29
 
 ### Added

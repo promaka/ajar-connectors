@@ -556,6 +556,22 @@ operator; it is not part of this open repo.
 
 ## 10. Troubleshooting
 
+When nothing flows, start with the doctor. It walks your setup in onboarding
+order (config, signing key, registration, endpoint, TLS policy, certificate
+files, live handshake, clock) and names the first broken step in plain words,
+with what to do about it. It reads the same config and `AJAR_TLS_*` environment
+the connector uses, and it is read-only on the wire: it never publishes an
+event, so it is safe against a production endpoint.
+
+```bash
+ajar-doctor connector.toml
+ajar-doctor connector.toml --sources-dir /keys   # when the sink runs on a box you can see
+ajar-doctor   # no file: reads NATS_URL, AJAR_SOURCE_ID, AJAR_SIGNING_SEED (SDK embedders)
+```
+
+Exit 0 means everything checkable from your side checks out; the next place to
+look is the operator's sink log for your `source_id`.
+
 | Symptom | Likely cause | Fix |
 |---------|--------------|-----|
 | Event rejected: **signature invalid** | public key not registered, or signing with the wrong seed, or `source_id` ≠ registered | confirm the registered `verifying_key_hex` matches your key; check `AJAR_SOURCE_ID` |
