@@ -328,20 +328,16 @@ Set `AJAR_HEALTH_ADDR=0.0.0.0:9110` on any method. Gives `/healthz` and
 
 ### 7e. Intermittent links (store-and-forward)
 
-For a forward-deployed connector on a link that comes and goes, add a bounded
-disk spool. While the endpoint is unreachable, sealed events queue in the
-directory instead of being shed; when the link returns they replay in order,
-byte-identical (they were signed before publish, so provenance survives the
-outage), paced so the backlog cannot trip the operator's rate limit:
-
-One line:
+If the link drops, events queue on disk and replay in order when it comes
+back. They were signed before publish, so nothing loses its provenance. One
+line enables it:
 
 ```toml
 spool = "/var/lib/ajar/spool"
 ```
 
-That is the whole setup: 256 MiB bound, conservative drain pace, oldest
-dropped (and counted) if the bound fills. The full table tunes it:
+That is the whole setup: 256 MiB bound, paced replay, oldest dropped (and
+counted) if the bound fills. The full table tunes it:
 
 ```toml
 [spool]
