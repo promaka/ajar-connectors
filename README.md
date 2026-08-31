@@ -169,6 +169,13 @@ The prebuilt connectors set it automatically.
 Longer guides: [Python](docs/embedding-python.md) · [C++](docs/embedding-cpp.md).
 Rust and Go use the same three calls.
 
+**Publishing AI or analytics output back in?** A derived event names what it
+was derived from, and the boundary refuses one that does not. The drop-in
+producer (`pip install "ajar-connector[producer]"`) makes lineage a required
+argument; the one call you add is shown in
+[examples/derived_producer.py](python/examples/derived_producer.py) and the
+[Python guide](docs/embedding-python.md#publishing-derived-events-ai-assessments).
+
 ---
 
 ## 4. Set up: run a prebuilt connector

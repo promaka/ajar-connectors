@@ -224,7 +224,12 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install deps
-        run: pip install "protobuf>=7.35,<8" "cryptography>=42" pytest
+        run: pip install "protobuf>=7.35,<8" "cryptography>=42" pytest "nats-py>=2.6"
+      - name: Install nats-server (producer wire gate)
+        run: |
+          curl -sSfL https://github.com/nats-io/nats-server/releases/download/v2.10.24/nats-server-v2.10.24-linux-amd64.tar.gz | tar xz
+          sudo install nats-server-v2.10.24-linux-amd64/nats-server /usr/local/bin/nats-server
+          nats-server --version
       - name: Unit tests
         run: python -m pytest -q
       - name: Conformance gate

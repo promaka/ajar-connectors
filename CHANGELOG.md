@@ -15,6 +15,19 @@ Two version lines are tracked independently (see COMPATIBILITY.md):
 
 ### Added
 
+- `ajar_connector.producer` (Python, `pip install "ajar-connector[producer]"`):
+  a drop-in module for platforms that consume governed events and publish
+  derived assessments back. `connect()` returns a handle (mTLS, fail-closed on
+  partial TLS config); `publish_assessment()` builds, seals and publishes one
+  event, with `model` and `derived_from` as required arguments because the
+  boundary refuses derived events without lineage. The envelope is the SDK's
+  `seal()`, byte-identical to any connector's, and every publish carries
+  `Nats-Msg-Id`. The wire gate runs against a real nats-server in CI, and
+  `examples/derived_producer.py` shows the consume-derive-publish loop end to
+  end; the one call a platform adds is marked in the example.
+
+### Added
+
 - Store-and-forward disk spool (#76), for forward-deployed connectors on
   intermittent links. With `[spool]` configured, a connector that cannot reach
   NATS queues sealed events in a bounded on-disk segment log instead of
