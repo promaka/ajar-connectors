@@ -58,6 +58,15 @@ pub(crate) struct Metrics {
     /// down/slow with a full client buffer). Sustained growth = the link, not the
     /// source, is the bottleneck.
     pub dropped_backpressure: Arc<AtomicU64>,
+    /// Events written to the disk spool instead of shed (spool configured).
+    pub spooled: Arc<AtomicU64>,
+    /// Spooled events replayed and confirmed delivered.
+    pub drained: Arc<AtomicU64>,
+    /// Spooled records that failed signature verification on drain (disk
+    /// corruption): skipped and counted, never published.
+    pub spool_corrupt: Arc<AtomicU64>,
+    /// Oldest spool segments dropped to stay under the configured bound.
+    pub spool_dropped_segments: Arc<AtomicU64>,
 }
 
 /// How long one publish may stall before the event is shed. Load-shedding keeps
@@ -91,6 +100,28 @@ pub async fn run(
         .context("connecting to NATS")?;
     spawn_heartbeat(metrics.clone());
 
+    // Optional store-and-forward spool (#76): sealed events survive link
+    // outages on local disk and a paced drain replays them byte-identical.
+    let spool = match &cfg.spool_config() {
+        Some(spool_cfg) => {
+            let spool = Arc::new(tokio::sync::Mutex::new(
+                crate::spool::Spool::open(spool_cfg).context("opening the disk spool")?,
+            ));
+            tracing::info!(dir = %spool_cfg.dir, drain_rate = spool_cfg.drain_rate,
+                "disk spool enabled");
+            spawn_drain(
+                spool.clone(),
+                client.clone(),
+                subject.clone(),
+                key.verifying_key(),
+                spool_cfg.drain_rate,
+                metrics.clone(),
+            );
+            Some(spool)
+        }
+        None => None,
+    };
+
     let shutdown = shutdown_signal();
     tokio::pin!(shutdown);
     let mut buf = vec![0u8; crate::MAX_FRAME_BYTES];
@@ -120,28 +151,70 @@ pub async fn run(
                         for event in events {
                             let headers = ingest_headers(&event.id);
                             let sealed = seal(&canonical_bytes(&event), &key);
+                            // Link known down + spool configured: spool at
+                            // line rate instead of paying the publish
+                            // deadline per event. (The async client buffers
+                            // publishes while reconnecting, so without this
+                            // check a short outage hides in the buffer and a
+                            // long one stalls the loop event by event.)
+                            if let Some(spool) = &spool {
+                                use async_nats::connection::State;
+                                if client.connection_state() != State::Connected {
+                                    let dropped = spool
+                                        .lock()
+                                        .await
+                                        .append(&event.id, &sealed)
+                                        .map_err(|e| {
+                                            tracing::warn!(error = %e, "spool append failed");
+                                            e
+                                        })
+                                        .unwrap_or(false);
+                                    metrics.spooled.fetch_add(1, Ordering::Relaxed);
+                                    if dropped {
+                                        metrics
+                                            .spool_dropped_segments
+                                            .fetch_add(1, Ordering::Relaxed);
+                                    }
+                                    continue;
+                                }
+                            }
                             let publish = client.publish_with_headers(
                                 subject.clone(),
                                 headers,
-                                bytes::Bytes::from(sealed),
+                                bytes::Bytes::from(sealed.clone()),
                             );
                             match tokio::time::timeout(PUBLISH_DEADLINE, publish).await {
                                 Ok(Ok(())) => {
                                     metrics.published.fetch_add(1, Ordering::Relaxed);
                                 }
-                                Ok(Err(e)) => {
-                                    // Non-fatal: the client reconnects underneath us.
-                                    tracing::warn!(error = %e, "publish error (continuing)");
-                                }
-                                // Deadline hit: shed the event so a stalled link
-                                // degrades instead of freezing ingest.
-                                Err(_) => {
-                                    metrics.dropped_backpressure.fetch_add(1, Ordering::Relaxed);
-                                    tracing::warn!(
-                                        deadline = ?PUBLISH_DEADLINE,
-                                        "publish stalled — shedding event (backpressure)"
-                                    );
-                                }
+                                // Publish failed or stalled: spool when
+                                // configured, shed (counted) when not.
+                                Ok(Err(_)) | Err(_) => match &spool {
+                                    Some(spool) => {
+                                        let dropped = spool
+                                            .lock()
+                                            .await
+                                            .append(&event.id, &sealed)
+                                            .map_err(|e| {
+                                                tracing::warn!(error = %e, "spool append failed");
+                                                e
+                                            })
+                                            .unwrap_or(false);
+                                        metrics.spooled.fetch_add(1, Ordering::Relaxed);
+                                        if dropped {
+                                            metrics
+                                                .spool_dropped_segments
+                                                .fetch_add(1, Ordering::Relaxed);
+                                        }
+                                    }
+                                    None => {
+                                        metrics.dropped_backpressure.fetch_add(1, Ordering::Relaxed);
+                                        tracing::warn!(
+                                            deadline = ?PUBLISH_DEADLINE,
+                                            "publish stalled, shedding event (backpressure)"
+                                        );
+                                    }
+                                },
                             }
                         }
                     }
@@ -156,14 +229,134 @@ pub async fn run(
         }
     }
 
+    if let Some(spool) = &spool {
+        spool.lock().await.sync();
+    }
     tracing::info!(
         received = metrics.received.load(Ordering::Relaxed),
         published = metrics.published.load(Ordering::Relaxed),
         rejected = metrics.rejected.load(Ordering::Relaxed),
         dropped_backpressure = metrics.dropped_backpressure.load(Ordering::Relaxed),
+        spooled = metrics.spooled.load(Ordering::Relaxed),
+        drained = metrics.drained.load(Ordering::Relaxed),
         "connector stopped cleanly"
     );
     Ok(())
+}
+
+/// The spool drain: replay spooled events oldest-first, paced, advancing the
+/// cursor only on confirmed delivery.
+///
+/// Pacing is correctness, not politeness: Core's per-source token bucket ACKs
+/// and destroys over-rate events, and live traffic shares the bucket, so the
+/// drain must stay well under the registered rate (the config guidance is
+/// 70-80% of it).
+///
+/// Delivery confirmation prefers a JetStream PubAck (the ingest subject is
+/// captured by Core's stream, so the ack proves the bytes are stored). When
+/// no stream exists (a dev sink on plain NATS), it falls back to
+/// publish+flush, which proves the broker received the bytes: the same
+/// guarantee the live path has.
+fn spawn_drain(
+    spool: Arc<tokio::sync::Mutex<crate::spool::Spool>>,
+    client: async_nats::Client,
+    subject: String,
+    verifying_key: ed25519_dalek::VerifyingKey,
+    drain_rate: f64,
+    metrics: Arc<Metrics>,
+) {
+    use ed25519_dalek::Verifier as _;
+    let js = async_nats::jetstream::new(client.clone());
+    let gap = std::time::Duration::from_secs_f64(1.0 / drain_rate.max(0.1));
+    tokio::spawn(async move {
+        let mut js_mode = true;
+        loop {
+            let item = spool.lock().await.peek();
+            let (cursor, record) = match item {
+                Ok(Some(hit)) => hit,
+                // Empty (or unreadable) spool: idle gently.
+                _ => {
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                    continue;
+                }
+            };
+
+            // Verify with the connector's own key before sending: a record
+            // that rotted on disk is counted and skipped, never published.
+            let valid = record.sealed.len() > crate::seal_signature_len()
+                && ed25519_dalek::Signature::from_slice(
+                    &record.sealed[..crate::seal_signature_len()],
+                )
+                .map(|sig| {
+                    verifying_key
+                        .verify(&record.sealed[crate::seal_signature_len()..], &sig)
+                        .is_ok()
+                })
+                .unwrap_or(false);
+            if !valid {
+                metrics.spool_corrupt.fetch_add(1, Ordering::Relaxed);
+                tracing::warn!(event_id = %record.event_id,
+                    "spooled record failed verification (disk corruption), skipping");
+                if spool.lock().await.advance(cursor).is_err() {
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                }
+                continue;
+            }
+
+            let headers = ingest_headers(&record.event_id);
+            let payload = bytes::Bytes::from(record.sealed.clone());
+            let delivered = if js_mode {
+                match js
+                    .publish_with_headers(subject.clone(), headers.clone(), payload.clone())
+                    .await
+                {
+                    Ok(ack) => match ack.await {
+                        Ok(_) => true,
+                        Err(e) => {
+                            let text = e.to_string();
+                            if text.contains("no responders") {
+                                tracing::info!(
+                                    "no JetStream stream on the ingest subject,                                      draining with publish+flush"
+                                );
+                                js_mode = false;
+                            } else {
+                                tracing::warn!(error = %text, "drain publish not acked, retrying");
+                            }
+                            false
+                        }
+                    },
+                    Err(e) => {
+                        tracing::warn!(error = %e, "drain publish failed, retrying");
+                        false
+                    }
+                }
+            } else {
+                false
+            };
+            let delivered = if !delivered && !js_mode {
+                client
+                    .publish_with_headers(subject.clone(), headers, payload)
+                    .await
+                    .is_ok()
+                    && client.flush().await.is_ok()
+            } else {
+                delivered
+            };
+
+            if delivered {
+                if let Err(e) = spool.lock().await.advance(cursor) {
+                    tracing::warn!(error = %e, "spool cursor advance failed");
+                }
+                metrics.drained.fetch_add(1, Ordering::Relaxed);
+                tokio::time::sleep(gap).await;
+            } else {
+                // Link still down (or mode just flipped): back off, keep the
+                // cursor where it is. Replay duplicates from this retry are
+                // absorbed by the broker's Nats-Msg-Id window.
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            }
+        }
+    });
 }
 
 /// A once-every-15s line so an operator watching logs sees it's alive and flowing.

@@ -39,9 +39,11 @@ authors = ["Ajar connectors contributors"]
 [workspace.dependencies]
 ajar-connector = { path = "../ajar-connector" }
 ajar-connector-common = { path = "common" }
-# Same async-nats build the examples use: core-NATS only + `ring` for TLS.
-# default-features = false avoids a `time` coherence clash on this toolchain.
-async-nats = { version = "0.50", default-features = false, features = ["ring"] }
+# `ring` for TLS; `jetstream` for the spool drain's acked replay (the cursor
+# advances only on a PubAck, so a replayed event is provably stored, not just
+# sent). default-features = false avoids a `time` coherence clash on this
+# toolchain.
+async-nats = { version = "0.50", default-features = false, features = ["ring", "jetstream"] }
 # The seal signs with the connector's own Ed25519 key; the SDK takes the dalek
 # type directly, so we hold the key in the same type it expects.
 ed25519-dalek = "3"

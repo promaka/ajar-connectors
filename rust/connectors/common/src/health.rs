@@ -69,6 +69,17 @@ pub(crate) fn spawn(metrics: Arc<Metrics>, extra: Vec<(&'static str, Arc<AtomicU
             "connector_dropped_backpressure_total",
             metrics.dropped_backpressure.clone(),
         ),
+        // Spool counters: zero (and honest) when no spool is configured.
+        ("connector_spooled_total", metrics.spooled.clone()),
+        ("connector_drained_total", metrics.drained.clone()),
+        (
+            "connector_spool_corrupt_total",
+            metrics.spool_corrupt.clone(),
+        ),
+        (
+            "connector_spool_dropped_segments_total",
+            metrics.spool_dropped_segments.clone(),
+        ),
     ];
     counters.extend(extra);
     spawn_counters(counters);

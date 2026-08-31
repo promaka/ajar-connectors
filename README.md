@@ -326,7 +326,36 @@ Set `AJAR_HEALTH_ADDR=0.0.0.0:9110` on any method. Gives `/healthz` and
 `/metrics` with `connector_received_total`, `connector_published_total` and
 `connector_rejected_total`.
 
-### 7e. When nothing flows
+### 7e. Intermittent links (store-and-forward)
+
+If the link drops, events queue on disk and replay in order when it comes
+back. They were signed before publish, so nothing loses its provenance. One
+line enables it:
+
+```toml
+spool = "/var/lib/ajar/spool"
+```
+
+That is the whole setup: 256 MiB bound, paced replay, oldest dropped (and
+counted) if the bound fills. The full table tunes it:
+
+```toml
+[spool]
+dir = "/var/lib/ajar/spool"   # a real disk, not tmpfs
+max_bytes = 268435456          # bound; oldest segment dropped beyond it, counted
+drain_rate = 50.0              # events/sec on replay: 70-80% of your registered rate
+```
+
+In a container, mount the directory as a volume (a PVC on Kubernetes): events
+spooled to the container filesystem survive the link outage but not a
+restart. `ajar-doctor` checks the directory is writable and reports any
+backlog waiting to drain.
+
+Without `[spool]` the behavior is unchanged: a stalled publish sheds the event
+and counts it. Spool depth and drain progress appear on `/metrics`
+(`connector_spooled_total`, `connector_drained_total`).
+
+### 7f. When nothing flows
 
 `ajar-doctor connector.toml` checks the setup step by step (config, signing
 key, registration, endpoint, TLS, clock) and says which onboarding step is

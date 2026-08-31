@@ -35,12 +35,13 @@ pub struct Options {
     pub timeout: Duration,
 }
 
-/// The four facts every check runs against, however they were supplied.
+/// The facts every check runs against, however they were supplied.
 struct Inputs {
     source_id: String,
     nats_url: String,
     signing_key_path: String,
     subject_prefix: String,
+    spool: Option<common::spool::SpoolConfig>,
 }
 
 /// Run every check and return the findings in onboarding order.
@@ -52,6 +53,7 @@ pub async fn run(opts: &Options) -> Vec<Finding> {
     let resolved = match &opts.config_path {
         Some(path) => match common::Config::load(path) {
             Ok(cfg) => Ok(Inputs {
+                spool: cfg.spool_config(),
                 source_id: cfg.source_id,
                 nats_url: cfg.nats_url,
                 signing_key_path: cfg.signing_key_path,
@@ -83,6 +85,7 @@ pub async fn run(opts: &Options) -> Vec<Finding> {
             out.push(finding);
             for step in [
                 "signing key",
+                "spool",
                 "registration",
                 "endpoint",
                 "tls policy",
@@ -98,6 +101,9 @@ pub async fn run(opts: &Options) -> Vec<Finding> {
 
     // Step 2: the signing key, via the same loader the runtime uses.
     let verifying_hex = check_signing_key(&mut out, &cfg);
+
+    // Step 2a: the spool, when configured; a one-line hint when not.
+    check_spool(&mut out, &cfg);
 
     // Step 3: registration, as far as it can be seen from this box.
     check_registration(
@@ -195,6 +201,7 @@ fn inputs_from_env() -> Result<Inputs, Finding> {
         nats_url: get("NATS_URL").expect("checked"),
         signing_key_path: get("AJAR_SIGNING_SEED").expect("checked"),
         subject_prefix: "ajar.ingest".to_string(),
+        spool: None,
     })
 }
 
@@ -265,6 +272,61 @@ fn check_signing_key(out: &mut Vec<Finding>, cfg: &Inputs) -> Option<String> {
         format!("loads and derives public key {derived}"),
     ));
     Some(derived)
+}
+
+fn check_spool(out: &mut Vec<Finding>, cfg: &Inputs) {
+    let Some(spool_cfg) = &cfg.spool else {
+        out.push(Finding::skip(
+            "spool",
+            "not configured (optional). One line enables store-and-forward for link \
+             outages: spool = \"/var/lib/ajar/spool\" - sealed events then queue on \
+             disk during an outage and replay when the link returns.",
+        ));
+        return;
+    };
+    match common::spool::Spool::open(spool_cfg) {
+        Ok(spool) => {
+            let depth = spool.depth_bytes();
+            // Prove the connector could append here, not just that we could open it.
+            let probe = std::path::Path::new(&spool_cfg.dir).join(".doctor-probe");
+            match std::fs::write(&probe, b"probe").and_then(|_| std::fs::remove_file(&probe)) {
+                Ok(_) if depth > 0 => out.push(Finding::warn(
+                    "spool",
+                    format!(
+                        "{} is writable and holds {depth} bytes WAITING TO DRAIN",
+                        spool_cfg.dir
+                    ),
+                    "Events queued during an outage are still on disk. If the endpoint \
+                     check above passes, the running connector is draining them at its \
+                     paced rate - watch connector_drained_total on /metrics. If nothing \
+                     is draining, the connector is not running or still cannot reach \
+                     the endpoint."
+                        .to_string(),
+                )),
+                Ok(_) => out.push(Finding::ok(
+                    "spool",
+                    format!("{} is writable, nothing queued", spool_cfg.dir),
+                )),
+                Err(e) => out.push(Finding::fail(
+                    "spool",
+                    format!("{} exists but is not writable: {e}", spool_cfg.dir),
+                    "The connector will fail to spool during an outage. Fix ownership or \
+                     mode on the directory (it must be writable by the connector's user), \
+                     and in a container make sure it is a mounted volume, not the \
+                     container filesystem."
+                        .to_string(),
+                )),
+            }
+        }
+        Err(e) => out.push(Finding::fail(
+            "spool",
+            format!("{e:#}"),
+            "The spool directory could not be opened. Check the path exists (or its \
+             parent is creatable), the connector's user owns it, and in a container \
+             that it is a mounted volume so spooled events survive a restart."
+                .to_string(),
+        )),
+    }
 }
 
 fn check_registration(

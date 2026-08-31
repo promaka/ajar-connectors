@@ -51,3 +51,5 @@ tokio-tungstenite = { version = "0.30", default-features = false, features = [
 [dev-dependencies]
 rcgen = { version = "0.14", default-features = false, features = ["ring", "pem"] }
 proptest = "1"
+# The spool gate's JetStream consumer fetch is a Stream.
+futures-util.workspace = true
