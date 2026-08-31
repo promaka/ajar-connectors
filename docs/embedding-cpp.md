@@ -121,7 +121,7 @@ openssl pkey -in connector.key -pubout -outform DER | tail -c 32 | xxd -p -c 64
 
 The last line prints your public key. **Send your operator:**
 
-- your `source_id` (e.g. `matrixspace-1`)
+- your `source_id` (e.g. `acme-1`)
 - the entity types you will emit (e.g. `mim:aircraft`, or the `x:` prefix)
 - that public key hex
 
@@ -143,7 +143,7 @@ your own.
 
 ```cpp
 auto sealed = ajar::seal(ajar::canonical_bytes(event), key);
-publish("ajar.ingest.matrixspace-1", sealed);
+publish("ajar.ingest.acme-1", sealed);
 ```
 
 Subject is `ajar.ingest.<source_id>`. Production is mTLS: your client certificate

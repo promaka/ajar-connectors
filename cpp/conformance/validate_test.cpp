@@ -81,7 +81,7 @@ int main() {
           "a true case slip gets the exact correction");
   }
 
-  check(validate(mapping("x:matrixspace:radar-hit", {"anything"})).empty(),
+  check(validate(mapping("x:acme:radar-hit", {"anything"})).empty(),
         "a vendor namespace is the operator's, not second-guessed");
 
   check(validate(mapping("mim:aircraft", {"speed_kn", "nonsense"})).size() == 2,

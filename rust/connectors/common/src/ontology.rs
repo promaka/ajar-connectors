@@ -290,7 +290,7 @@ mod tests {
     #[test]
     fn a_vendor_namespace_is_not_second_guessed() {
         // x: types are registered with the operator, not declared in the ontology.
-        assert!(check(&d(&["x:matrixspace:radar-hit"], &[])).is_empty());
+        assert!(check(&d(&["x:acme:radar-hit"], &[])).is_empty());
     }
 
     #[test]

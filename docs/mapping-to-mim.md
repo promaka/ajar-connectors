@@ -62,7 +62,7 @@ static const char* hostility_for(const Track& t) {
 
 // ---- Emit -------------------------------------------------------------------
 ajar::Event to_event(const Track& t) {
-  return ajar::EventBuilder("matrixspace-1",       // your registered source_id
+  return ajar::EventBuilder("acme-1",       // your registered source_id
                             entity_type_for(t))    // MIM class for THIS record
       .new_id()
       .now()
@@ -83,7 +83,7 @@ Then per record:
 
 ```cpp
 auto sealed = ajar::seal(ajar::canonical_bytes(to_event(t)), key);
-publish("ajar.ingest.matrixspace-1", sealed);   // your NATS client
+publish("ajar.ingest.acme-1", sealed);   // your NATS client
 ```
 
 ### What that produces
@@ -119,7 +119,7 @@ ENTITY    = {3: "mim:aircraft", 7: "mim:vessel"}   # yours -> MIM
 HOSTILITY = {1: "Friend", 2: "Hostile"}            # exact case
 
 def to_event(t):
-    return (EventBuilder("matrixspace-1", ENTITY.get(t["type_code"], "mim:object"))
+    return (EventBuilder("acme-1", ENTITY.get(t["type_code"], "mim:object"))
             .new_id().now()
             .location(t["lat"], t["lon"], t["alt_ft"] * 0.3048)      # feet -> metres
             .attribute("speed", f"{t['speed_kn'] * 0.514444:.2f}")   # knots -> m/s
@@ -157,7 +157,7 @@ and put the domain in the `environment` attribute. A radar that says "something 
 the air" has not told you it is an aircraft.
 
 Anything you need that is not a MIM class goes in your own namespace:
-`x:matrixspace:<type>`. The operator must register the prefix either way.
+`x:acme:<type>`. The operator must register the prefix either way.
 
 The builder checks the **shape** (`mim:<type>` or `x:<vendor>:<type>`), not that
 the type exists. `mim:banana` builds and seals fine.
