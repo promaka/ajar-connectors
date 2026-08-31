@@ -55,9 +55,35 @@ pub struct Config {
     /// Optional store-and-forward disk spool for intermittent links: when the
     /// publish path stalls, sealed events queue in a bounded directory and a
     /// paced drain replays them when the link returns, byte-identical. Unset
-    /// keeps today's behavior (shed with a counter). See `[spool]` docs.
+    /// keeps today's behavior (shed with a counter).
+    ///
+    /// One line enables it with safe defaults:
+    /// `spool = "/var/lib/ajar/spool"`; the full `[spool]` table tunes the
+    /// bound and drain rate.
     #[serde(default)]
-    pub spool: Option<crate::spool::SpoolConfig>,
+    pub spool: Option<SpoolSetting>,
+}
+
+/// The `spool` setting: a bare directory string (defaults for everything
+/// else), or the full table for tuning.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+pub enum SpoolSetting {
+    /// `spool = "/var/lib/ajar/spool"`
+    Dir(String),
+    /// `[spool]` with `dir`, `max_bytes`, `drain_rate`.
+    Full(crate::spool::SpoolConfig),
+}
+
+impl Config {
+    /// The effective spool configuration, whichever form the config used.
+    pub fn spool_config(&self) -> Option<crate::spool::SpoolConfig> {
+        match &self.spool {
+            None => None,
+            Some(SpoolSetting::Full(cfg)) => Some(cfg.clone()),
+            Some(SpoolSetting::Dir(dir)) => Some(crate::spool::SpoolConfig::with_dir(dir)),
+        }
+    }
 }
 
 /// A sensor's fixed geodetic site (WGS-84), used to geolocate sensor-relative
@@ -413,5 +439,33 @@ mod tests {
         // udp-multicast without a group must not parse.
         let bad = "[transport]\nkind='udp-multicast'\nbind='0.0.0.0:6969'";
         assert!(toml::from_str::<W>(bad).is_err());
+    }
+
+    #[test]
+    fn the_spool_takes_one_line_or_a_full_table() {
+        let base = "source_id='s'\nnats_url='nats://x:4222'\nsigning_key_path='k'\n\
+                    [transport]\nkind='stdin'\n";
+
+        // No spool: none configured, today's behavior.
+        let cfg: Config = toml::from_str(base).unwrap();
+        assert!(cfg.spool_config().is_none());
+
+        // The one-liner: a bare path, everything else defaulted.
+        let cfg: Config =
+            toml::from_str(&format!("spool = '/var/lib/ajar/spool'\n{base}")).unwrap();
+        let spool = cfg.spool_config().unwrap();
+        assert_eq!(spool.dir, "/var/lib/ajar/spool");
+        assert_eq!(spool.max_bytes, 256 * 1024 * 1024);
+        assert!((spool.drain_rate - 50.0).abs() < f64::EPSILON);
+
+        // The full table tunes the bound and the pace.
+        let cfg: Config = toml::from_str(&format!(
+            "{base}[spool]\ndir='/data/spool'\nmax_bytes=1024\ndrain_rate=7.5\n"
+        ))
+        .unwrap();
+        let spool = cfg.spool_config().unwrap();
+        assert_eq!(spool.dir, "/data/spool");
+        assert_eq!(spool.max_bytes, 1024);
+        assert!((spool.drain_rate - 7.5).abs() < f64::EPSILON);
     }
 }

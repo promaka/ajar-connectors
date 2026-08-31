@@ -35,9 +35,10 @@ group = "239.2.3.1"
 "a-f-G-U-C-D" = "mim:unit"
 
 # Optional: store-and-forward for intermittent links. While NATS is
-# unreachable, sealed events queue here (bounded, oldest dropped beyond
-# max_bytes) and replay in order when the link returns, paced so the backlog
-# stays under your registered rate (set drain_rate to 70-80% of it).
+# unreachable, sealed events queue on disk (bounded, oldest dropped beyond the
+# bound) and replay in order when the link returns. One line enables it:
+# spool = "/var/lib/ajar/spool"
+# Or tune the bound and the replay pace (70-80% of your registered rate):
 # [spool]
 # dir = "/var/lib/ajar/spool"
 # max_bytes = 268435456

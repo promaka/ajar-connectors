@@ -449,6 +449,34 @@ async fn the_full_run_names_the_broken_onboarding_step() {
     let (text, healthy) = report::render(&findings);
     assert!(healthy, "{text}");
     assert!(text.contains("matches the loaded seed"), "{text}");
+    // No spool configured: the doctor teaches the one-liner instead.
+    assert!(text.contains("store-and-forward"), "{text}");
+
+    // With the one-line spool, the doctor proves the directory is usable.
+    let spool_config = write(
+        &dir,
+        "spooled.toml",
+        &format!(
+            "spool = \"{}\"\n\
+             source_id = \"acme-radar-1\"\n\
+             nats_url = \"nats://127.0.0.1:{port}\"\n\
+             signing_key_path = \"{}\"\n\
+             [transport]\n\
+             kind = \"udp\"\n\
+             bind = \"127.0.0.1:0\"\n",
+            dir.join("spool").display(),
+            seed_path.display()
+        ),
+    );
+    let findings = ajar_doctor::run(&Options {
+        config_path: Some(spool_config),
+        sources_dir: Some(sources.to_str().unwrap().to_string()),
+        timeout: Duration::from_secs(2),
+    })
+    .await;
+    let (text, healthy) = report::render(&findings);
+    assert!(healthy, "{text}");
+    assert!(text.contains("is writable, nothing queued"), "{text}");
 
     // A stale sibling .pub next to the seed: the classic rotated-one-half slip.
     std::fs::write(dir.join("acme-radar-1.pub"), "cd".repeat(32)).unwrap();

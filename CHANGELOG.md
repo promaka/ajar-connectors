@@ -29,9 +29,13 @@ Two version lines are tracked independently (see COMPATIBILITY.md):
   to publish+flush against a plain-NATS sink). Bounding is drop-oldest, with
   drops counted; records that fail signature verification on drain (disk
   corruption) are counted and skipped, never published. Spool depth and drain
-  progress are exposed on `/metrics`. The acceptance gate runs a real
-  nats-server in CI: killed mid-stream, restarted, every outage event
-  delivered byte-identical exactly once at the paced rate.
+  progress are exposed on `/metrics`. One line enables it
+  (`spool = "/var/lib/ajar/spool"`); the `[spool]` table tunes the bound and
+  pace. `ajar-doctor` gains a spool step: it proves the directory is writable,
+  reports any backlog waiting to drain, and teaches the one-liner when no
+  spool is configured. The acceptance gate runs a real nats-server in CI:
+  killed mid-stream, restarted, every outage event delivered byte-identical
+  exactly once at the paced rate.
 
 ### Added
 

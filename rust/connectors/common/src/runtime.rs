@@ -102,7 +102,7 @@ pub async fn run(
 
     // Optional store-and-forward spool (#76): sealed events survive link
     // outages on local disk and a paced drain replays them byte-identical.
-    let spool = match &cfg.spool {
+    let spool = match &cfg.spool_config() {
         Some(spool_cfg) => {
             let spool = Arc::new(tokio::sync::Mutex::new(
                 crate::spool::Spool::open(spool_cfg).context("opening the disk spool")?,

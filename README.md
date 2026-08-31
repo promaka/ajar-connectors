@@ -334,12 +334,26 @@ directory instead of being shed; when the link returns they replay in order,
 byte-identical (they were signed before publish, so provenance survives the
 outage), paced so the backlog cannot trip the operator's rate limit:
 
+One line:
+
+```toml
+spool = "/var/lib/ajar/spool"
+```
+
+That is the whole setup: 256 MiB bound, conservative drain pace, oldest
+dropped (and counted) if the bound fills. The full table tunes it:
+
 ```toml
 [spool]
 dir = "/var/lib/ajar/spool"   # a real disk, not tmpfs
 max_bytes = 268435456          # bound; oldest segment dropped beyond it, counted
 drain_rate = 50.0              # events/sec on replay: 70-80% of your registered rate
 ```
+
+In a container, mount the directory as a volume (a PVC on Kubernetes): events
+spooled to the container filesystem survive the link outage but not a
+restart. `ajar-doctor` checks the directory is writable and reports any
+backlog waiting to drain.
 
 Without `[spool]` the behavior is unchanged: a stalled publish sheds the event
 and counts it. Spool depth and drain progress appear on `/metrics`

@@ -45,6 +45,17 @@ pub struct SpoolConfig {
     pub drain_rate: f64,
 }
 
+impl SpoolConfig {
+    /// The one-line form: a directory with safe defaults for everything else.
+    pub fn with_dir(dir: &str) -> Self {
+        Self {
+            dir: dir.to_string(),
+            max_bytes: default_max_bytes(),
+            drain_rate: default_drain_rate(),
+        }
+    }
+}
+
 fn default_max_bytes() -> u64 {
     256 * 1024 * 1024
 }

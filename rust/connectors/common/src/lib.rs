@@ -58,7 +58,7 @@ pub mod ws;
 /// than a missing one. Reported in the connector profile as an advisory ceiling.
 pub const MAX_FRAME_BYTES: usize = 64 * 1024;
 
-pub use config::{Config, Enrichment, Framing, SensorSite, Transport};
+pub use config::{Config, Enrichment, Framing, SensorSite, SpoolSetting, Transport};
 
 /// The seal's signature prefix length (re-exported for the spool drain).
 pub(crate) fn seal_signature_len() -> usize {
