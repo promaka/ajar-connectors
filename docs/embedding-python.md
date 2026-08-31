@@ -153,3 +153,41 @@ Green means conformant with `contract-v1`. Put it in your CI.
 One page: [docs/wire-contract-v1.md](wire-contract-v1.md). It is the whole
 agreement — event shape, canonical bytes, the seal, the subject, and what is
 frozen.
+
+## Publishing derived events (AI assessments)
+
+A platform that consumes governed events and produces assessments publishes
+them back through the same front door as any sensor, with lineage. The
+`producer` module is the drop-in half; the only code you add is the
+`publish_assessment` call where your pipeline's output appears:
+
+```bash
+pip install "ajar-connector[producer]"
+```
+
+```python
+from ajar_connector.producer import connect, publish_assessment
+
+handle = await connect(
+    "tls://nats.operator.example:4443",
+    source_id="assess-1",              # your registered producer identity
+    signing_seed="./assess-1.seed",    # your registered signing key
+    ca="ca.pem", cert="client.pem", key="client.key",
+)
+
+event_id = await publish_assessment(
+    handle,
+    entity_type="mim:vessel",
+    model="assessment-engine@1.4",       # what produced this - required
+    derived_from=[source_event.id],      # what it reasoned over - required
+    attributes={"threat_level": "High"},
+)
+```
+
+`model` and `derived_from` are required arguments, not options: the boundary
+refuses derived events without lineage, so forgetting them fails here with a
+clear message instead of silently there. The envelope is the SDK's `seal()`,
+byte-identical to any connector's, and every publish carries `Nats-Msg-Id`
+for broker-side dedupe. [examples/derived_producer.py](../python/examples/derived_producer.py)
+shows the full consume -> derive -> publish loop, including verifying what
+you consume.
