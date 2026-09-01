@@ -86,7 +86,12 @@ async fn main() -> anyhow::Result<()> {
                     metrics.deduped.fetch_add(1, Ordering::Relaxed);
                     continue;
                 }
-                let Some(body) = map::render(&event, &cfg.mapping.fields, cfg.unmapped) else {
+                let Some(body) = map::render(
+                    &event,
+                    &cfg.mapping.fields,
+                    cfg.unmapped,
+                    cfg.confidentiality_label.as_ref(),
+                ) else {
                     metrics.gap_dropped.fetch_add(1, Ordering::Relaxed);
                     tracing::warn!(id = %event.id, "event carries unmapped content and unmapped = \"refuse\"");
                     continue;

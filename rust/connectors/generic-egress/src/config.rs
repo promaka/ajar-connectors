@@ -36,6 +36,11 @@ pub struct Config {
     /// drop; a mapping cannot strip markings or content on the way out.
     #[serde(default = "default_unmapped")]
     pub unmapped: crate::map::Unmapped,
+    /// Optional: project policy tags into a STANAG 4774-shaped
+    /// confidentiality label on every delivered object. Opt-in per
+    /// deployment; absent means delivered objects are unchanged.
+    #[serde(default)]
+    pub confidentiality_label: Option<crate::label::LabelConfig>,
     /// Events held in memory while the consumer is unreachable. On overflow the
     /// OLDEST is dropped and `egress_gap_dropped_total` increments — bounded
     /// and lossy for a live picture feed, mirroring ingress.

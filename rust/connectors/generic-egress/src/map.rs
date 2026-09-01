@@ -95,6 +95,7 @@ pub fn render(
     event: &Event,
     fields: &std::collections::BTreeMap<String, String>,
     unmapped: Unmapped,
+    label: Option<&crate::label::LabelConfig>,
 ) -> Option<Value> {
     let mut out = Map::new();
     let mut mapped_paths: Vec<&str> = Vec::new();
@@ -120,6 +121,14 @@ pub fn render(
         "governance".into(),
         serde_json::json!({ "egress_signature": "verified" }),
     );
+
+    // Opt-in 4774-shaped label, projected from the same tags delivered above;
+    // additive only, so consumers that never asked for it see no change.
+    if let Some(cfg) = label {
+        if let Some(l) = crate::label::confidentiality_label(cfg, event) {
+            out.insert("confidentiality_label".into(), l);
+        }
+    }
 
     // Whatever governed content remains unnamed is included or refused; there
     // is no way to make it vanish.
@@ -190,6 +199,7 @@ mod tests {
                 ("kind", "entity_type"),
             ]),
             Unmapped::Include,
+            None,
         )
         .unwrap();
         assert_eq!(out["vesselId"], "MMSI-265547210");
@@ -205,11 +215,43 @@ mod tests {
             &event(),
             &mapping(&[("s", "attr:speed")]),
             Unmapped::Include,
+            None,
         )
         .unwrap();
         assert!(out["event_id"].is_string());
         assert!(out["policy_tags"].is_array());
         assert_eq!(out["governance"]["egress_signature"], "verified");
+        assert!(
+            out.get("confidentiality_label").is_none(),
+            "no label config means the delivered format is unchanged"
+        );
+    }
+
+    #[test]
+    fn the_label_is_additive_and_projected_from_the_delivered_tags() {
+        let cfg = crate::label::LabelConfig {
+            policy_identifier: "TEST-POLICY".into(),
+        };
+        let tagged = EventBuilder::new("coastal-radar", "mim:vessel")
+            .new_id()
+            .timestamp("2026-06-10T08:00:00Z")
+            .policy_tag("class:secret")
+            .policy_tag("rel:NATO")
+            .build()
+            .unwrap();
+        let out = render(&tagged, &mapping(&[]), Unmapped::Include, Some(&cfg)).unwrap();
+        // Everything a label-less consumer sees is still there, unchanged.
+        assert!(out["event_id"].is_string());
+        assert!(out["policy_tags"].is_array());
+        // And the label is present, derived from those same tags.
+        assert_eq!(
+            out["confidentiality_label"]["policyIdentifier"],
+            "TEST-POLICY"
+        );
+        assert_eq!(out["confidentiality_label"]["classification"], "SECRET");
+        // An untagged event under the same config gets no label and no error.
+        let out = render(&event(), &mapping(&[]), Unmapped::Include, Some(&cfg)).unwrap();
+        assert!(out.get("confidentiality_label").is_none());
     }
 
     #[test]
@@ -223,6 +265,7 @@ mod tests {
                 ("u", "meta:source_uid"),
             ]),
             Unmapped::Include,
+            None,
         )
         .unwrap();
         assert!(out["trackRef"].is_string());
@@ -237,6 +280,7 @@ mod tests {
             &event(),
             &mapping(&[("latitude", "lat")]),
             Unmapped::Include,
+            None,
         )
         .unwrap();
         assert_eq!(out["unmapped"]["attributes"]["speed"], "8.20");
@@ -245,7 +289,13 @@ mod tests {
 
     #[test]
     fn refuse_mode_rejects_rather_than_strips() {
-        assert!(render(&event(), &mapping(&[("latitude", "lat")]), Unmapped::Refuse).is_none());
+        assert!(render(
+            &event(),
+            &mapping(&[("latitude", "lat")]),
+            Unmapped::Refuse,
+            None
+        )
+        .is_none());
         // Naming everything satisfies it.
         assert!(render(
             &event(),
@@ -254,7 +304,8 @@ mod tests {
                 ("s", "attr:speed"),
                 ("u", "meta:source_uid")
             ]),
-            Unmapped::Refuse
+            Unmapped::Refuse,
+            None
         )
         .is_some());
     }
@@ -269,6 +320,7 @@ mod tests {
                 ("u", "meta:source_uid"),
             ]),
             Unmapped::Include,
+            None,
         )
         .unwrap();
         assert!(out.get("callsign").is_none());

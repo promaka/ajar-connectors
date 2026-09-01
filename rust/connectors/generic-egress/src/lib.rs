@@ -14,6 +14,7 @@
 //! normal and consumers must not see the same event twice from one connector.
 
 pub mod config;
+pub mod label;
 pub mod map;
 
 use std::collections::{HashSet, VecDeque};
