@@ -41,3 +41,12 @@ marking = "policy_tags"
 # Governed content the mapping does not name: "include" (delivered under
 # `unmapped`) or "refuse" (event rejected and counted). No silent drop exists.
 # unmapped = "include"
+
+# Optional: add a STANAG 4774-shaped confidentiality label to every delivered
+# object, projected from the event's policy tags (class:* -> classification,
+# rel:*/releasable:* -> a Releasability category). Additive and opt-in: without
+# this block the delivered format is unchanged, and policy_tags remain in every
+# object either way. Set the identifier to the security policy your accreditor
+# names.
+# [confidentiality_label]
+# policy_identifier = "AJAR-DEPLOYMENT-POLICY"

@@ -13,6 +13,19 @@ Two version lines are tracked independently (see COMPATIBILITY.md):
 
 ## [Unreleased]
 
+### Added
+
+- Generic egress can label every delivered object with a STANAG 4774-shaped
+  confidentiality label, projected from the event's policy tags: `class:*`
+  becomes the classification, `rel:*`/`releasable:*` become a Releasability
+  category, under a deployment-configured policy identifier. A projection by
+  design: enforcement is unchanged everywhere, classification vocabulary
+  passes through rather than being reinterpreted, `policy_tags` remain in
+  every delivered object as the source of truth, and the block is opt-in so
+  no existing consumer's format changes. The binding of label to data is the
+  sealed envelope the tags already live in, signed at origin and re-signed
+  by the egress authority.
+
 ### Fixed
 
 - A comma-separated `nats_url` now actually fails over. The list form was
