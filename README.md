@@ -344,7 +344,10 @@ spool = "/var/lib/ajar/spool"
 ```
 
 That is the whole setup: 256 MiB bound, paced replay, oldest dropped (and
-counted) if the bound fills. The full table tunes it:
+counted) if the bound fills. For a two-box deployment, give `nats_url` both
+endpoints and the connector fails over by itself
+(`nats_url = "tls://box-a:4443,tls://box-b:4443"`): one box down means
+failover, both down means the spool. The full table tunes it:
 
 ```toml
 [spool]
