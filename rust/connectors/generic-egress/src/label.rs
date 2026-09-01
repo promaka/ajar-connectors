@@ -27,6 +27,7 @@ use serde_json::{json, Value};
 
 /// Per-deployment label settings, under `[confidentiality_label]`.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct LabelConfig {
     /// The security policy the label's values are defined by (4774 labels are
     /// meaningless without one). Set it to the policy authority your

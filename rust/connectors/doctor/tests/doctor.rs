@@ -490,6 +490,98 @@ async fn the_full_run_names_the_broken_onboarding_step() {
     assert!(!healthy);
     assert!(text.contains("no longer match"), "{text}");
 
+    // The phases above leave a stale sibling .pub; these phases test other
+    // steps, so restore the key to healthy first.
+    let _ = std::fs::remove_file(dir.join("acme-radar-1.pub"));
+
+    // The transport preflight: a serial device that is not there is the
+    // first naval failure mode, named with the plug-it-in fix.
+    let serial_config = write(
+        &dir,
+        "serial.toml",
+        &format!(
+            "source_id = \"acme-radar-1\"\n\
+             nats_url = \"nats://127.0.0.1:{port}\"\n\
+             signing_key_path = \"{}\"\n\
+             [transport]\n\
+             kind = \"serial\"\n\
+             device = \"{}\"\n",
+            seed_path.display(),
+            dir.join("no-such-tty").display()
+        ),
+    );
+    let (text, healthy) = report::render(
+        &ajar_doctor::run(&Options {
+            config_path: Some(serial_config),
+            sources_dir: None,
+            timeout: Duration::from_secs(2),
+        })
+        .await,
+    );
+    assert!(!healthy);
+    assert!(text.contains("does not exist"), "{text}");
+    assert!(text.contains("plugged in"), "{text}");
+
+    // Present-and-readable is the healthy half of the same check.
+    let fake_tty = write(&dir, "ttyFAKE", "");
+    let serial_ok = write(
+        &dir,
+        "serial-ok.toml",
+        &format!(
+            "source_id = \"acme-radar-1\"\n\
+             nats_url = \"nats://127.0.0.1:{port}\"\n\
+             signing_key_path = \"{}\"\n\
+             [transport]\n\
+             kind = \"serial\"\n\
+             device = \"{fake_tty}\"\n\
+             baud = 38400\n",
+            seed_path.display()
+        ),
+    );
+    let (text, _) = report::render(
+        &ajar_doctor::run(&Options {
+            config_path: Some(serial_ok),
+            sources_dir: None,
+            timeout: Duration::from_secs(2),
+        })
+        .await,
+    );
+    assert!(text.contains("present and readable"), "{text}");
+
+    // A failover list with a dead standby: the doctor probes EVERY endpoint
+    // and names the one that will let the drill down.
+    let dead_port2 = {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        l.local_addr().unwrap().port()
+    };
+    let failover_config = write(
+        &dir,
+        "failover.toml",
+        &format!(
+            "source_id = \"acme-radar-1\"\n\
+             nats_url = \"nats://127.0.0.1:{port},nats://127.0.0.1:{dead_port2}\"\n\
+             signing_key_path = \"{}\"\n\
+             [transport]\n\
+             kind = \"udp\"\n\
+             bind = \"127.0.0.1:0\"\n",
+            seed_path.display()
+        ),
+    );
+    let (text, healthy) = report::render(
+        &ajar_doctor::run(&Options {
+            config_path: Some(failover_config),
+            sources_dir: None,
+            timeout: Duration::from_secs(2),
+        })
+        .await,
+    );
+    assert!(
+        healthy,
+        "a dead standby is a warning, not a failure: {text}"
+    );
+    assert!(text.contains("standby endpoint(s) not answering"), "{text}");
+    assert!(text.contains(&dead_port2.to_string()), "{text}");
+
     // A seed that is neither 32 bytes nor hex: the fix names the mint command.
     let bad_seed = write(&dir, "bad.seed", "definitely not a key");
     let config2 = write(
@@ -534,7 +626,7 @@ async fn the_full_run_names_the_broken_onboarding_step() {
 
     // The stale sibling .pub from the phase above would (rightly) fail the
     // key check; this phase is about the environment path, so clear it.
-    std::fs::remove_file(dir.join("acme-radar-1.pub")).unwrap();
+    let _ = std::fs::remove_file(dir.join("acme-radar-1.pub"));
     std::env::set_var("NATS_URL", format!("nats://127.0.0.1:{port}"));
     std::env::set_var("AJAR_SOURCE_ID", "acme-radar-1");
     std::env::set_var("AJAR_SIGNING_SEED", &seed_path);

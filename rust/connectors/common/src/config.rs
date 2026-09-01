@@ -12,6 +12,7 @@ use serde::Deserialize;
 
 /// A connector's configuration, shared across every connector.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Config {
     /// The connector's Ajar identity. Must match the signing key's registered
     /// profile; a native feed carries no Ajar identity, so it comes from here.
@@ -64,17 +65,50 @@ pub struct Config {
     /// bound and drain rate.
     #[serde(default)]
     pub spool: Option<SpoolSetting>,
+    /// The one tolerated extension section: the generic connector reads its
+    /// `[mapping]` block from the same file with its own loader. Named here so
+    /// `deny_unknown_fields` still rejects actual typos everywhere else.
+    #[serde(default, rename = "mapping")]
+    _mapping_extension: Option<toml::Value>,
 }
 
 /// The `spool` setting: a bare directory string (defaults for everything
 /// else), or the full table for tuning.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(untagged)]
+#[derive(Debug, Clone)]
 pub enum SpoolSetting {
     /// `spool = "/var/lib/ajar/spool"`
     Dir(String),
     /// `[spool]` with `dir`, `max_bytes`, `drain_rate`.
     Full(crate::spool::SpoolConfig),
+}
+
+// Hand-rolled so a typo inside [spool] reports the actual unknown field
+// instead of serde's "did not match any variant of untagged enum".
+impl<'de> serde::Deserialize<'de> for SpoolSetting {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        struct V;
+        impl<'de> serde::de::Visitor<'de> for V {
+            type Value = SpoolSetting;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str(
+                    "a spool directory string, or a [spool] table with dir/max_bytes/drain_rate",
+                )
+            }
+            fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<SpoolSetting, E> {
+                Ok(SpoolSetting::Dir(v.to_string()))
+            }
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                map: A,
+            ) -> Result<SpoolSetting, A::Error> {
+                crate::spool::SpoolConfig::deserialize(
+                    serde::de::value::MapAccessDeserializer::new(map),
+                )
+                .map(SpoolSetting::Full)
+            }
+        }
+        d.deserialize_any(V)
+    }
 }
 
 impl Config {
@@ -91,6 +125,7 @@ impl Config {
 /// A sensor's fixed geodetic site (WGS-84), used to geolocate sensor-relative
 /// measurements. See [`Config::sensor`].
 #[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SensorSite {
     /// Latitude, degrees.
     pub lat: f64,
@@ -152,14 +187,19 @@ fn default_http_path() -> String {
 /// to be built with the matching Cargo feature; DDS is reached through an
 /// external gateway that re-publishes onto one of these kinds, not natively.
 #[derive(Debug, Clone, Deserialize)]
-#[serde(tag = "kind", rename_all = "kebab-case")]
+#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum Transport {
     /// UDP multicast — the situational-awareness broadcast default (CoT, ASTERIX).
     UdpMulticast {
-        /// Local bind, `ip:port` (e.g. `0.0.0.0:6969`).
+        /// Local bind, `ip:port`. `0.0.0.0:6969` joins on the kernel's chosen
+        /// interface; naming an IP (e.g. `10.1.1.5:6969`) joins on that NIC.
         bind: String,
         /// Multicast group to join (e.g. `239.2.3.1`).
         group: String,
+        /// Interface IP to join on, for dual-homed boxes where the group must
+        /// be heard on a specific network. Overrides the bind IP's role.
+        #[serde(default)]
+        interface: Option<String>,
     },
     /// UDP unicast to a local bind.
     Udp {
@@ -441,6 +481,31 @@ mod tests {
         // udp-multicast without a group must not parse.
         let bad = "[transport]\nkind='udp-multicast'\nbind='0.0.0.0:6969'";
         assert!(toml::from_str::<W>(bad).is_err());
+    }
+
+    #[test]
+    fn a_typo_is_an_error_naming_the_field_not_a_silent_default() {
+        let base = "source_id='s'\nnats_url='nats://x:4222'\nsigning_key_path='k'\n";
+        // Top level.
+        let bad = format!("{base}defaut_hostility='Friend'\n[transport]\nkind='stdin'\n");
+        let err = toml::from_str::<Config>(&bad).unwrap_err().to_string();
+        assert!(err.contains("defaut_hostility"), "{err}");
+        // Inside [transport].
+        let bad = format!("{base}[transport]\nkind='udp'\nbindd='0.0.0.0:1'\n");
+        let err = toml::from_str::<Config>(&bad).unwrap_err().to_string();
+        assert!(err.contains("bindd"), "{err}");
+        // Inside [spool]: the classic max_byte slip, named, not defaulted.
+        let bad = format!("{base}[transport]\nkind='stdin'\n[spool]\ndir='/d'\nmax_byte=1\n");
+        let err = toml::from_str::<Config>(&bad).unwrap_err().to_string();
+        assert!(err.contains("max_byte"), "{err}");
+        // Inside [sensor].
+        let bad = format!("{base}[transport]\nkind='stdin'\n[sensor]\nlat=1.0\nlonn=2.0\n");
+        let err = toml::from_str::<Config>(&bad).unwrap_err().to_string();
+        assert!(err.contains("lonn"), "{err}");
+        // The generic connector's [mapping] block is the one tolerated
+        // extension: same file, its own loader.
+        let ok = format!("{base}[transport]\nkind='stdin'\n[mapping]\nentity_type='mim:vessel'\n");
+        assert!(toml::from_str::<Config>(&ok).is_ok());
     }
 
     #[test]

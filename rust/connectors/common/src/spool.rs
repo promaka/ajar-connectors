@@ -27,6 +27,7 @@ use serde::Deserialize;
 
 /// Spool configuration, under `[spool]` in the connector config.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SpoolConfig {
     /// Directory for the segment log. Created if missing; must be writable
     /// and should survive restarts (a real disk, not tmpfs, if the events
