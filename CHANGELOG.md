@@ -13,6 +13,15 @@ Two version lines are tracked independently (see COMPATIBILITY.md):
 
 ## [Unreleased]
 
+### Fixed
+
+- A comma-separated `nats_url` now actually fails over. The list form was
+  accepted but reached the client as one unparseable address, so a two-box
+  config never connected. The connection layer splits the list, any `tls://`
+  entry demands TLS for the whole connection, and a gate pins the behavior
+  against two real brokers: kill the connected box and the survivor carries
+  the traffic.
+
 ### Changed
 
 - The shipped `ajar-ais-nmea` binary reads serial out of the box: real

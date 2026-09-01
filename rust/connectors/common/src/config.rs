@@ -17,7 +17,9 @@ pub struct Config {
     /// profile; a native feed carries no Ajar identity, so it comes from here.
     pub source_id: String,
     /// NATS URL Core listens on (`nats://…`, or `tls://…` with the `AJAR_TLS_*`
-    /// env for mTLS).
+    /// env for mTLS). A comma-separated list is a failover set: the connector
+    /// uses one endpoint and moves to the next when it dies — the two-box
+    /// deployment pattern. Any `tls://` entry demands TLS for the connection.
     pub nats_url: String,
     /// Ingest subject prefix; the connector publishes to `<prefix>.<source_id>`.
     #[serde(default = "default_subject_prefix")]

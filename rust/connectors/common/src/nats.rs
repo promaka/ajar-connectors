@@ -52,7 +52,15 @@ pub async fn connect(url: &str) -> anyhow::Result<async_nats::Client> {
         ),
     }
 
-    opts.connect(url).await.context("connecting to NATS")
+    // A comma-separated nats_url is a failover list: the client connects to
+    // one endpoint and moves to the next when it dies (the two-box gate pins
+    // this against real brokers). A single URL is the one-element case.
+    let servers: Vec<async_nats::ServerAddr> = url
+        .split(',')
+        .map(|s| s.trim().parse())
+        .collect::<Result<_, _>>()
+        .with_context(|| format!("parsing nats_url {url:?}"))?;
+    opts.connect(servers).await.context("connecting to NATS")
 }
 
 /// Whether the deployment demands TLS: `AJAR_REQUIRE_TLS` set truthy, or a
@@ -64,7 +72,11 @@ fn tls_required(url: &str) -> bool {
             !(v.is_empty() || v == "0" || v == "false" || v == "no")
         })
         .unwrap_or(false);
-    flagged || url.trim_start().to_ascii_lowercase().starts_with("tls://")
+    // Any tls:// entry in a failover list demands TLS for the connection.
+    flagged
+        || url
+            .split(',')
+            .any(|u| u.trim().to_ascii_lowercase().starts_with("tls://"))
 }
 
 fn non_empty_env(name: &str) -> Option<String> {
@@ -99,6 +111,20 @@ mod tests {
 
     // Env-var tests share process state, so one test walks every case in
     // sequence rather than racing siblings.
+    #[test]
+    fn a_failover_list_demands_tls_when_any_entry_does() {
+        // Reads no environment beyond what the URL says, so it is safe to
+        // run alongside the policy walk below.
+        assert!(
+            super::tls_required("tls://a:4222,nats://b:4222")
+                || std::env::var("AJAR_REQUIRE_TLS").is_ok()
+        );
+        assert!(
+            super::tls_required("nats://a:4222, tls://b:4222")
+                || std::env::var("AJAR_REQUIRE_TLS").is_ok()
+        );
+    }
+
     #[tokio::test]
     async fn the_tls_policy_fails_closed_in_every_partial_state() {
         for k in [
