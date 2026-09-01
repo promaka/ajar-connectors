@@ -13,6 +13,14 @@ Two version lines are tracked independently (see COMPATIBILITY.md):
 
 ## [Unreleased]
 
+### Changed
+
+- The shipped `ajar-ais-nmea` binary reads serial out of the box: real
+  bridges deliver NMEA over RS-422/RS-232, so the `serial` transport is now a
+  default feature of that connector instead of a source-only build option.
+  `--no-default-features` restores the lean build. The example config shows
+  the serial block and the usual permission fix.
+
 ## [0.5.8] - 2026-09-01
 
 ### Added

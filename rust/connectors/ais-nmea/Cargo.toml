@@ -14,6 +14,13 @@ publish = false
 name = "ajar-ais-nmea"
 path = "src/main.rs"
 
+[features]
+# Real bridges deliver NMEA over RS-422/RS-232, so the shipped binary reads a
+# serial port out of the box; a lean no-serial build remains one flag away
+# (--no-default-features).
+default = ["serial"]
+serial = ["ajar-connector-common/serial"]
+
 [dependencies]
 ajar-connector.workspace = true
 ajar-connector-common.workspace = true

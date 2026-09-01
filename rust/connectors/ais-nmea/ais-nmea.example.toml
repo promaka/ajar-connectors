@@ -30,6 +30,13 @@ connect = "ais-feed.example.mil:5631"
 #   kind = "udp"
 #   bind = "0.0.0.0:10110"
 
+# ...or straight off the bridge wiring: NMEA over RS-422/RS-232 serial. The
+# shipped binary reads serial out of the box. If the port opens Permission
+# denied, add the service user to the port's group (usually dialout).
+#   kind = "serial"
+#   device = "/dev/ttyUSB0"
+#   baud = 38400            # AIS is 38400; classic NMEA instruments are 4800
+
 # ARPA radar targets ($--TTM) on the same feed are decoded too: geolocated from
 # own-ship GGA/RMC fixes on the bus, or from this fixed site for a shore-mounted
 # radar. Without either, range/bearing ride as metadata and no position is
