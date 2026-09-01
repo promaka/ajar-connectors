@@ -14,6 +14,7 @@ use serde::Deserialize;
 pub const EGRESS_PREFIX: &str = "ajar.egress.";
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Config {
     /// Ajar's NATS endpoint (`tls://…` in production, with the subscribe-only
     /// client certificate as this consumer's transport identity).
@@ -49,6 +50,7 @@ pub struct Config {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Deliver {
     /// Consumer endpoint; each event is one HTTP POST of one JSON object.
     pub url: String,
@@ -65,6 +67,8 @@ pub struct Deliver {
 /// Consumer field name (left) = event path (right). Paths: `id`, `source_id`,
 /// `entity_type`, `timestamp`, `lat`, `lon`, `alt_m`, `confidence`,
 /// `attr:<name>`, `meta:<name>`.
+// No deny_unknown_fields here: the mapping IS a free-form map of consumer
+// field names, and every one of them is deliberately "unknown".
 #[derive(Debug, Deserialize)]
 pub struct Mapping {
     #[serde(flatten)]

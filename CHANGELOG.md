@@ -15,6 +15,26 @@ Two version lines are tracked independently (see COMPATIBILITY.md):
 
 ### Fixed
 
+- A config typo is an error naming the field, not a silently applied
+  default: unknown keys are rejected across the connector config, transports,
+  `[spool]`, `[sensor]` and the egress config (the generic mapping stays
+  free-form by design, and `[mapping]` remains the one tolerated extension
+  section).
+- Multicast on a dual-homed box can name its interface: `bind` with a real IP
+  joins on that NIC (it was silently ignored), and a new
+  `transport.interface` field overrides it. UDP socket errors now name the
+  bind, group and interface involved; an IPv6 bind is refused with the fix
+  spelled out instead of a bare OS error.
+- Spool appends that fail (disk full, permissions) are counted as
+  `connector_spool_failed_total` and logged as lost, instead of incrementing
+  `connector_spooled_total` for events that never reached disk. The health
+  endpoint no longer wedges on a connection that sends nothing.
+- ajar-doctor preflights the native-feed transport: a real multicast
+  join-and-leave on the configured interface, and serial device presence and
+  readability with the dialout fix spelled out. A failover `nats_url` has
+  every endpoint probed, so a dead standby is named before the drill finds
+  it; a `tls://` anywhere in the list demands TLS.
+
 - ais-nmea no longer rejects the rest of a bridge bus: heading, depth, wind
   and other short NMEA sentences sharing the wire with AIS are ignored and
   only sentences claiming to be AIVDM/AIVDO are held to AIVDM shape. TTM

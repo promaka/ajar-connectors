@@ -23,16 +23,25 @@ impl Endpoint {
     }
 }
 
-/// Parse the first endpoint out of a `nats_url`. Accepts `nats://host:port`,
-/// `tls://host:port`, bare `host:port`, an optional `user:pass@` block, and a
-/// comma-separated list (only the first entry is probed; a broken first entry
-/// is what the connector would hit too).
+/// Parse every endpoint of a `nats_url` failover list (a single URL is the
+/// one-element case). Accepts `nats://host:port`, `tls://host:port`, bare
+/// `host:port`, and an optional `user:pass@` block per entry.
+pub fn parse_urls(url: &str) -> anyhow::Result<Vec<Endpoint>> {
+    url.split(',').map(|u| parse_one(u.trim())).collect()
+}
+
+/// Parse the first endpoint out of a `nats_url` (compat: probes that only
+/// need somewhere to dial).
 pub fn parse_url(url: &str) -> anyhow::Result<Endpoint> {
-    let first = url
-        .split(',')
-        .next()
-        .expect("split yields at least one item")
-        .trim();
+    parse_one(
+        url.split(',')
+            .next()
+            .expect("split yields at least one item")
+            .trim(),
+    )
+}
+
+fn parse_one(first: &str) -> anyhow::Result<Endpoint> {
     let lower = first.to_ascii_lowercase();
     let (tls_scheme, rest) = if let Some(r) = lower.strip_prefix("tls://") {
         (true, &first[first.len() - r.len()..])
@@ -52,7 +61,7 @@ pub fn parse_url(url: &str) -> anyhow::Result<Endpoint> {
         None => (rest, 4222),
     };
     if host.is_empty() {
-        return Err(anyhow!("no host in nats_url {url:?}"));
+        return Err(anyhow!("no host in nats_url entry {first:?}"));
     }
     Ok(Endpoint {
         host: host.to_string(),

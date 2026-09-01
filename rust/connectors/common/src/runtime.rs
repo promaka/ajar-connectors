@@ -67,6 +67,9 @@ pub(crate) struct Metrics {
     pub spool_corrupt: Arc<AtomicU64>,
     /// Oldest spool segments dropped to stay under the configured bound.
     pub spool_dropped_segments: Arc<AtomicU64>,
+    /// Spool appends that FAILED (disk full, permissions): the event is lost
+    /// and this says so, instead of a phantom increment of `spooled`.
+    pub spool_failed: Arc<AtomicU64>,
 }
 
 /// How long one publish may stall before the event is shed. Load-shedding keeps
@@ -127,106 +130,107 @@ pub async fn run(
     let mut buf = vec![0u8; crate::MAX_FRAME_BYTES];
     loop {
         tokio::select! {
-            _ = &mut shutdown => {
-                tracing::info!("shutdown signal — flushing pending publishes, stopping ingest");
-                let _ = client.flush().await;
-                break;
-            }
-            recv = source.recv(&mut buf) => {
-                let n = match recv {
-                    Ok(n) => n,
-                    Err(e) => {
-                        tracing::warn!(error = %e, "receive error");
-                        // Back off so a persistently-failing source cannot spin the
-                        // loop (a closed pipe, an unreadable device).
-                        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                        continue;
+                    _ = &mut shutdown => {
+                        tracing::info!("shutdown signal — flushing pending publishes, stopping ingest");
+                        let _ = client.flush().await;
+                        break;
                     }
-                };
-                metrics.received.fetch_add(1, Ordering::Relaxed);
-                match parser.parse(&buf[..n]) {
-                    // Zero events (keep-alive, unmapped, buffered fragment) simply
-                    // publishes nothing; a batched frame publishes each in turn.
-                    Ok(events) => {
-                        for event in events {
-                            let headers = ingest_headers(&event.id);
-                            let sealed = seal(&canonical_bytes(&event), &key);
-                            // Link known down + spool configured: spool at
-                            // line rate instead of paying the publish
-                            // deadline per event. (The async client buffers
-                            // publishes while reconnecting, so without this
-                            // check a short outage hides in the buffer and a
-                            // long one stalls the loop event by event.)
-                            if let Some(spool) = &spool {
-                                use async_nats::connection::State;
-                                if client.connection_state() != State::Connected {
-                                    let dropped = spool
-                                        .lock()
-                                        .await
-                                        .append(&event.id, &sealed)
-                                        .map_err(|e| {
-                                            tracing::warn!(error = %e, "spool append failed");
-                                            e
-                                        })
-                                        .unwrap_or(false);
-                                    metrics.spooled.fetch_add(1, Ordering::Relaxed);
-                                    if dropped {
-                                        metrics
-                                            .spool_dropped_segments
-                                            .fetch_add(1, Ordering::Relaxed);
-                                    }
-                                    continue;
-                                }
+                    recv = source.recv(&mut buf) => {
+                        let n = match recv {
+                            Ok(n) => n,
+                            Err(e) => {
+                                tracing::warn!(error = %e, "receive error");
+                                // Back off so a persistently-failing source cannot spin the
+                                // loop (a closed pipe, an unreadable device).
+                                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                                continue;
                             }
-                            let publish = client.publish_with_headers(
-                                subject.clone(),
-                                headers,
-                                bytes::Bytes::from(sealed.clone()),
-                            );
-                            match tokio::time::timeout(PUBLISH_DEADLINE, publish).await {
-                                Ok(Ok(())) => {
-                                    metrics.published.fetch_add(1, Ordering::Relaxed);
-                                }
-                                // Publish failed or stalled: spool when
-                                // configured, shed (counted) when not.
-                                Ok(Err(_)) | Err(_) => match &spool {
-                                    Some(spool) => {
-                                        let dropped = spool
-                                            .lock()
-                                            .await
-                                            .append(&event.id, &sealed)
-                                            .map_err(|e| {
-                                                tracing::warn!(error = %e, "spool append failed");
-                                                e
-                                            })
-                                            .unwrap_or(false);
-                                        metrics.spooled.fetch_add(1, Ordering::Relaxed);
-                                        if dropped {
-                                            metrics
-                                                .spool_dropped_segments
-                                                .fetch_add(1, Ordering::Relaxed);
+                        };
+                        metrics.received.fetch_add(1, Ordering::Relaxed);
+                        match parser.parse(&buf[..n]) {
+                            // Zero events (keep-alive, unmapped, buffered fragment) simply
+                            // publishes nothing; a batched frame publishes each in turn.
+                            Ok(events) => {
+                                for event in events {
+                                    let headers = ingest_headers(&event.id);
+                                    let sealed = seal(&canonical_bytes(&event), &key);
+                                    // Link known down + spool configured: spool at
+                                    // line rate instead of paying the publish
+                                    // deadline per event. (The async client buffers
+                                    // publishes while reconnecting, so without this
+                                    // check a short outage hides in the buffer and a
+                                    // long one stalls the loop event by event.)
+                                    if let Some(spool) = &spool {
+                                        use async_nats::connection::State;
+                                        if client.connection_state() != State::Connected {
+                                            match spool.lock().await.append(&event.id, &sealed) {
+                                                Ok(dropped) => {
+                                                    metrics.spooled.fetch_add(1, Ordering::Relaxed);
+                                                    if dropped {
+                                                        metrics
+                                                            .spool_dropped_segments
+                                                            .fetch_add(1, Ordering::Relaxed);
+                                                    }
+                                                }
+                                                Err(e) => {
+                                                    metrics.spool_failed.fetch_add(1, Ordering::Relaxed);
+                                                    tracing::warn!(error = %e, "spool append FAILED - event lost");
+                                                }
+                                            }
+                                            continue;
                                         }
                                     }
-                                    None => {
-                                        metrics.dropped_backpressure.fetch_add(1, Ordering::Relaxed);
-                                        tracing::warn!(
-                                            deadline = ?PUBLISH_DEADLINE,
-                                            "publish stalled, shedding event (backpressure)"
-                                        );
+                                    let publish = client.publish_with_headers(
+                                        subject.clone(),
+                                        headers,
+                                        bytes::Bytes::from(sealed.clone()),
+                                    );
+                                    match tokio::time::timeout(PUBLISH_DEADLINE, publish).await {
+                                        Ok(Ok(())) => {
+                                            metrics.published.fetch_add(1, Ordering::Relaxed);
+                                        }
+                                        // Publish failed or stalled: spool when
+                                        // configured, shed (counted) when not.
+                                        Ok(Err(_)) | Err(_) => match &spool {
+                                            Some(spool) => {
+                                                match spool.lock().await.append(&event.id, &sealed) {
+                                                    Ok(dropped) => {
+                                                        metrics.spooled.fetch_add(1, Ordering::Relaxed);
+                                                        if dropped {
+                                                            metrics
+                                                                .spool_dropped_segments
+                                                                .fetch_add(1, Ordering::Relaxed);
+                                                        }
+                                                    }
+                                                    Err(e) => {
+                                                        metrics
+                                                            .spool_failed
+                                                            .fetch_add(1, Ordering::Relaxed);
+                                                        tracing::warn!(error = %e,
+                                                            "spool append FAILED - event lost");
+                                                    }
+                                                }
+                                            }
+        None => {
+                                                metrics.dropped_backpressure.fetch_add(1, Ordering::Relaxed);
+                                                tracing::warn!(
+                                                    deadline = ?PUBLISH_DEADLINE,
+                                                    "publish stalled, shedding event (backpressure)"
+                                                );
+                                            }
+                                        },
                                     }
-                                },
+                                }
+                            }
+                            Err(reason) => {
+                                metrics.rejected.fetch_add(1, Ordering::Relaxed);
+                                // The reason is surfaced, not just counted — an operator
+                                // debugging live equipment needs to see *why* it dropped.
+                                tracing::warn!(reason = %reason, "dropping unparseable frame");
                             }
                         }
                     }
-                    Err(reason) => {
-                        metrics.rejected.fetch_add(1, Ordering::Relaxed);
-                        // The reason is surfaced, not just counted — an operator
-                        // debugging live equipment needs to see *why* it dropped.
-                        tracing::warn!(reason = %reason, "dropping unparseable frame");
-                    }
                 }
-            }
-        }
     }
 
     if let Some(spool) = &spool {

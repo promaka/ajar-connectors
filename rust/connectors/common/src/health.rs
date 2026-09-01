@@ -34,6 +34,9 @@ pub fn spawn_counters(counters: Vec<(&'static str, Arc<AtomicU64>)>) {
         tracing::info!(addr = %addr, "health endpoint on /healthz and /metrics");
         for stream in listener.incoming() {
             let Ok(mut stream) = stream else { continue };
+            // A connection that opens and sends nothing (a port scanner, a
+            // half-configured probe) must not wedge the single-threaded loop.
+            let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(2)));
             let mut buf = [0u8; 512];
             let n = stream.read(&mut buf).unwrap_or(0);
             let req = String::from_utf8_lossy(&buf[..n]);
@@ -80,6 +83,7 @@ pub(crate) fn spawn(metrics: Arc<Metrics>, extra: Vec<(&'static str, Arc<AtomicU
             "connector_spool_dropped_segments_total",
             metrics.spool_dropped_segments.clone(),
         ),
+        ("connector_spool_failed_total", metrics.spool_failed.clone()),
     ];
     counters.extend(extra);
     spawn_counters(counters);
