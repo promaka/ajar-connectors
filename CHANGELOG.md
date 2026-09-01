@@ -13,6 +13,8 @@ Two version lines are tracked independently (see COMPATIBILITY.md):
 
 ## [Unreleased]
 
+## [0.5.8] - 2026-09-01
+
 ### Added
 
 - `ajar_connector.producer` (Python, `pip install "ajar-connector[producer]"`):
