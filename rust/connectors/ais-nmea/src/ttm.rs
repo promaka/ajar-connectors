@@ -56,6 +56,12 @@ pub struct TtmState {
     fix: Mutex<Option<OwnFix>>,
     /// Shore installation: a fixed observer from config.
     site: Option<(f64, f64)>,
+    /// TTM reports whose status is not T (tracking): lost and acquiring
+    /// targets produce no event by design (a lost target's last report is
+    /// stale), but the operator can SEE that on /metrics instead of wondering
+    /// where the targets went. A downstream deletion signal needs a contract
+    /// change; until then this counter is the honest trace.
+    pub non_tracking: std::sync::Arc<std::sync::atomic::AtomicU64>,
 }
 
 /// One tracked target, decoded and (when possible) geolocated.
@@ -85,6 +91,7 @@ impl TtmState {
         Self {
             fix: Mutex::new(None),
             site,
+            non_tracking: Default::default(),
         }
     }
 
@@ -162,7 +169,10 @@ impl TtmState {
         }
         // Only a target the radar itself calls tracked becomes an event; a
         // lost target's last report is stale and an acquiring one is noise.
+        // Counted, so the picture's missing targets are explainable.
         if f[12] != "T" {
+            self.non_tracking
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             return Ok(None);
         }
         let number = f[1].trim();
@@ -299,6 +309,36 @@ pub fn to_event(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn lost_and_acquiring_targets_are_counted_not_silently_absent() {
+        let state = TtmState::new(Some((60.0, 25.0)));
+        let cs = |body: &str| -> String {
+            let x = body.bytes().fold(0u8, |a, b| a ^ b);
+            format!("${body}*{x:02X}")
+        };
+        // status L = lost, Q = acquiring: no event, one count each.
+        for status in ["L", "Q"] {
+            let s = cs(&format!(
+                "RATTM,03,2.5,45.0,T,10.0,90.0,T,1.0,5.0,N,TGT03,{status},"
+            ));
+            let out = state
+                .decode_ttm(&fields_of(&s), s.as_bytes().to_vec())
+                .unwrap();
+            assert!(out.is_none(), "{status}: not an event");
+        }
+        assert_eq!(
+            state
+                .non_tracking
+                .load(std::sync::atomic::Ordering::Relaxed),
+            2
+        );
+    }
+
+    fn fields_of(s: &str) -> Vec<&str> {
+        let star = s.find('*').unwrap_or(s.len());
+        s[1..star].split(',').collect()
+    }
+
     use super::*;
 
     /// Wrap a body in NMEA framing with a computed checksum, so tests never

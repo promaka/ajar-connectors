@@ -37,12 +37,18 @@ const ANGLE_16: f64 = 360.0 / 65_536.0;
 #[derive(Debug, PartialEq, Eq)]
 pub enum AsterixError {
     /// The block header (CAT + 2-byte length) was incomplete or inconsistent.
-    BadBlock,
+    BadBlock {
+        /// The block's category byte, when one could be read.
+        cat: Option<u8>,
+        /// The block's declared length and the bytes actually available.
+        declared: usize,
+        have: usize,
+    },
     /// A data item ran past the end of the buffer.
     Truncated,
     /// A record referenced a UAP item this decoder does not length-model; it stops
     /// rather than misalign. (See the module scope note.)
-    UnsupportedItem(u8),
+    UnsupportedItem { cat: u8, frn: u8 },
     /// The canonical event failed to build (a propagated invariant violation).
     Build(String),
 }
@@ -50,10 +56,29 @@ pub enum AsterixError {
 impl std::fmt::Display for AsterixError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            AsterixError::BadBlock => write!(f, "malformed ASTERIX data block"),
+            AsterixError::BadBlock {
+                cat,
+                declared,
+                have,
+            } => match cat {
+                Some(c) => write!(
+                    f,
+                    "malformed ASTERIX data block: CAT{c:03} declares {declared} bytes, \
+                     {have} available"
+                ),
+                None => write!(
+                    f,
+                    "malformed ASTERIX data block: {have} bytes is too short for a \
+                     category and length"
+                ),
+            },
             AsterixError::Truncated => write!(f, "ASTERIX item runs past end of block"),
-            AsterixError::UnsupportedItem(frn) => {
-                write!(f, "unsupported ASTERIX UAP item (FRN {frn})")
+            AsterixError::UnsupportedItem { cat, frn } => {
+                write!(
+                    f,
+                    "CAT{cat:03} FRN {frn} is not length-modelled by this decoder; the \
+                     rest of this data block is dropped rather than misread"
+                )
             }
             AsterixError::Build(e) => write!(f, "event build failed: {e}"),
         }
@@ -279,21 +304,42 @@ fn decode_048(items: &[(u8, &[u8])], sensor: Option<&Sensor>) -> AsterixTarget {
         match frn {
             1 => (t.sac, t.sic) = (item[0], item[1]),
             2 => t.time_of_day = Some(be(item, 0, 3) as f64 / 128.0),
+            3 => {
+                // I048/020 Target Report Descriptor: the truth bits. SIM
+                // (simulated), RAB (field monitor) in the first part; TST
+                // (test target) in the first extension when present.
+                let o1 = item[0];
+                t.simulated = o1 & 0x10 != 0;
+                t.field_monitor = o1 & 0x02 != 0;
+                if o1 & 0x01 != 0 {
+                    if let Some(&ext) = item.get(1) {
+                        t.test_target = ext & 0x80 != 0;
+                    }
+                }
+            }
             4 => {
                 // Measured position: RHO (LSB 1/256 NM), THETA (LSB 360/2^16 deg).
+                // Geolocation happens after the loop: RHO is SLANT range, and
+                // the flight level needed to correct it decodes later (FRN 6).
                 let rho_nm = u16::from_be_bytes([item[0], item[1]]) as f64 / 256.0;
                 let theta = u16::from_be_bytes([item[2], item[3]]) as f64 * ANGLE_16;
                 t.polar = Some((rho_nm, theta));
-                if let Some(s) = sensor {
-                    let (lat, lon) = forward_geodetic(s.lat, s.lon, theta, rho_nm * NM_TO_M);
-                    t.set_pos(lat, lon);
+            }
+            5 => {
+                // V (invalid) or G (garbled) means the code cannot be trusted.
+                // An untrusted squawk is omitted, never published as clean.
+                let w = u16::from_be_bytes([item[0], item[1]]);
+                if w & 0xC000 == 0 {
+                    t.squawk = Some(mode_3a(w));
                 }
             }
-            5 => t.squawk = Some(mode_3a(u16::from_be_bytes([item[0], item[1]]))),
             6 => {
                 // Flight level: bits 14..1 signed two's-complement, LSB 25 ft.
-                let raw = u16::from_be_bytes([item[0], item[1]]) & 0x3FFF;
-                t.alt_ft = Some(sign_extend(raw as u64, 14) as f64 * 25.0);
+                // Same V/G rule as the squawk: garbled altitude is no altitude.
+                if item[0] & 0xC0 == 0 {
+                    let raw = u16::from_be_bytes([item[0], item[1]]) & 0x3FFF;
+                    t.alt_ft = Some(sign_extend(raw as u64, 14) as f64 * 25.0);
+                }
             }
             8 => t.icao = Some(be(item, 0, 3) as u32),
             9 => t.callsign = aircraft_id(item),
@@ -307,6 +353,23 @@ fn decode_048(items: &[(u8, &[u8])], sensor: Option<&Sensor>) -> AsterixTarget {
             }
             _ => {}
         }
+    }
+    if let (Some((rho_nm, theta)), Some(s)) = (t.polar, sensor) {
+        // I048/040 RHO is SLANT range. Project it to ground range with the
+        // decoded flight level before the forward solution (pressure altitude
+        // as the geometric proxy; the residual is small against the radar's
+        // own accuracy, and using the slant range raw overstates ground
+        // distance by the whole altitude triangle). A return steeper than
+        // vertical is clamped to the site.
+        let slant_m = rho_nm * NM_TO_M;
+        let height_m = t.alt_ft.map(|ft| ft * 0.3048 - s.alt_m).unwrap_or(0.0);
+        let ground_m = if slant_m > height_m.abs() {
+            (slant_m * slant_m - height_m * height_m).sqrt()
+        } else {
+            0.0
+        };
+        let (lat, lon) = forward_geodetic(s.lat, s.lon, theta, ground_m);
+        t.set_pos(lat, lon);
     }
     t
 }
@@ -559,6 +622,12 @@ pub struct AsterixTarget {
     pub emitter: Option<&'static str>,
     /// Time of day / track, seconds since UTC midnight (native; kept in metadata).
     pub time_of_day: Option<f64>,
+    /// I048/020 target report descriptor truth bits: simulated target, test
+    /// target, field monitor. Any of them set means this is NOT a real track
+    /// and must never reach the operational picture as one.
+    pub simulated: bool,
+    pub test_target: bool,
+    pub field_monitor: bool,
     /// The raw bytes of this record, preserved verbatim in the signed payload.
     pub raw: Vec<u8>,
 }
@@ -582,6 +651,9 @@ impl AsterixTarget {
             callsign: None,
             emitter: None,
             time_of_day: None,
+            simulated: false,
+            test_target: false,
+            field_monitor: false,
             raw: Vec::new(),
         }
     }
@@ -601,6 +673,8 @@ impl AsterixTarget {
 pub struct Sensor {
     pub lat: f64,
     pub lon: f64,
+    /// Site elevation in metres, used to convert slant range to ground range.
+    pub alt_m: f64,
 }
 
 // ============================================================================
@@ -612,6 +686,12 @@ pub struct AsterixParser {
     source_id: String,
     enrichment: Enrichment,
     sensor: Option<Sensor>,
+    /// Data blocks for categories this connector does not decode: skipped and
+    /// counted, never an error (radar heads interleave CAT034 service blocks
+    /// with CAT048 targets in the same datagram).
+    ignored_blocks: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    /// SIM/TST/RAB reports: decoded, counted, and kept OUT of the picture.
+    test_targets: std::sync::Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl AsterixParser {
@@ -620,6 +700,8 @@ impl AsterixParser {
             source_id: source_id.into(),
             enrichment,
             sensor: None,
+            ignored_blocks: Default::default(),
+            test_targets: Default::default(),
         }
     }
 
@@ -629,16 +711,61 @@ impl AsterixParser {
         self
     }
 
+    /// Decode every track-bearing record in every data block of one datagram.
+    /// Radar heads pack multiple blocks per datagram (CAT034 service messages
+    /// interleaved with CAT048 targets is the standard shape); a category this
+    /// connector does not decode is skipped and counted, never an error, and
+    /// never takes the blocks after it down with it.
+    pub fn parse_frame(&self, frame: &[u8]) -> Result<Vec<AsterixTarget>, AsterixError> {
+        let mut targets = Vec::new();
+        let mut off = 0usize;
+        while off < frame.len() {
+            let rest = &frame[off..];
+            if rest.len() < 3 {
+                return Err(AsterixError::BadBlock {
+                    cat: None,
+                    declared: 0,
+                    have: rest.len(),
+                });
+            }
+            let cat = rest[0];
+            let len = u16::from_be_bytes([rest[1], rest[2]]) as usize;
+            if len < 3 || len > rest.len() {
+                return Err(AsterixError::BadBlock {
+                    cat: Some(cat),
+                    declared: len,
+                    have: rest.len(),
+                });
+            }
+            if matches!(cat, CAT021 | CAT048 | CAT062) {
+                targets.extend(self.parse_block(&rest[..len])?);
+            } else {
+                self.ignored_blocks
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
+            off += len;
+        }
+        Ok(targets)
+    }
+
     /// Decode every track-bearing record in one data block. A block for a category
     /// this connector does not handle is not an error, just not ours.
     pub fn parse_block(&self, frame: &[u8]) -> Result<Vec<AsterixTarget>, AsterixError> {
         if frame.len() < 3 {
-            return Err(AsterixError::BadBlock);
+            return Err(AsterixError::BadBlock {
+                cat: None,
+                declared: 0,
+                have: frame.len(),
+            });
         }
         let cat = frame[0];
         let len = u16::from_be_bytes([frame[1], frame[2]]) as usize;
         if len < 3 || len > frame.len() {
-            return Err(AsterixError::BadBlock);
+            return Err(AsterixError::BadBlock {
+                cat: Some(cat),
+                declared: len,
+                have: frame.len(),
+            });
         }
         let uap: &[Field] = match cat {
             CAT021 => UAP021,
@@ -650,7 +777,7 @@ impl AsterixParser {
         let mut targets = Vec::new();
         let mut off = 3;
         while off < len {
-            let (items, next) = walk_record(uap, &frame[..len], off)?;
+            let (items, next) = walk_record_cat(cat, uap, &frame[..len], off)?;
             let mut t = match cat {
                 CAT021 => decode_021(&items),
                 CAT048 => decode_048(&items, self.sensor.as_ref()),
@@ -658,7 +785,12 @@ impl AsterixParser {
                 _ => unreachable!(),
             };
             if next <= off {
-                return Err(AsterixError::BadBlock); // no progress would loop forever
+                // No progress would loop forever.
+                return Err(AsterixError::BadBlock {
+                    cat: Some(cat),
+                    declared: len,
+                    have: off,
+                });
             }
             if t.is_track() {
                 t.raw = frame[off..next.min(len)].to_vec();
@@ -740,7 +872,8 @@ impl AsterixParser {
 
 /// Walk one record starting at `off`: decode the FSPEC, slice each present item by
 /// its UAP length model, and return `(FRN, bytes)` pairs plus the next offset.
-fn walk_record<'a>(
+fn walk_record_cat<'a>(
+    cat: u8,
     uap: &[Field],
     data: &'a [u8],
     mut off: usize,
@@ -766,12 +899,14 @@ fn walk_record<'a>(
     for &frn in &present {
         let field = *uap
             .get(frn as usize - 1)
-            .ok_or(AsterixError::UnsupportedItem(frn))?;
+            .ok_or(AsterixError::UnsupportedItem { cat, frn })?;
         let len = match field_len(field, data, off) {
             Some(len) => len,
             None => {
                 return Err(match field {
-                    Field::Opaque | Field::Compound(_) => AsterixError::UnsupportedItem(frn),
+                    Field::Opaque | Field::Compound(_) => {
+                        AsterixError::UnsupportedItem { cat, frn }
+                    }
                     _ => AsterixError::Truncated,
                 });
             }
@@ -786,12 +921,26 @@ fn walk_record<'a>(
 
 impl FrameParser for AsterixParser {
     fn parse(&self, frame: &[u8]) -> Result<Vec<Event>, ParseError> {
-        let targets = self.parse_block(frame).map_err(box_err)?;
+        let targets = self.parse_frame(frame).map_err(box_err)?;
         let mut events = Vec::with_capacity(targets.len());
         for t in &targets {
+            // A simulated, test or field-monitor report is real wire traffic
+            // but not a real object: counted, never published as a track.
+            if t.simulated || t.test_target || t.field_monitor {
+                self.test_targets
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                continue;
+            }
             events.push(self.to_event_now(t).map_err(box_err)?);
         }
         Ok(events)
+    }
+
+    fn counters(&self) -> Vec<(&'static str, std::sync::Arc<std::sync::atomic::AtomicU64>)> {
+        vec![
+            ("asterix_ignored_blocks_total", self.ignored_blocks.clone()),
+            ("asterix_test_targets_total", self.test_targets.clone()),
+        ]
     }
 }
 
@@ -955,6 +1104,102 @@ mod tests {
     }
 
     // ---- CAT048 ------------------------------------------------------------
+
+    #[test]
+    fn every_block_in_a_datagram_is_decoded_not_just_the_first() {
+        // The standard radar-head shape: a CAT034 service block leading the
+        // CAT048 targets in one datagram. The old walk stopped at the first
+        // block's declared length and silently dropped everything after it.
+        let p = parser();
+        let mut datagram = vec![34, 0, 6, 25, 10, 0]; // CAT034 service block (ignored)
+        datagram.extend(block(48, &cat048_record()));
+        let targets = p.parse_frame(&datagram).unwrap();
+        assert_eq!(
+            targets.len(),
+            1,
+            "the CAT048 block behind CAT034 must decode"
+        );
+        assert_eq!(
+            p.ignored_blocks.load(std::sync::atomic::Ordering::Relaxed),
+            1,
+            "the skipped service block is counted, not vanished"
+        );
+    }
+
+    #[test]
+    fn simulated_and_test_targets_never_reach_the_picture() {
+        // I048/020 with SIM set: decoded, counted, filtered.
+        let mut r = fspec(&[1, 3, 4]);
+        r.extend_from_slice(&[25, 10]); // 010 SAC/SIC
+        r.push(0x10); // 020: SIM, no extension
+        r.extend_from_slice(&u16b(25600)); // 040 RHO
+        r.extend_from_slice(&u16b(8192)); //  040 THETA
+        let p = parser();
+        let events = p.parse(&block(48, &r)).unwrap();
+        assert!(events.is_empty(), "a simulated target is not a track");
+        assert_eq!(p.test_targets.load(std::sync::atomic::Ordering::Relaxed), 1);
+        // The decoder itself still sees it, truthfully flagged.
+        let t = &p.parse_frame(&block(48, &r)).unwrap()[0];
+        assert!(t.simulated && !t.test_target && !t.field_monitor);
+    }
+
+    #[test]
+    fn garbled_or_invalid_codes_are_omitted_not_published_as_clean() {
+        let mut r = fspec(&[1, 5, 6]);
+        r.extend_from_slice(&[25, 10]);
+        r.extend_from_slice(&u16b(0x8000 | 0o1234)); // 070 with V (invalid) set
+        r.extend_from_slice(&[0x40 | 0x05, 0x78]); // 090 with G (garbled) set
+        let p = parser();
+        // No position: not a track, but decode_048 is still exercised.
+        let items_only = p.parse_frame(&block(48, &r)).unwrap();
+        assert!(items_only.is_empty(), "status-only record");
+        let mut r2 = fspec(&[1, 4, 5, 6]);
+        r2.extend_from_slice(&[25, 10]);
+        r2.extend_from_slice(&u16b(25600));
+        r2.extend_from_slice(&u16b(8192));
+        r2.extend_from_slice(&u16b(0x8000 | 0o1234)); // V set
+        r2.extend_from_slice(&[0x45, 0x78]); // 090 with G (0x40) set: garbled
+        let t = &p.parse_frame(&block(48, &r2)).unwrap()[0];
+        assert_eq!(t.squawk, None, "invalid squawk is no squawk");
+        assert_eq!(t.alt_ft, None, "garbled flight level is no flight level");
+    }
+
+    #[test]
+    fn slant_range_is_projected_to_ground_range_before_geolocation() {
+        // Radar at sea level; target due north at 10 NM slant, FL350. The
+        // ground range is sqrt(slant^2 - height^2), visibly shorter.
+        let p = parser().with_sensor(Some(Sensor {
+            lat: 60.0,
+            lon: 25.0,
+            alt_m: 0.0,
+        }));
+        let mut r = fspec(&[1, 4, 6]);
+        r.extend_from_slice(&[25, 10]);
+        r.extend_from_slice(&u16b(2560)); // RHO = 10.0 NM
+        r.extend_from_slice(&u16b(0)); //    THETA = 0 (due north)
+        r.extend_from_slice(&u16b(1400)); // FL: 35000 ft
+        let t = &p.parse_frame(&block(48, &r)).unwrap()[0];
+        let lat = t.lat.unwrap();
+        // slant 18520 m, height 10668 m -> ground ~15139 m -> ~0.136 deg north.
+        let dlat = lat - 60.0;
+        assert!(
+            (0.130..0.142).contains(&dlat),
+            "expected ground-projected ~0.136 deg, got {dlat}"
+        );
+        // Using raw slant would land ~0.166 deg north: assert we did not.
+        assert!(dlat < 0.15, "slant range was not corrected: {dlat}");
+    }
+
+    #[test]
+    fn a_bad_block_error_names_the_category_and_lengths() {
+        let p = parser();
+        let err = p.parse_frame(&[48, 0xFF, 0xFF, 0, 0]).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("CAT048"), "{msg}");
+        assert!(msg.contains("65535"), "{msg}");
+        assert!(msg.contains("5 available"), "{msg}");
+    }
+
     fn cat048_record() -> Vec<u8> {
         let mut r = fspec(&[1, 4, 5, 6, 7, 8, 11, 13]);
         r.extend_from_slice(&[25, 10]); // 010 SAC/SIC
@@ -992,6 +1237,7 @@ mod tests {
         let p = parser().with_sensor(Some(Sensor {
             lat: 60.0,
             lon: 25.0,
+            alt_m: 0.0,
         }));
         let t = &p.parse_block(&block(48, &cat048_record())).unwrap()[0];
         let ev = p.to_event_at(t, "2026-06-10T08:00:00Z").unwrap();

@@ -13,6 +13,22 @@ Two version lines are tracked independently (see COMPATIBILITY.md):
 
 ## [Unreleased]
 
+### Fixed
+
+- ais-nmea no longer rejects the rest of a bridge bus: heading, depth, wind
+  and other short NMEA sentences sharing the wire with AIS are ignored and
+  only sentences claiming to be AIVDM/AIVDO are held to AIVDM shape. TTM
+  targets with lost/acquiring status still produce no event but are counted
+  (`ttm_non_tracking_total`).
+- asterix decodes every data block in a datagram instead of only the first
+  (radar heads interleave CAT034 service messages with CAT048 targets);
+  unmodelled categories are skipped and counted. Simulated, test and
+  field-monitor reports (I048/020) are counted and kept out of the picture.
+  Mode 3/A and flight level honour the V/G validity bits. CAT048 range is
+  projected from slant to ground range using the decoded flight level and
+  the configured site elevation before geolocation, and parse errors name
+  the category and lengths involved.
+
 ### Added
 
 - Generic egress can label every delivered object with a STANAG 4774-shaped

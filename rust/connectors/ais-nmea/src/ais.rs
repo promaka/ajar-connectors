@@ -304,11 +304,15 @@ impl AisParser {
 
         let star = s.find('*').unwrap_or(s.len());
         let fields: Vec<&str> = s[1..star].split(',').collect();
-        if fields.len() < 7 {
-            return Err(AisError::Fields);
-        }
+        // Sentence-type first, field count second: a real bridge bus carries
+        // heading, depth, wind and dozens of other short sentences alongside
+        // AIS, and none of them is an ERROR - they are simply not ours. Only
+        // a sentence that claims to be AIVDM/AIVDO is held to AIVDM shape.
         if !(fields[0].ends_with("VDM") || fields[0].ends_with("VDO")) {
             return Ok(None); // an NMEA sentence, just not AIS
+        }
+        if fields.len() < 7 {
+            return Err(AisError::Fields);
         }
         let frag_count: u8 = fields[1].parse().map_err(|_| AisError::Fields)?;
         let frag_num: u8 = fields[2].parse().map_err(|_| AisError::Fields)?;
@@ -685,7 +689,10 @@ impl FrameParser for AisParser {
     }
 
     fn counters(&self) -> Vec<(&'static str, Arc<AtomicU64>)> {
-        vec![("connector_dropped_carryforward_total", self.dropped.clone())]
+        vec![
+            ("connector_dropped_carryforward_total", self.dropped.clone()),
+            ("ttm_non_tracking_total", self.radar.non_tracking.clone()),
+        ]
     }
 }
 
@@ -874,6 +881,34 @@ impl Bits {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_mixed_bridge_bus_is_ignored_not_rejected() {
+        // Real RS-422 bridge wiring carries heading, depth, wind, rate-of-turn
+        // and more alongside AIS. Every one of these short sentences must be
+        // "not ours", never an error - at 38400 baud an error per sentence is
+        // a rejection storm in the operator's metrics.
+        let cs = |body: &str| -> String {
+            let x = body.bytes().fold(0u8, |a, b| a ^ b);
+            format!("${body}*{x:02X}")
+        };
+        let parser = parser();
+        for body in [
+            "HEHDT,274.07,T",
+            "TIROT,-2.5,A",
+            "SDDPT,23.9,0.0",
+            "WIMWV,214.0,R,4.2,N,A",
+            "HCHDG,271.1,,,5.1,W",
+            "GPGLL,5432.11,N,01832.15,E,102834,A",
+        ] {
+            let out = parser
+                .parse(cs(body).as_bytes())
+                .unwrap_or_else(|e| panic!("{body}: must be ignored, got error {e}"));
+            assert!(out.is_empty(), "{body}: ignored means no events");
+        }
+        // A sentence that CLAIMS to be AIVDM is still held to AIVDM shape.
+        assert!(parser.parse(cs("AIVDM,1,1").as_bytes()).is_err());
+    }
+
     use super::*;
 
     // Real, pyais-verified sentences (see the connector's verification notes):
