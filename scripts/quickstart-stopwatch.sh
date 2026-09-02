@@ -44,6 +44,12 @@ PY
 
 # Section 9 stand-in: a local broker and the sink registering the minted key.
 nats-server -p "$PORT" &>/dev/null &
+# Wait until the broker actually listens: the doctor runs next and rightly
+# fails on a port that does not answer (a race my machine won and CI lost).
+for _ in $(seq 1 100); do
+  (exec 3<>"/dev/tcp/127.0.0.1/$PORT") 2>/dev/null && { exec 3>&-; break; }
+  sleep 0.1
+done
 "$BIN/ajar-sink" mint stranger-1 "$WORK/keys"
 cat > "$WORK/sink.toml" <<SINK
 nats_url = "nats://127.0.0.1:$PORT"
