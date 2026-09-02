@@ -13,6 +13,8 @@ Two version lines are tracked independently (see COMPATIBILITY.md):
 
 ## [Unreleased]
 
+## [0.5.10] - 2026-09-02
+
 ### Added
 
 - `ajar-up <packet.tar>`: one command from the operator's vendor packet to
