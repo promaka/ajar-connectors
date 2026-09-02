@@ -1,0 +1,42 @@
+# SPDX-License-Identifier: Apache-2.0
+[package]
+name = "ajar-up"
+description = "One command from an operator's vendor packet to flowing events: verify the packet, place the credentials, write the config, preflight, run."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[[bin]]
+name = "ajar-up"
+path = "src/main.rs"
+
+[features]
+# The doctor preflight covers serial devices; same default as the tarball.
+default = ["serial"]
+serial = ["ajar-doctor/serial"]
+
+[dependencies]
+ajar-connector.workspace = true
+ajar-connector-common.workspace = true
+ajar-doctor = { path = "../doctor", default-features = false }
+async-nats.workspace = true
+tokio.workspace = true
+futures-util.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+anyhow.workspace = true
+hex.workspace = true
+ed25519-dalek.workspace = true
+prost = "0.14"
+# Reads the operator's packet: a tar of manifest + signature + files.
+tar = "0.4"
+# Verifies the per-file checksums the manifest pins.
+sha2 = "0.11"
+
+[dev-dependencies]
+tracing-subscriber.workspace = true
