@@ -78,54 +78,53 @@ impl CotParser {
         loop {
             match reader.read_event_into(&mut buf) {
                 Ok(XmlEvent::Start(e)) | Ok(XmlEvent::Empty(e)) => match e.name().as_ref() {
-                    b"event" => {
+                    "event" => {
                         saw_event = true;
                         for a in e.attributes().flatten() {
-                            let val = String::from_utf8_lossy(&a.value).into_owned();
+                            let val = a.value.into_owned();
                             match a.key.as_ref() {
-                                b"uid" => uid = Some(val),
-                                b"type" => cot_type = Some(val),
-                                b"time" => time = Some(val),
+                                "uid" => uid = Some(val),
+                                "type" => cot_type = Some(val),
+                                "time" => time = Some(val),
                                 _ => {}
                             }
                         }
                     }
-                    b"point" => {
+                    "point" => {
                         for a in e.attributes().flatten() {
-                            let s = String::from_utf8_lossy(&a.value);
+                            let s = a.value;
                             match a.key.as_ref() {
-                                b"lat" => {
+                                "lat" => {
                                     lat = Some(
                                         s.parse().map_err(|_| CotError::BadNumber("point/@lat"))?,
                                     )
                                 }
-                                b"lon" => {
+                                "lon" => {
                                     lon = Some(
                                         s.parse().map_err(|_| CotError::BadNumber("point/@lon"))?,
                                     )
                                 }
-                                b"hae" => hae = s.parse().unwrap_or(0.0),
+                                "hae" => hae = s.parse().unwrap_or(0.0),
                                 _ => {}
                             }
                         }
                     }
                     // <detail><contact callsign="EAGLE01"/></detail>
-                    b"contact" => {
+                    "contact" => {
                         for a in e.attributes().flatten() {
-                            if a.key.as_ref() == b"callsign" {
-                                callsign = Some(String::from_utf8_lossy(&a.value).into_owned());
+                            if a.key.as_ref() == "callsign" {
+                                callsign = Some(a.value.into_owned());
                             }
                         }
                     }
                     // Confidence has no standard CoT home; accept either a
                     // <confidence value="0.87"/> attribute or <confidence>0.87</confidence>
                     // element text.
-                    b"confidence" => {
+                    "confidence" => {
                         in_confidence = true;
                         for a in e.attributes().flatten() {
-                            if a.key.as_ref() == b"value" {
-                                confidence =
-                                    normalize_confidence(&String::from_utf8_lossy(&a.value));
+                            if a.key.as_ref() == "value" {
+                                confidence = normalize_confidence(&a.value);
                             }
                         }
                     }
@@ -133,7 +132,7 @@ impl CotParser {
                 },
                 Ok(XmlEvent::Text(t)) if in_confidence => {
                     in_confidence = false;
-                    let text = t.xml10_content().unwrap_or_default();
+                    let text = t.xml10_content();
                     if confidence.is_none() {
                         confidence = normalize_confidence(text.trim());
                     }

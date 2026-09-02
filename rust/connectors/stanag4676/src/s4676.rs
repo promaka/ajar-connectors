@@ -125,7 +125,7 @@ impl S4676Parser {
     pub fn to_events(&self, native: &[u8]) -> Result<Vec<Event>, S4676Error> {
         let mut reader = Reader::from_reader(native);
         let mut buf = Vec::new();
-        let mut stack: Vec<Vec<u8>> = Vec::new();
+        let mut stack: Vec<String> = Vec::new();
 
         // Message-level context, set once and applied to every event.
         let mut base_time: Option<String> = None;
@@ -146,16 +146,16 @@ impl S4676Parser {
             let pos_before = reader.buffer_position() as usize;
             match reader.read_event_into(&mut buf) {
                 Ok(XmlEvent::Start(e)) => {
-                    let ln = local(e.name().as_ref()).to_vec();
-                    match ln.as_slice() {
-                        b"track" => {
+                    let ln = local(e.name().as_ref()).to_string();
+                    match ln.as_str() {
+                        "track" => {
                             track = TrackCtx {
                                 start: pos_before,
                                 ..Default::default()
                             };
                             in_track = true;
                         }
-                        b"dynamics" => cur_cs = read_attr(&e, b"cs"),
+                        "dynamics" => cur_cs = read_attr(&e, "cs"),
                         _ => {}
                     }
                     stack.push(ln);
@@ -170,15 +170,15 @@ impl S4676Parser {
                     let name = e.name();
                     let ln = local(name.as_ref());
                     match ln {
-                        b"tp" => {
+                        "tp" => {
                             track.points.push(PointCtx {
                                 status: seg_status.clone(),
                                 ..std::mem::take(&mut tp)
                             });
                         }
-                        b"dynamics" => cur_cs = None,
-                        b"segment" => seg_status = None,
-                        b"track" => {
+                        "dynamics" => cur_cs = None,
+                        "segment" => seg_status = None,
+                        "track" => {
                             let end = reader.buffer_position() as usize;
                             let raw = native.get(track.start..end).unwrap_or(native);
                             self.flush_track(
@@ -198,15 +198,15 @@ impl S4676Parser {
                     stack.pop();
                 }
                 Ok(XmlEvent::Text(t)) => {
-                    let text = t.xml10_content().unwrap_or_default();
+                    let text = t.xml10_content();
                     let text = text.trim();
                     if !text.is_empty() {
-                        let cur = stack.last().map(Vec::as_slice).unwrap_or(b"");
+                        let cur = stack.last().map(String::as_str).unwrap_or("");
                         let parent = stack
                             .len()
                             .checked_sub(2)
-                            .map(|i| stack[i].as_slice())
-                            .unwrap_or(b"");
+                            .map(|i| stack[i].as_str())
+                            .unwrap_or("");
                         route_text(
                             parent,
                             cur,
@@ -389,8 +389,8 @@ fn environment_code(raw: Option<&str>) -> &'static str {
 /// appears under track, segment, and tp — only the track's is the stable id).
 #[allow(clippy::too_many_arguments)]
 fn route_text(
-    parent: &[u8],
-    cur: &[u8],
+    parent: &str,
+    cur: &str,
     text: &str,
     in_track: bool,
     cur_cs: &Option<String>,
@@ -403,22 +403,22 @@ fn route_text(
     tp: &mut PointCtx,
 ) {
     match (parent, cur) {
-        (b"nitsRoot", b"nitsVersion") => *nits_version = Some(text.to_string()),
-        (b"message", b"baseTime") => *base_time = Some(text.to_string()),
-        (b"message", b"relTimeIncrement") => *rel_increment = text.parse().ok(),
-        (b"ConfidentialityInformation", b"Classification") => {
+        ("nitsRoot", "nitsVersion") => *nits_version = Some(text.to_string()),
+        ("message", "baseTime") => *base_time = Some(text.to_string()),
+        ("message", "relTimeIncrement") => *rel_increment = text.parse().ok(),
+        ("ConfidentialityInformation", "Classification") => {
             *classification = Some(text.to_string())
         }
-        (b"track", b"uid") if in_track => {
+        ("track", "uid") if in_track => {
             track.uid = decode_uid(text);
         }
-        (b"id1241", b"identity") => track.identity = Some(text.to_string()),
-        (b"id1241", b"environment") => track.environment = Some(text.to_string()),
-        (b"objectClass", b"code") => track.object_class = Some(text.to_string()),
-        (b"segment", b"status") => *seg_status = Some(text.to_string()),
-        (b"tp", b"relTime") => tp.rel_time = text.parse().ok(),
-        (b"dynamics", b"pos") => set_vector(&mut tp.pos, &mut tp.cs, cur_cs, text),
-        (b"dynamics", b"vel") => {
+        ("id1241", "identity") => track.identity = Some(text.to_string()),
+        ("id1241", "environment") => track.environment = Some(text.to_string()),
+        ("objectClass", "code") => track.object_class = Some(text.to_string()),
+        ("segment", "status") => *seg_status = Some(text.to_string()),
+        ("tp", "relTime") => tp.rel_time = text.parse().ok(),
+        ("dynamics", "pos") => set_vector(&mut tp.pos, &mut tp.cs, cur_cs, text),
+        ("dynamics", "vel") => {
             // Velocity shares the position's coordinate system; only record the cs
             // once (via pos), but keep the vector.
             if let Some(v) = parse_floats(text) {
@@ -602,16 +602,16 @@ fn parse_floats(text: &str) -> Option<Vec<f64>> {
 }
 
 /// Read a start tag's attribute by local name (prefix-insensitive).
-fn read_attr(e: &quick_xml::events::BytesStart<'_>, key: &[u8]) -> Option<String> {
-    e.attributes().flatten().find_map(|a| {
-        (local(a.key.as_ref()) == key).then(|| String::from_utf8_lossy(&a.value).into_owned())
-    })
+fn read_attr(e: &quick_xml::events::BytesStart<'_>, key: &str) -> Option<String> {
+    e.attributes()
+        .flatten()
+        .find_map(|a| (local(a.key.as_ref()) == key).then(|| a.value.into_owned()))
 }
 
 /// The local part of a possibly-prefixed XML name (`ns2:track` -> `track`), so
 /// matching never depends on which namespace prefix a producer chose.
-fn local(qname: &[u8]) -> &[u8] {
-    match qname.iter().position(|&b| b == b':') {
+fn local(qname: &str) -> &str {
+    match qname.find(':') {
         Some(i) => &qname[i + 1..],
         None => qname,
     }

@@ -21,7 +21,7 @@ tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 anyhow.workspace = true
-quick-xml = "0.41"
+quick-xml = "0.42"
 
 [dev-dependencies]
 ed25519-dalek.workspace = true
