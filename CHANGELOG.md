@@ -13,6 +13,8 @@ Two version lines are tracked independently (see COMPATIBILITY.md):
 
 ## [Unreleased]
 
+## [0.5.9] - 2026-09-02
+
 ### Fixed
 
 - ais-nmea no longer rejects the rest of a bridge bus: heading, depth, wind
