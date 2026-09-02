@@ -39,6 +39,7 @@ async fn main() -> anyhow::Result<()> {
     let sensor = cfg.sensor.map(|s| Sensor {
         lat: s.lat,
         lon: s.lon,
+        alt_m: s.alt_m.unwrap_or(0.0),
     });
     let parser = AsterixParser::new(cfg.source_id.clone(), cfg.enrichment()).with_sensor(sensor);
     let source = open_source(&cfg.transport)
