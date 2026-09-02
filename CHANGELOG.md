@@ -15,6 +15,27 @@ Two version lines are tracked independently (see COMPATIBILITY.md):
 
 ### Added
 
+- `ajar-up <packet.tar>`: one command from the operator's vendor packet to
+  flowing events, both directions. The packet's manifest signature is
+  verified under the deployment's egress key (domain-prefixed, sibling
+  signature file), every public file is checked against its pinned sha256,
+  credentials are placed with tight permissions, the connector config is
+  synthesized from the manifest, and the doctor preflight signs off before
+  anything starts. Producer packets end with the named connector running
+  (the signing seed resolves by precedence: `--signing-key`, a file already
+  at the manifest's path, or the mint-flow seed in the tar). Consumer
+  packets end with a verified tap: every received event is verified under
+  the egress key and accepted payloads stream to stdout, with rejections
+  counted and never handed over; `--to-tak`/`--to-http` instead generate a
+  ready egress-connector config, validated against the packet's `formats[]`
+  and subscribed to the format's own egress slug. An unknown manifest major
+  is refused. The gate runs the full loop against real brokers and real
+  binaries: packet to governed event verifying under the packet's own seed,
+  tap accepting the signed and refusing the tampered, and a tampered packet
+  refused before anything is trusted.
+
+### Added
+
 - The quickstart is now a measured number: a CI job follows the README's
   prebuilt-connector path on a cold machine, from nothing to the first
   governed event verified and stored, and fails past the fifteen-minute

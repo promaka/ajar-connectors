@@ -180,6 +180,19 @@ argument; the one call you add is shown in
 
 ## 4. Set up: run a prebuilt connector
 
+**The one-command path**: if your operator handed you a packet
+(`<your-id>.packet.tar`), everything below collapses into:
+
+```bash
+./ajar-up your-id.packet.tar
+```
+
+It verifies the packet's signature and checksums, places your credentials,
+writes the config, runs the doctor preflight, and starts the right connector
+(producer packets) or a verified tap on governed egress (consumer packets:
+add `--to-tak host:8089` or `--to-http <url>` for a real delivery target).
+The manual steps below remain for operators who prefer them.
+
 **Step 1. Pick your connector** from the [table in section 10](#reference-connectors).
 
 **Step 2. Copy its example config.** Every connector ships one:
