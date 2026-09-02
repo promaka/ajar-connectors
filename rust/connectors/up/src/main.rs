@@ -16,6 +16,7 @@ fn usage() -> ! {
          \n\
          --signing-key   your registered seed (vendor-holds-key flow)\n\
          --no-exec       prepare and preflight, print the run command, do not start\n\
+         --check         verify and validate the packet, then exit 0 (both roles)\n\
          --to-tak        write a ready TAK egress config instead of the tap\n\
          --to-http       write a ready HTTP egress config instead of the tap\n\
          --dir           where the packet unpacks (default: alongside the packet)"
@@ -30,6 +31,7 @@ async fn main() {
     let mut dir: Option<PathBuf> = None;
     let mut signing_key: Option<PathBuf> = None;
     let mut no_exec = false;
+    let mut check = false;
     let mut to_tak: Option<String> = None;
     let mut to_http: Option<String> = None;
     let mut timeout_secs: u64 = 5;
@@ -40,6 +42,7 @@ async fn main() {
             "--dir" => dir = it.next().map(PathBuf::from).or_else(|| usage()),
             "--signing-key" => signing_key = it.next().map(PathBuf::from).or_else(|| usage()),
             "--no-exec" => no_exec = true,
+            "--check" => check = true,
             "--to-tak" => to_tak = it.next().or_else(|| usage()),
             "--to-http" => to_http = it.next().or_else(|| usage()),
             "--timeout-secs" => match it.next().and_then(|v| v.parse().ok()) {
@@ -71,19 +74,40 @@ async fn main() {
         let packet = ajar_up::packet::open(&packet_path, &dir)?;
         match packet.role() {
             "producer" => {
-                ajar_up::producer::run(
+                let r = ajar_up::producer::run(
                     &packet,
                     &ajar_up::producer::Options {
                         signing_key,
-                        no_exec,
+                        // --check is verify+place+configure+preflight, then exit:
+                        // exactly what --no-exec does, minus printing the command
+                        // as the point.
+                        no_exec: no_exec || check,
                         timeout_secs,
                     },
                 )
-                .await
+                .await;
+                if r.is_ok() && check {
+                    println!(
+                        "check passed: producer packet for {}",
+                        packet.manifest.source_id
+                    );
+                }
+                r
             }
             "consumer" => {
-                ajar_up::consumer::run(&packet, &ajar_up::consumer::Options { to_tak, to_http })
-                    .await
+                if check {
+                    let r = ajar_up::consumer::check(&packet);
+                    if r.is_ok() {
+                        println!(
+                            "check passed: consumer packet for {}",
+                            packet.manifest.source_id
+                        );
+                    }
+                    r
+                } else {
+                    ajar_up::consumer::run(&packet, &ajar_up::consumer::Options { to_tak, to_http })
+                        .await
+                }
             }
             other => anyhow::bail!(
                 "this packet\'s role is {other:?}, which this ajar-up does not know; \

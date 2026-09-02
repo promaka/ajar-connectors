@@ -427,6 +427,71 @@ fn a_delivery_flag_must_name_a_format_the_deployment_egresses() {
 }
 
 #[test]
+fn check_mode_is_a_one_line_assertion_for_both_roles() {
+    let dir = std::env::temp_dir().join(format!("ajar-up-check-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let egress = SigningKey::from_bytes(&rand32());
+
+    // Consumer: --check exits 0 fast with the marker, touching no network.
+    let manifest = serde_json::json!({
+        "manifest_version": "1",
+        "role": "consumer",
+        "source_id": "ops-c2",
+        "nats_url": "nats://127.0.0.1:1",
+        "egress_subject": "ajar.egress.cot.check",
+        "formats": ["cot"],
+        "egress_verifying_key_hex": hex::encode(egress.verifying_key().to_bytes()),
+        "keys": {},
+    });
+    let tar = build_packet(&dir, &egress, &manifest, &[]);
+    let out = Command::new(env!("CARGO_BIN_EXE_ajar-up"))
+        .arg(&tar)
+        .args(["--dir", dir.join("c").to_str().unwrap(), "--check"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "{stdout}
+{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        stdout.contains("check passed: consumer packet for ops-c2"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("consumer packet valid"), "{stdout}");
+
+    // A consumer manifest referencing an undelivered cert fails the check.
+    let manifest_bad = serde_json::json!({
+        "manifest_version": "1",
+        "role": "consumer",
+        "source_id": "ops-c2",
+        "nats_url": "nats://127.0.0.1:1",
+        "egress_subject": "ajar.egress.cot.check",
+        "formats": ["cot"],
+        "egress_verifying_key_hex": hex::encode(egress.verifying_key().to_bytes()),
+        "keys": { "ca_cert_path": "missing-ca.crt" },
+    });
+    let dir2 = dir.join("bad");
+    std::fs::create_dir_all(&dir2).unwrap();
+    let tar2 = build_packet(&dir2, &egress, &manifest_bad, &[]);
+    let out = Command::new(env!("CARGO_BIN_EXE_ajar-up"))
+        .arg(&tar2)
+        .args(["--dir", dir2.join("u").to_str().unwrap(), "--check"])
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("did not deliver"),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn a_tampered_packet_is_refused_before_anything_is_trusted() {
     let dir = std::env::temp_dir().join(format!("ajar-up-tamper-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);

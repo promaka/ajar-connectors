@@ -13,6 +13,14 @@ Two version lines are tracked independently (see COMPATIBILITY.md):
 
 ## [Unreleased]
 
+### Added
+
+- `ajar-up --check`: verify and validate a packet, then exit 0, for both
+  roles - the one-line CI assertion the cross-repo smoke wanted. For a
+  producer packet it is `--no-exec` (verify, place, configure, preflight)
+  plus a stable `check passed:` line; for a consumer packet it validates the
+  subject, egress key and referenced files without subscribing.
+
 ## [0.5.10] - 2026-09-02
 
 ### Added

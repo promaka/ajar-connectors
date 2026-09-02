@@ -11,6 +11,13 @@
 //! manifest reveals nothing secret. Tampering with anything after the
 //! handover is detectable; the first handover's integrity rests on the
 //! operator channel itself, exactly as it does for the CA today.
+//!
+//! Tar members MUST be plain filenames: no leading `./`, no directory
+//! entries, no paths. This is contract, not implementation detail - the
+//! first cross-repo smoke caught a real emitter tarring with `-C dir .`
+//! (producing `./manifest.json` members) that this rule refused, exactly as
+//! it would have refused a path-traversal entry. Emitters append by explicit
+//! filename; this unpacker stays strict.
 
 use std::path::{Path, PathBuf};
 
