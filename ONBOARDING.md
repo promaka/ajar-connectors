@@ -319,24 +319,24 @@ setup on the operator's side:
 
 ## 5. Build it
 
-Pick a language and add the SDK. **Pin the released version `0.5.9`, not a
+Pick a language and add the SDK. **Pin the released version `0.5.10`, not a
 branch** — that's what makes your build reproducible and means you're never
 forced to upgrade (see [COMPATIBILITY.md](COMPATIBILITY.md)).
 
 **Rust** — in your `Cargo.toml`:
 ```toml
 [dependencies]
-ajar-connector = "0.5.9"
+ajar-connector = "0.5.10"
 ```
 
 **Go**:
 ```bash
-go get github.com/promaka/ajar-connectors/go/ajarconnector@v0.5.9
+go get github.com/promaka/ajar-connectors/go/ajarconnector@v0.5.10
 ```
 
 **Python**:
 ```bash
-pip install ajar-connector==0.5.9
+pip install ajar-connector==0.5.10
 # …or, if you've cloned the repo, an editable install:
 cd python && pip install -e .
 ```
@@ -347,7 +347,7 @@ cd python && pip install -e .
 >
 > ```bash
 > # On a connected machine, at the tag you intend to ship:
-> git clone --depth 1 --branch v0.5.9 https://github.com/promaka/ajar-connectors
+> git clone --depth 1 --branch v0.5.10 https://github.com/promaka/ajar-connectors
 > cd ajar-connectors
 > cargo vendor vendor-crates/          # Rust: full dependency closure
 > (cd go && go mod vendor)             # Go: full dependency closure
