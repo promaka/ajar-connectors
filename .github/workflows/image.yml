@@ -204,6 +204,14 @@ jobs:
           find rust/connectors/target/${{ matrix.target }}/release -maxdepth 1 -type f \
             -name 'ajar-*' ! -name '*.d' -exec cp {} "$out/" \;
           cp rust/examples/target/${{ matrix.target }}/release/synthetic-radar "$out/"
+          # Configs and docs ride along: the tarball is an evaluator's whole
+          # starting point, not a bag of binaries. Asserted, so a workflow
+          # merge can never silently strip them again.
+          mkdir -p "$out/configs"
+          cp rust/connectors/*/*.example.toml "$out/configs/"
+          cp README.md ONBOARDING.md "$out/"
+          test -f "$out/configs/asterix.example.toml"
+          test -f "$out/ONBOARDING.md"
           ls -la "$out"
           test "$(ls -1 "$out" | wc -l)" -gt 0 || { echo "::error::no binaries collected"; exit 1; }
           tar czf "$out.tar.gz" "$out"
@@ -275,6 +283,16 @@ jobs:
           pattern: "{binaries-*,cpp-tarball}"
           merge-multiple: true
           path: dist
+      - name: SBOM for the release (SPDX)
+        uses: anchore/sbom-action@v0
+        with:
+          path: .
+          format: spdx-json
+          output-file: dist/ajar-connectors-${{ github.ref_name }}.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+      - name: the SBOM exists before anything publishes
+        run: test -s "dist/ajar-connectors-${{ github.ref_name }}.spdx.json"
       - name: notes for this version, from CHANGELOG.md
         run: |
           ver="${GITHUB_REF_NAME#v}"
