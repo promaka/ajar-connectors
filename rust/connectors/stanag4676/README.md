@@ -89,7 +89,7 @@ Copy [`stanag4676.example.toml`](stanag4676.example.toml):
 ```toml
 source_id = "isr-tracker-1"
 nats_url  = "nats://127.0.0.1:4222"
-signing_key_path = "/etc/ajar/isr-tracker-1.key"
+signing_key_path = "/etc/ajar/isr-tracker-1.seed"
 
 [transport]
 kind = "tcp-server"

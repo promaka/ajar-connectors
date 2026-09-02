@@ -19,7 +19,7 @@ subject_prefix = "ajar.ingest"
 
 # The connector's own Ed25519 signing seed: 32 raw bytes, or a 64-char hex file.
 # Secret — never commit it, never share it.
-signing_key_path = "/etc/ajar/tak-field-1.key"
+signing_key_path = "/etc/ajar/tak-field-1.seed"
 
 [transport]
 # udp-multicast (the CoT SA default) or udp (unicast).

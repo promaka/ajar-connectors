@@ -28,7 +28,7 @@ connect = "gateway:9000"
 
 [mapping]
 format = "json"                    # or "csv" (with columns = [...])
-entity_type = "x:acme:sensor"      # must be registered in the ontology
+entity_type = "mim:object"        # governed as shipped; x:<vendor>:<type> once registered
 timestamp_field = "observed_at"    # omit to stamp receipt time
 timestamp_format = "rfc3339"       # rfc3339 | epoch-millis | epoch-seconds
 lat_field = "latitude"             # a location is emitted only if lat AND lon map

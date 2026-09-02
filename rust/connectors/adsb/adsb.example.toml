@@ -13,7 +13,7 @@
 source_id = "adsb-tower-1"
 nats_url = "nats://127.0.0.1:4222"
 subject_prefix = "ajar.ingest"
-signing_key_path = "/etc/ajar/adsb-tower-1.key"
+signing_key_path = "/etc/ajar/adsb-tower-1.seed"
 
 # ADS-B is cooperative civil traffic and carries no hostility of its own.
 # Stamp one for the COP (usually "neutral"; "civil" if your ontology declares it).

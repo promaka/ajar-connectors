@@ -13,7 +13,32 @@ Two version lines are tracked independently (see COMPATIBILITY.md):
 
 ## [Unreleased]
 
+### Added
+
+- The quickstart is now a measured number: a CI job follows the README's
+  prebuilt-connector path on a cold machine, from nothing to the first
+  governed event verified and stored, and fails past the fifteen-minute
+  budget. A gate walks every shipped example config: it must parse strictly,
+  point the signing seed at the `.seed` file, and (for generic mappings)
+  pass the same ontology check the connector enforces at boot, so a config
+  copied verbatim cannot ship events Core discards. Release tarballs now
+  carry the example configs and the onboarding docs alongside the binaries,
+  and the release publishes an SPDX software bill of materials.
+
 ### Fixed
+
+- The shipped example configs pointed `signing_key_path` at the `.key` PEM
+  (the mTLS key) instead of the `.seed` the loader accepts, and the generic
+  examples used an unregistered entity type and mapped `confidence` as an
+  attribute, where it is silently quarantined instead of populating the
+  event's first-class field. The generic connector's boot-time ontology gate
+  validated the mapping's native field names instead of the Ajar attribute
+  names it actually emits.
+- The README's build commands run from the repo root as written, the
+  connector table lists every shipped binary including the egress connectors
+  and the doctor, the transports table reflects that serial ships in the
+  AIS/NMEA binary, `AJAR_REQUIRE_TLS` is documented, and the metrics list
+  matches what `/metrics` exports.
 
 - A config typo is an error naming the field, not a silently applied
   default: unknown keys are rejected across the connector config, transports,

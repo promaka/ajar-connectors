@@ -20,7 +20,7 @@
 source_id = "gmti-radar-1"
 nats_url = "nats://127.0.0.1:4222"
 subject_prefix = "ajar.ingest"
-signing_key_path = "/etc/ajar/gmti-radar-1.key"
+signing_key_path = "/etc/ajar/gmti-radar-1.seed"
 
 # GMTI carries no hostility of its own; stamp one for the COP (moving-target
 # detections are often "unknown" or "suspect" pending correlation).

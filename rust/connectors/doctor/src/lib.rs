@@ -65,8 +65,9 @@ pub async fn run(opts: &Options) -> Vec<Finding> {
                 "config",
                 format!("{e:#}"),
                 "The doctor reads the same file the connector runs with. Fix the error \
-                 above; the example config next to each connector \
-                 (e.g. tak-cot.example.toml) shows every required field."
+                 above; the example config shipped next to your connector (the \
+                 *.example.toml in the tarball and the repo) shows every required \
+                 field."
                     .to_string(),
             )),
         },
