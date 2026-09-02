@@ -181,7 +181,19 @@ async fn health_serves_healthz_and_counters() {
 #[tokio::test]
 async fn udp_delivers_a_datagram_per_frame() {
     use ajar_connector_common::udp;
-    let mut src = udp::open("127.0.0.1:19316", None).unwrap();
+    let mut src = udp::open("127.0.0.1:19316", None, None).unwrap();
+    // The IPv4-only guard names the fix instead of "Invalid argument (os error 22)".
+    let err = match udp::open("[::]:19317", None, None) {
+        Err(e) => e.to_string(),
+        Ok(_) => panic!("IPv6 bind must be refused"),
+    };
+    assert!(err.contains("IPv4-only"), "{err}");
+    // A bad multicast interface is named as transport.interface, not a bare errno.
+    let err = match udp::open("0.0.0.0:19318", Some("239.9.9.9"), Some("not-an-ip")) {
+        Err(e) => e.to_string(),
+        Ok(_) => panic!("a bad interface must be refused"),
+    };
+    assert!(err.contains("transport.interface"), "{err}");
     tokio::spawn(async move {
         tokio::time::sleep(Duration::from_millis(200)).await;
         let s = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();

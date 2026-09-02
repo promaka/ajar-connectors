@@ -42,6 +42,7 @@ struct Inputs {
     signing_key_path: String,
     subject_prefix: String,
     spool: Option<common::spool::SpoolConfig>,
+    transport: Option<common::Transport>,
 }
 
 /// Run every check and return the findings in onboarding order.
@@ -54,6 +55,7 @@ pub async fn run(opts: &Options) -> Vec<Finding> {
         Some(path) => match common::Config::load(path) {
             Ok(cfg) => Ok(Inputs {
                 spool: cfg.spool_config(),
+                transport: Some(cfg.transport.clone()),
                 source_id: cfg.source_id,
                 nats_url: cfg.nats_url,
                 signing_key_path: cfg.signing_key_path,
@@ -63,8 +65,9 @@ pub async fn run(opts: &Options) -> Vec<Finding> {
                 "config",
                 format!("{e:#}"),
                 "The doctor reads the same file the connector runs with. Fix the error \
-                 above; the example config next to each connector \
-                 (e.g. tak-cot.example.toml) shows every required field."
+                 above; the example config shipped next to your connector (the \
+                 *.example.toml in the tarball and the repo) shows every required \
+                 field."
                     .to_string(),
             )),
         },
@@ -105,6 +108,11 @@ pub async fn run(opts: &Options) -> Vec<Finding> {
     // Step 2a: the spool, when configured; a one-line hint when not.
     check_spool(&mut out, &cfg);
 
+    // Step 2b: the native-feed transport, where a naval first hour actually
+    // fails (a serial adapter that is not there, a multicast group joined on
+    // the wrong network of a dual-homed box).
+    check_transport(&mut out, &cfg);
+
     // Step 3: registration, as far as it can be seen from this box.
     check_registration(
         &mut out,
@@ -119,8 +127,8 @@ pub async fn run(opts: &Options) -> Vec<Finding> {
     // Step 5: the TLS policy table, mirroring the runtime's fail-closed rules.
     // The demand comes from the URL itself, not from whether the endpoint
     // answered: a dead tls:// endpoint still forbids a cleartext connector.
-    let url_demands_tls = net::parse_url(&cfg.nats_url)
-        .map(|e| e.tls_scheme)
+    let url_demands_tls = net::parse_urls(&cfg.nats_url)
+        .map(|eps| eps.iter().any(|e| e.tls_scheme))
         .unwrap_or(false);
     let policy = tls::policy(url_demands_tls);
     let mtls = check_policy(&mut out, &policy, greeting.as_ref());
@@ -202,6 +210,7 @@ fn inputs_from_env() -> Result<Inputs, Finding> {
         signing_key_path: get("AJAR_SIGNING_SEED").expect("checked"),
         subject_prefix: "ajar.ingest".to_string(),
         spool: None,
+        transport: None,
     })
 }
 
@@ -329,6 +338,95 @@ fn check_spool(out: &mut Vec<Finding>, cfg: &Inputs) {
     }
 }
 
+fn check_transport(out: &mut Vec<Finding>, cfg: &Inputs) {
+    match &cfg.transport {
+        Some(common::Transport::UdpMulticast {
+            bind,
+            group,
+            interface,
+        }) => {
+            // A real join-and-leave, not a guess: SO_REUSE means this is safe
+            // next to a running connector, and it exercises the exact
+            // interface-selection logic the connector will use.
+            match common::udp::open(bind, Some(group), interface.as_deref()) {
+                Ok(src) => out.push(Finding::ok("transport", {
+                    use common::FrameSource as _;
+                    format!("multicast join works ({})", src.describe())
+                })),
+                Err(e) => out.push(Finding::fail(
+                    "transport",
+                    format!("{e:#}"),
+                    "The connector will fail the same way. On a dual-homed box, set \
+                     transport.interface to the IP of the NIC on the surveillance \
+                     network (or put that IP in bind), so the group is joined where \
+                     the traffic actually is."
+                        .to_string(),
+                )),
+            }
+        }
+        #[cfg(feature = "serial")]
+        Some(common::Transport::Serial { device, baud }) => {
+            check_serial_device(out, device, *baud);
+        }
+        _ => {}
+    }
+}
+
+fn check_serial_device(out: &mut Vec<Finding>, device: &str, baud: u32) {
+    match std::fs::metadata(device) {
+        Err(_) => out.push(Finding::fail(
+            "transport",
+            format!("serial device {device} does not exist"),
+            "Nothing is at that path: check the adapter is plugged in and the port \
+             name (ls /dev/tty* — a USB adapter is usually /dev/ttyUSB0 or \
+             /dev/ttyACM0, and the name can shift when replugged)."
+                .to_string(),
+        )),
+        Ok(_) => {
+            // Open read-only and non-blocking: a tty open without O_NONBLOCK can
+            // hang on carrier-detect, and the doctor never hangs.
+            #[cfg(unix)]
+            let opened = {
+                use std::os::unix::fs::OpenOptionsExt as _;
+                #[cfg(target_os = "linux")]
+                const O_NONBLOCK: i32 = 0o4000;
+                #[cfg(not(target_os = "linux"))]
+                const O_NONBLOCK: i32 = 0x0004;
+                std::fs::OpenOptions::new()
+                    .read(true)
+                    .custom_flags(O_NONBLOCK)
+                    .open(device)
+            };
+            #[cfg(not(unix))]
+            let opened = std::fs::OpenOptions::new().read(true).open(device);
+            match opened {
+                Ok(_) => out.push(Finding::ok(
+                    "transport",
+                    format!("serial device {device} present and readable ({baud} baud configured)"),
+                )),
+                Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+                    out.push(Finding::fail(
+                        "transport",
+                        format!("serial device {device} exists but this user cannot read it"),
+                        "Add the connector's service user to the port's group (usually \
+                         `usermod -aG dialout <user>`, then log in again), or fix the \
+                         device permissions. The connector would retry forever and \
+                         publish nothing."
+                            .to_string(),
+                    ))
+                }
+                Err(e) => out.push(Finding::fail(
+                    "transport",
+                    format!("serial device {device}: {e}"),
+                    "The device exists but cannot be opened; check nothing else holds \
+                     it exclusively and that it is a real serial port."
+                        .to_string(),
+                )),
+            }
+        }
+    }
+}
+
 fn check_registration(
     out: &mut Vec<Finding>,
     cfg: &Inputs,
@@ -421,19 +519,54 @@ async fn check_endpoint(
     cfg: &Inputs,
     timeout: Duration,
 ) -> (Option<net::Endpoint>, Option<net::ServerInfo>) {
-    let ep = match net::parse_url(&cfg.nats_url) {
-        Ok(ep) => ep,
+    let endpoints = match net::parse_urls(&cfg.nats_url) {
+        Ok(eps) => eps,
         Err(e) => {
             out.push(Finding::fail(
                 "endpoint",
                 format!("nats_url {:?}: {e:#}", cfg.nats_url),
-                "nats_url must look like nats://host:4222 or tls://host:4222. Use the exact \
-                 endpoint the operator sent back in registration step 3."
+                "nats_url must look like nats://host:4222 or tls://host:4222, with a \
+                 comma-separated list for failover. Use the exact endpoint(s) the \
+                 operator sent back in registration step 3."
                     .to_string(),
             ));
             return (None, None);
         }
     };
+    // A failover list means EVERY endpoint gets probed: a dead standby is
+    // exactly what this tool exists to find before the drill does.
+    if endpoints.len() > 1 {
+        let mut dead: Vec<String> = Vec::new();
+        for ep in &endpoints[1..] {
+            match net::dial(ep, timeout).await {
+                net::Dial::Connected(_) => {}
+                net::Dial::NoDns(e) | net::Dial::NoAnswer(e) => {
+                    dead.push(format!("{} ({e})", ep.addr()))
+                }
+            }
+        }
+        if dead.is_empty() {
+            out.push(Finding::ok(
+                "failover",
+                format!(
+                    "all {} endpoints in the failover list answer",
+                    endpoints.len()
+                ),
+            ));
+        } else {
+            out.push(Finding::warn(
+                "failover",
+                format!("standby endpoint(s) not answering: {}", dead.join("; ")),
+                "The connector still runs on the surviving endpoint(s), but the two-box \
+                 story is one box short. Fix the standby before you need it."
+                    .to_string(),
+            ));
+        }
+    }
+    let ep = endpoints
+        .into_iter()
+        .next()
+        .expect("parse_urls yields at least one endpoint");
     match net::dial(&ep, timeout).await {
         net::Dial::Connected(mut stream) => {
             let greeting = net::read_info(&mut stream, Duration::from_millis(1500)).await;

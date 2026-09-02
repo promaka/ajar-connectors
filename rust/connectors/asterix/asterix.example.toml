@@ -13,7 +13,7 @@
 source_id = "radar-adsb-1"
 nats_url = "nats://127.0.0.1:4222"
 subject_prefix = "ajar.ingest"
-signing_key_path = "/etc/ajar/radar-adsb-1.key"
+signing_key_path = "/etc/ajar/radar-adsb-1.seed"
 
 # The air picture carries no hostility of its own; assign one for the COP.
 # default_hostility = "Unknown"

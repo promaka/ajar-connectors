@@ -17,7 +17,7 @@
 source_id = "uav-flight-1"
 nats_url = "nats://127.0.0.1:4222"
 subject_prefix = "ajar.ingest"
-signing_key_path = "/etc/ajar/uav-flight-1.key"
+signing_key_path = "/etc/ajar/uav-flight-1.seed"
 
 # Own-force UAS feed: stamp Friend on every track (MAVLink carries no
 # hostility of its own).

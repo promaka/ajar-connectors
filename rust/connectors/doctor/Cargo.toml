@@ -14,6 +14,12 @@ publish = false
 name = "ajar-doctor"
 path = "src/main.rs"
 
+[features]
+# The doctor preflights serial devices; it ships in the same tarball as the
+# serial-capable connectors, so it carries the same default.
+default = ["serial"]
+serial = ["ajar-connector-common/serial"]
+
 [dependencies]
 ajar-connector-common.workspace = true
 ed25519-dalek.workspace = true

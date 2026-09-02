@@ -16,7 +16,7 @@
 source_id = "uas-klv-1"
 nats_url = "nats://127.0.0.1:4222"
 subject_prefix = "ajar.ingest"
-signing_key_path = "/etc/ajar/uas-klv-1.key"
+signing_key_path = "/etc/ajar/uas-klv-1.seed"
 
 # Motion-imagery metadata carries no hostility of its own; stamp one for the
 # COP (e.g. "friendly" for own-force UAS).

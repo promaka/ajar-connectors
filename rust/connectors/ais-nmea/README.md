@@ -13,7 +13,7 @@ already emits.
 ## Model
 
 ```
-AIS (NMEA over TCP/UDP) ──▶ ajar-ais-nmea ──▶ canonical Event ──▶ seal ──▶ NATS  ajar.ingest.<source_id>
+AIS (NMEA over serial/TCP/UDP) ──▶ ajar-ais-nmea ──▶ canonical Event ──▶ seal ──▶ NATS  ajar.ingest.<source_id>
        untrusted edge          decode          (mim:vessel)     (Ed25519)         (mTLS to Core)
 ```
 
@@ -29,6 +29,21 @@ sentences are reassembled. Other message types (static/voyage data, safety) are
 well-formed but not mapped, so they are ignored, not dropped as errors.
 
 ## Configure & run
+
+Straight off the bridge wiring (RS-422/RS-232 is how AIS and ARPA actually
+arrive on a ship; the shipped binary reads serial out of the box):
+
+```toml
+[transport]
+kind = "serial"
+device = "/dev/ttyUSB0"
+baud = 38400            # AIS multiplexers; classic NMEA instruments are 4800
+```
+
+If the port opens Permission denied, add the service user to the port's
+group (usually `dialout`). `ajar-doctor` checks the device before you fight
+the connector.
+
 
 Copy [`ais-nmea.example.toml`](ais-nmea.example.toml). AIS usually arrives one of
 two ways, both just config:

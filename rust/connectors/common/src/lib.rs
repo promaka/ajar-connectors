@@ -72,8 +72,12 @@ pub use runtime::{run, FrameParser, FrameSource, ParseError};
 /// the protocol (parsing) never changes when the transport does.
 pub async fn open_source(transport: &Transport) -> anyhow::Result<Box<dyn FrameSource>> {
     Ok(match transport {
-        Transport::UdpMulticast { bind, group } => Box::new(udp::open(bind, Some(group))?),
-        Transport::Udp { bind } => Box::new(udp::open(bind, None)?),
+        Transport::UdpMulticast {
+            bind,
+            group,
+            interface,
+        } => Box::new(udp::open(bind, Some(group), interface.as_deref())?),
+        Transport::Udp { bind } => Box::new(udp::open(bind, None, None)?),
         Transport::TcpServer { bind, framing } => Box::new(tcp_server::open(bind, *framing).await?),
         Transport::TcpClient { connect, framing } => Box::new(tcp::open(connect, *framing)?),
         Transport::Dir {

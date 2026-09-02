@@ -11,7 +11,7 @@
 source_id = "isr-tracker-1"
 nats_url = "nats://127.0.0.1:4222"
 subject_prefix = "ajar.ingest"
-signing_key_path = "/etc/ajar/isr-tracker-1.key"
+signing_key_path = "/etc/ajar/isr-tracker-1.seed"
 
 # 4676 carries a STANAG 1241 identity, so hostility is derived from the wire
 # (FRIEND/HOSTILE/NEUTRAL). This default is only used when a track's identity is

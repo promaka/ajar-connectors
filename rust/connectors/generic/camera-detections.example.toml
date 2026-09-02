@@ -20,7 +20,7 @@
 source_id = "camera-north-gate"
 nats_url = "nats://127.0.0.1:4222"
 subject_prefix = "ajar.ingest"
-signing_key_path = "/etc/ajar/camera-north-gate.key"
+signing_key_path = "/etc/ajar/camera-north-gate.seed"
 
 # Camera detections carry no hostility; stamp one for the COP.
 default_hostility = "Unknown"
@@ -34,20 +34,22 @@ framing = "line"
 
 [mapping]
 format = "json"
-# Register this type in the ontology (or map per class with several configs).
-entity_type = "x:acme:camera-detection"
+# Governed by the vendored ontology as shipped; a vendor extension type
+# (x:<vendor>:<type>) works once your operator registers it.
+entity_type = "mim:object"
 timestamp_field = "ts"
 timestamp_format = "rfc3339"
 # The detector must geolocate the object (pixel->world) for a map track.
 lat_field = "lat"
 lon_field = "lon"
+# The detector's score lands in the event's first-class confidence field
+# (mapping it as an attribute would silently lose it: not governed, quarantined).
+confidence_field = "confidence"
 
 # Governed: ontology-validated tactical facts.
 # Direction is `<record field> = "<ajar key>"` — the JSON key on the left, the
 # Ajar attribute name on the right.
 [mapping.attributes]
-class = "object_class"
-confidence = "confidence"
 bearing = "course"
 
 # Ungoverned passthrough (same direction: record field -> ajar key). The
@@ -55,6 +57,8 @@ bearing = "course"
 # its own symbol (never a merged blob); the image bounding box rides through
 # verbatim for the console to overlay on the video.
 [mapping.metadata]
+# The detector's class label is vendor vocabulary: ungoverned, always kept.
+class = "object_class"
 track_id = "source_uid"
 camera_id = "camera_id"
 bbox_x = "bbox_x"
