@@ -15,7 +15,7 @@ nats_url = "nats://127.0.0.1:4222"
 subject_prefix = "ajar.ingest"
 
 # The connector's Ed25519 signing seed (32 raw bytes or 64-char hex). Secret.
-signing_key_path = "/etc/ajar/ais-coast-1.key"
+signing_key_path = "/etc/ajar/ais-coast-1.seed"
 
 # Coastal AIS is overwhelmingly civil traffic.
 default_hostility = "Neutral"

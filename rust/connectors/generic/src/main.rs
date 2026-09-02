@@ -35,7 +35,9 @@ async fn main() -> anyhow::Result<()> {
     // instead of running healthily and delivering nothing.
     ajar_connector_common::ontology::enforce(&ajar_connector_common::ontology::Declared {
         entity_types: vec![mapping.entity_type.clone()],
-        attributes: mapping.attributes.keys().cloned().collect(),
+        // The AJAR names (the mapping's values) are what the ontology governs;
+        // the native source-field names on the left are nobody's business.
+        attributes: mapping.attributes.values().cloned().collect(),
         fixed_values: cfg
             .default_hostility
             .clone()

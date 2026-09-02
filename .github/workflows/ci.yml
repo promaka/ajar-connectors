@@ -212,6 +212,23 @@ jobs:
       - name: Conformance + round-trip gate
         run: ctest --test-dir cpp/build --output-on-failure
 
+  quickstart:
+    # The stopwatch: a stranger, this checkout, and the README's prebuilt path,
+    # measured from nothing to the first governed event. Deliberately uncached:
+    # the number is only honest if the build is as cold as the stranger's.
+    name: quickstart stopwatch
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install nats-server (spool gate)
+        run: |
+          curl -sSfL https://github.com/nats-io/nats-server/releases/download/v2.10.24/nats-server-v2.10.24-linux-amd64.tar.gz | tar xz
+          sudo install nats-server-v2.10.24-linux-amd64/nats-server /usr/local/bin/nats-server
+          nats-server --version
+      - name: Follow the README, timed
+        run: bash scripts/quickstart-stopwatch.sh
+
   python:
     name: pytest + conformance
     runs-on: ubuntu-latest

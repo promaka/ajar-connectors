@@ -11,7 +11,7 @@
 source_id = "uas-vsm-1"
 nats_url = "nats://127.0.0.1:4222"
 subject_prefix = "ajar.ingest"
-signing_key_path = "/etc/ajar/uas-vsm-1.key"
+signing_key_path = "/etc/ajar/uas-vsm-1.seed"
 
 # 4586 carries no hostility; assert one for the COP. Own-force UAS are typically
 # friendly.

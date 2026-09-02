@@ -73,7 +73,7 @@ Copy [`stanag4586.example.toml`](stanag4586.example.toml). The DLI is usually UD
 ```toml
 source_id = "uas-vsm-1"
 nats_url  = "nats://127.0.0.1:4222"
-signing_key_path = "/etc/ajar/uas-vsm-1.key"
+signing_key_path = "/etc/ajar/uas-vsm-1.seed"
 default_hostility = "Friend"
 
 [transport]

@@ -188,6 +188,12 @@ argument; the one call you add is shown in
 cp rust/connectors/asterix/asterix.example.toml ./asterix.toml
 ```
 
+No repo checkout needed: the release tarball for your platform
+(`ajar-connectors-<version>-<target>.tar.gz` on the
+[releases page](https://github.com/promaka/ajar-connectors/releases)) carries
+every connector binary, `ajar-doctor`, and these example configs; verify it
+against the `.sha256` beside it, then start from the config inside.
+
 **Step 3. Edit four values.**
 
 ```toml
@@ -207,7 +213,7 @@ Any connector runs on any transport. The full list is in
 **Step 4. Run it once locally** to check the config parses:
 
 ```bash
-cargo build --release -p ajar-asterix
+cargo build --release --manifest-path rust/connectors/Cargo.toml -p ajar-asterix
 ./rust/connectors/target/release/ajar-asterix ./asterix.toml
 ```
 
@@ -246,7 +252,7 @@ sensor_id = "sensor_id"
 **Step 4. Run it.**
 
 ```bash
-cargo build --release -p ajar-generic
+cargo build --release --manifest-path rust/connectors/Cargo.toml -p ajar-generic
 ./rust/connectors/target/release/ajar-generic ./generic.toml
 ```
 
@@ -299,6 +305,11 @@ Environment=AJAR_HEALTH_ADDR=0.0.0.0:9110
 Restart=always
 ```
 
+With a `nats://` URL, set `AJAR_REQUIRE_TLS=1` to refuse cleartext anyway:
+the connector then fails closed if the `AJAR_TLS_*` files are missing rather
+than silently downgrading a defence link. (A `tls://` URL demands this by
+itself.)
+
 ### 7b. As a container
 
 Images are private. Create a pull secret with `read:packages` for
@@ -330,8 +341,12 @@ and can restrict egress to NATS only. Pull secrets, mTLS and health probes:
 ### 7d. Health and metrics
 
 Set `AJAR_HEALTH_ADDR=0.0.0.0:9110` on any method. Gives `/healthz` and
-`/metrics` with `connector_received_total`, `connector_published_total` and
-`connector_rejected_total`.
+`/metrics` with counters for received, published, rejected and
+backpressure-dropped events, the spool (`connector_spooled_total`,
+`connector_drained_total`, `connector_spool_failed_total`,
+`connector_spool_corrupt_total`, `connector_spool_dropped_segments_total`)
+and any connector-specific counters (e.g. `asterix_test_targets_total`,
+`ttm_non_tracking_total`).
 
 ### 7e. Intermittent links (store-and-forward)
 
@@ -361,9 +376,11 @@ spooled to the container filesystem survive the link outage but not a
 restart. `ajar-doctor` checks the directory is writable and reports any
 backlog waiting to drain.
 
-Without `[spool]` the behavior is unchanged: a stalled publish sheds the event
-and counts it. Spool depth and drain progress appear on `/metrics`
-(`connector_spooled_total`, `connector_drained_total`).
+Without a spool configured the behavior is unchanged: a stalled publish sheds the event
+and counts it. Spool activity appears on `/metrics`: spooled, drained,
+failed appends, and segments dropped at the bound (the bound is enforced
+per segment, so reconcile loss against
+`connector_spool_dropped_segments_total`, not an event count).
 
 ### 7f. When nothing flows
 
@@ -483,16 +500,18 @@ loop, health and graceful shutdown. A new connector is therefore a format parser
 |-----------|----------|---------------|-------------------|
 | [asterix](rust/connectors/asterix) | ASTERIX CAT021 / 048 / 062 | radar + ADS-B + fused air tracks | UDP multicast |
 | [adsb](rust/connectors/adsb) | ADS-B (SBS-1 / BaseStation) | cooperative aircraft tracks | TCP client |
-| [ais-nmea](rust/connectors/ais-nmea) | AIS over NMEA 0183 | maritime vessel tracks | TCP client / UDP |
+| [ais-nmea](rust/connectors/ais-nmea) | AIS + ARPA (TTM) over NMEA 0183 | maritime vessel + radar tracks | serial / TCP client / UDP |
 | [gmti](rust/connectors/gmti) | STANAG 4607 (NATO GMTI) | ground moving-target detections | file / TCP / UDP |
 | [klv](rust/connectors/klv) | STANAG 4609 / MISB ST 0601 (KLV) | FMV platform / sensor metadata | UDP / file |
 | [stanag4676](rust/connectors/stanag4676) | STANAG 4676 (NATO ISR Tracking) | fused ISR tracks | TCP / file |
-| [mavlink](rust/connectors/mavlink) | MAVLink v1/v2 | small-UAS / drone telemetry | UDP / serial |
+| [mavlink](rust/connectors/mavlink) | MAVLink v1/v2 | small-UAS / drone telemetry | UDP |
 | [stanag4586](rust/connectors/stanag4586) | STANAG 4586 (NATO UAS Control) | military UAS telemetry | UDP |
 | [tak-cot](rust/connectors/tak-cot) | TAK / Cursor-on-Target | ground/air situational-awareness tracks | UDP multicast / unicast |
 | [generic](rust/connectors/generic) | any flat JSON / CSV | the long tail, by field mapping rather than code | any of the below |
 | [tak-egress](rust/connectors/tak-egress) | TAK / CoT (**egress**) | governed COP tracks OUT to a TAK Server, verbatim | NATS → TLS 8089 |
+| [generic-egress](rust/connectors/generic-egress) | any JSON consumer (**egress**) | governed events OUT by field mapping, markings unmappable-away | NATS → HTTP |
 | [sink](rust/connectors/sink) | — (**development sink**) | verifies, persists and audit-chains events; runs the whole path without Core | NATS → SQLite |
+| [doctor](rust/connectors/doctor) | — (**diagnostics**) | names the broken onboarding step when nothing flows | read-only probes |
 
 Each maps a standard's position reports, and where present its identity and
 tactical fields, onto Ajar tracks. Each connector's README states which message
@@ -517,7 +536,7 @@ arrive, so any connector runs on any transport by config:
 | `dir` | watch a drop directory | batch file drops (SFTP exports); reads files once settled |
 | `exec` | run a CLI tool | reads its stdout; wraps any vendor binary |
 | `stdin` | pipe | `producer \| ajar-<connector>` |
-| `serial` | RS-232/422/485 | needs the `serial` feature (NMEA sensors) |
+| `serial` | RS-232/422/485 | shipped in `ajar-ais-nmea`; other connectors build with the `serial` feature |
 | `mqtt` | subscribe a topic | needs the `mqtt` feature (IoT buses) |
 | `rest-poll` | HTTP GET on interval | needs the `rest-poll` feature (pull-only APIs) |
 | `ws-client` | WebSocket, connect out | needs the `websocket` feature; hosted live feeds, subscription message and auth headers supported |
