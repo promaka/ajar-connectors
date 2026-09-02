@@ -16,6 +16,47 @@ use prost::Message as _;
 
 use crate::packet::Packet;
 
+/// Verify-and-validate for CI and staging: everything `run` would check
+/// before touching the network - subject present, egress key parses, formats
+/// sane, referenced cert files present - then exit. The packet signature and
+/// checksums were already enforced by `packet::open` before this is called.
+pub fn check(packet: &Packet) -> anyhow::Result<()> {
+    let m = &packet.manifest;
+    let subject = m.egress_subject.as_deref().ok_or_else(|| {
+        anyhow!("this consumer packet names no egress_subject; ask the operator to re-issue it")
+    })?;
+    let key_hex = m
+        .egress_verifying_key_hex
+        .as_deref()
+        .ok_or_else(|| anyhow!("this consumer packet carries no egress_verifying_key_hex"))?;
+    let key_bytes: [u8; 32] = hex::decode(key_hex.trim())
+        .context("egress_verifying_key_hex is not hex")?
+        .try_into()
+        .map_err(|_| anyhow!("egress_verifying_key_hex must be 32 bytes"))?;
+    VerifyingKey::from_bytes(&key_bytes).context("egress verifying key is invalid")?;
+    for path in [
+        m.keys.ca_cert_path.as_deref(),
+        m.keys.mtls_cert_path.as_deref(),
+        m.keys.mtls_key_path.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if !packet.path(path).exists() {
+            anyhow::bail!("the manifest references {path} but the packet did not deliver it");
+        }
+    }
+    println!(
+        "consumer packet valid: subscribe {} (formats: {})",
+        subject,
+        m.formats
+            .as_deref()
+            .map(|f| f.join(", "))
+            .unwrap_or_else(|| "unspecified".into())
+    );
+    Ok(())
+}
+
 pub struct Options {
     pub to_tak: Option<String>,
     pub to_http: Option<String>,
