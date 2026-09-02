@@ -28,4 +28,9 @@ regexes = [
   # authorises nothing — the private half never existed outside a temp dir.
   '''be632a73306cf201f8222cd8766a4427f4c7224c0e55018012c28faed60e0892''',
   '''e28a8970753332bd72fef413e6b0b2ef1b4aadda7aa2c141f233712a6876b351''',
+  # A FILENAME, not a key: the onboarding packet contract names the signing
+  # seed file <id>.signing.key, and the ajar-up gate writes that manifest
+  # field in test fixtures. The generic-api-key rule pattern-matches the
+  # phrase; the value is a path.
+  '''[A-Za-z0-9._-]+\.signing\.key''',
 ]
