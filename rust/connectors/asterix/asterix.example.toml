@@ -33,3 +33,13 @@ signing_key_path = "/etc/ajar/radar-adsb-1.seed"
 kind = "udp-multicast"
 bind = "0.0.0.0:8600"
 group = "232.1.1.1"
+
+# Evaluating against a recording instead of a live radar? Replay a capture
+# with its original timing (a .pcapng converts with:
+#   tshark -F pcap -r in.pcapng -w out.pcap).
+# [transport]
+# kind = "pcap-replay"
+# path = "/data/radar-capture.pcap"
+# port = 8600        # only the feed, out of a busy capture
+# speed = 1.0        # 1.0 = as recorded; 10 = ten times faster
+# loop = true        # demo mode: replay forever

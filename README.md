@@ -549,6 +549,7 @@ arrive, so any connector runs on any transport by config:
 | `dir` | watch a drop directory | batch file drops (SFTP exports); reads files once settled |
 | `exec` | run a CLI tool | reads its stdout; wraps any vendor binary |
 | `stdin` | pipe | `producer \| ajar-<connector>` |
+| `pcap-replay` | recorded capture | replays a .pcap with original timing - evaluate on real recordings |
 | `serial` | RS-232/422/485 | shipped in `ajar-ais-nmea`; other connectors build with the `serial` feature |
 | `mqtt` | subscribe a topic | needs the `mqtt` feature (IoT buses) |
 | `rest-poll` | HTTP GET on interval | needs the `rest-poll` feature (pull-only APIs) |

@@ -164,6 +164,14 @@ impl Config {
     }
 }
 
+fn default_replay_speed() -> f64 {
+    1.0
+}
+
+fn default_replay_max_gap_ms() -> u64 {
+    5_000
+}
+
 fn default_subject_prefix() -> String {
     "ajar.ingest".to_string()
 }
@@ -299,6 +307,28 @@ pub enum Transport {
         /// certificate rather than by a shared secret.
         #[serde(default)]
         tls_client_ca: Option<String>,
+    },
+    /// Replay a recorded capture (classic pcap, Ethernet/IPv4/UDP) with its
+    /// original timing: any connector runs a recording exactly as it would
+    /// have run live. The field-standard way to evaluate against real data.
+    PcapReplay {
+        /// Path to the .pcap (a .pcapng converts with
+        /// `tshark -F pcap -r in.pcapng -w out.pcap`).
+        path: String,
+        /// Time scale: 1.0 = real time, 10 = ten times faster.
+        #[serde(default = "default_replay_speed")]
+        speed: f64,
+        /// Replay forever (demo loop) instead of once.
+        #[serde(default, rename = "loop")]
+        looping: bool,
+        /// Only datagrams to this UDP port (a busy capture carries more than
+        /// the feed).
+        #[serde(default)]
+        port: Option<u16>,
+        /// Longest gap honoured between packets, in milliseconds: a recorder
+        /// left idle must not stall the replay. Default 5000.
+        #[serde(default = "default_replay_max_gap_ms")]
+        max_gap_ms: u64,
     },
     /// Serial line (RS-232/422/485) — many sensors emit NMEA or vendor ASCII this
     /// way. Requires the `serial` feature.
