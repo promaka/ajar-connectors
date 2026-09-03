@@ -154,6 +154,34 @@ One page: [docs/wire-contract-v1.md](wire-contract-v1.md). It is the whole
 agreement — event shape, canonical bytes, the seal, the subject, and what is
 frozen.
 
+## Consuming governed events
+
+The consume side mirrors the produce side: one call, and verification is
+structurally unskippable - the iterator only ever yields events whose
+signature verified under the deployment's egress key; tampered ones are
+counted and dropped inside the loop.
+
+```bash
+pip install "ajar-connector[consumer]"
+```
+
+```python
+from ajar_connector.consumer import consume
+
+async for delivery in consume(
+    "tls://nats.operator.example:4443",
+    subject="ajar.egress.geojson.>",
+    egress_verifying_key="<64-hex from your operator>",
+    ca="ca.pem", cert="client.pem", key="client.key",
+):
+    handle(delivery.event)          # decoded, verified Event
+    # delivery.payload = the rendered bytes (GeoJSON, CoT, native frame)
+```
+
+A platform that also publishes assessments back passes
+`skip_source_ids={"your-producer-id"}` and `skip_derived=True` so it never
+assesses its own (or any other model's) output.
+
 ## Publishing derived events (AI assessments)
 
 A platform that consumes governed events and produces assessments publishes

@@ -24,7 +24,7 @@ import asyncio
 import os
 import sys
 
-from ajar_connector import event_pb2, verify
+from ajar_connector.consumer import consume
 from ajar_connector.producer import close, connect, publish_assessment
 
 MODEL = "example-assessor@0.1"
@@ -61,7 +61,6 @@ async def main() -> None:
 
     egress_key = bytes.fromhex(os.environ["AJAR_EGRESS_PUBKEY"])
 
-    # One connection serves both directions.
     producer = await connect(
         args.nats,
         source_id=args.source_id,
@@ -70,26 +69,23 @@ async def main() -> None:
         cert=args.cert,
         key=args.key,
     )
-    sub = await producer.nc.subscribe(args.consume)
     print(f"[derived-producer] consuming {args.consume}, publishing as {args.source_id}",
           file=sys.stderr)
 
-    async for msg in sub.messages:
-        # 1. CONSUME: verify Core's egress signature, decode the event.
-        try:
-            canonical = verify(msg.data, egress_key)
-        except Exception as e:  # noqa: BLE001 - an unverifiable event is logged, never used
-            print(f"[derived-producer] skip: does not verify: {e}", file=sys.stderr)
-            continue
-        source_event = event_pb2.Event()
-        source_event.ParseFromString(canonical)
-
-        # Never assess your own assessments: your events come back out of
-        # egress too, and without this guard the loop feeds itself forever.
-        if source_event.source_id == args.source_id or any(
-            a.key == "model" for a in source_event.attributes
-        ):
-            continue
+    # 1. CONSUME: every event this loop yields has VERIFIED under the egress
+    # key; tampered ones are counted and dropped inside consume(). The two
+    # skip guards stop the loop assessing its own (or any AI's) output.
+    async for delivery in consume(
+        args.nats,
+        subject=args.consume,
+        egress_verifying_key=egress_key,
+        ca=args.ca,
+        cert=args.cert,
+        key=args.key,
+        skip_source_ids={args.source_id},
+        skip_derived=True,
+    ):
+        source_event = delivery.event
 
         # 2. DERIVE: run your model over the governed event.
         assessment = assess(source_event)

@@ -15,6 +15,16 @@ Two version lines are tracked independently (see COMPATIBILITY.md):
 
 ### Added
 
+- `ajar_connector.consumer` (Python, `pip install "ajar-connector[consumer]"`):
+  the consume side of the SDK, mirroring the producer module. One call
+  subscribes to governed egress and yields only events whose signature
+  verified under the deployment's egress key - verification is structurally
+  unskippable, tampered events are counted and dropped inside the loop, and
+  the self-consume guards (`skip_source_ids`, `skip_derived`) are arguments
+  instead of a pattern every platform rediscovers. The derive-loop example
+  now uses it, and the wire gate proves accept/reject/skip against a real
+  broker.
+
 - `pcap-replay` transport: any connector replays a recorded capture (classic
   pcap, Ethernet/IPv4/UDP, optional port filter) with the original
   inter-packet timing, scaled by `speed`, long recorder-idle gaps clamped,
