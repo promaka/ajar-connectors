@@ -150,6 +150,8 @@ jobs:
       - name: Connectors — test
         working-directory: rust/connectors
         run: cargo test --workspace
+      - name: SDK — consumer feature (wire gate)
+        run: cargo test -p ajar-connector --features consumer
 
   go:
     name: gofmt + vet + test + conformance

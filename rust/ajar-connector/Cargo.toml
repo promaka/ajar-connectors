@@ -13,6 +13,11 @@ include = ["src/**", "build.rs", "contract/**", "README.md"]
 keywords = ["ajar", "connector", "protobuf", "ed25519", "defence"]
 categories = ["encoding", "api-bindings"]
 
+[features]
+# The verified consumer stream pulls a NATS client; the default build stays
+# transport-free (the same shape as the Python package's extras).
+consumer = ["dep:async-nats", "dep:futures-util", "dep:tracing"]
+
 [dependencies]
 prost.workspace = true
 ed25519-dalek.workspace = true
@@ -24,9 +29,17 @@ serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 
+# Optional: only with `features = ["consumer"]`.
+async-nats = { version = "0.50", default-features = false, features = ["ring"], optional = true }
+futures-util = { version = "0.3", optional = true }
+tracing = { version = "0.1", optional = true }
+
 [build-dependencies]
 prost-build.workspace = true
 protoc-bin-vendored.workspace = true
 
 [dev-dependencies]
+# The consumer wire test runs against a real broker (skipped without one,
+# required in CI where the workflow installs it).
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "net"] }
 base64.workspace = true

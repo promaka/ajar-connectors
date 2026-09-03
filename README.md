@@ -169,6 +169,12 @@ The prebuilt connectors set it automatically.
 Longer guides: [Python](docs/embedding-python.md) · [C++](docs/embedding-cpp.md).
 Rust and Go use the same three calls.
 
+**Consuming governed events?** Verification is one call and structurally
+unskippable in every SDK: Python `ajar_connector.consumer.consume`, Go
+`ajarconnector.VerifyingHandler`, Rust `ajar_connector::consumer` (behind
+`features = ["consumer"]`). Only signature-verified events ever reach your
+code; tampered ones are counted and dropped inside the loop.
+
 **Publishing AI or analytics output back in?** A derived event names what it
 was derived from, and the boundary refuses one that does not. The drop-in
 producer (`pip install "ajar-connector[producer]"`) makes lineage a required

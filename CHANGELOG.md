@@ -15,6 +15,17 @@ Two version lines are tracked independently (see COMPATIBILITY.md):
 
 ### Added
 
+- The verified consume side in Go and Rust, mirroring the Python consumer:
+  verification is structurally unskippable in all three. Go's
+  `VerifyingHandler` wraps a per-event handler so only events whose
+  signature verified under the egress key reach it (the SDK stays
+  transport-free; the subscription is yours). Rust's
+  `consumer::verified_events` (behind `features = ["consumer"]`, keeping the
+  default crate transport-free) turns a subscription into a stream that
+  yields only verified events. Both carry the self-consume guards
+  (`skip_source_ids`, skip-derived) and accept/reject/skip counters, and
+  both are wire-gated against a real broker with exact counts.
+
 - `ajar_connector.consumer` (Python, `pip install "ajar-connector[consumer]"`):
   the consume side of the SDK, mirroring the producer module. One call
   subscribes to governed egress and yields only events whose signature

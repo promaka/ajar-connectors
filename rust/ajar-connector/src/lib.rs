@@ -41,6 +41,8 @@
 mod builder;
 mod canonical;
 mod connector;
+#[cfg(feature = "consumer")]
+pub mod consumer;
 mod error;
 mod profile;
 mod seal;
