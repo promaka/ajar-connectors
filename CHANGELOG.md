@@ -15,6 +15,16 @@ Two version lines are tracked independently (see COMPATIBILITY.md):
 
 ### Added
 
+- `pcap-replay` transport: any connector replays a recorded capture (classic
+  pcap, Ethernet/IPv4/UDP, optional port filter) with the original
+  inter-packet timing, scaled by `speed`, long recorder-idle gaps clamped,
+  `loop = true` for demos. Capture noise (ARP, other ports) is skipped and
+  counted; a pcapng is named with its one-line conversion instead of a
+  cryptic magic-number error; a torn tail replays what was captured. The
+  doctor preflights the capture file and reports the datagram count. This is
+  the evaluate-on-your-own-recording path: a radar log becomes a live
+  governed picture with a three-line transport block.
+
 - `ajar-up --check`: verify and validate a packet, then exit 0, for both
   roles - the one-line CI assertion the cross-repo smoke wanted. For a
   producer packet it is `--no-exec` (verify, place, configure, preflight)

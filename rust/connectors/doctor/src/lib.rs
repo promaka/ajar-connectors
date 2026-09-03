@@ -368,6 +368,29 @@ fn check_transport(out: &mut Vec<Finding>, cfg: &Inputs) {
         Some(common::Transport::Serial { device, baud }) => {
             check_serial_device(out, device, *baud);
         }
+        Some(common::Transport::PcapReplay { path, port, .. }) => {
+            match std::fs::read(path)
+                .map_err(|e| anyhow::anyhow!("reading capture {path}: {e}"))
+                .and_then(|data| common::replay::parse_pcap(&data, *port))
+            {
+                Ok(cap) => out.push(Finding::ok(
+                    "transport",
+                    format!(
+                        "capture {path} parses: {} datagrams to replay ({} skipped as noise)",
+                        cap.datagrams.len(),
+                        cap.skipped
+                    ),
+                )),
+                Err(e) => out.push(Finding::fail(
+                    "transport",
+                    format!("{e:#}"),
+                    "The connector will refuse the same capture. The error above names \
+                     the fix (a pcapng needs converting; an empty result usually means \
+                     the port filter does not match what was recorded)."
+                        .to_string(),
+                )),
+            }
+        }
         _ => {}
     }
 }

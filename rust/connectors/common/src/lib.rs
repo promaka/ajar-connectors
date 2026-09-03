@@ -36,6 +36,7 @@ pub mod key;
 pub mod nats;
 pub mod ontology;
 pub mod profile;
+pub mod replay;
 mod runtime;
 pub mod spool;
 pub mod stdin;
@@ -78,6 +79,13 @@ pub async fn open_source(transport: &Transport) -> anyhow::Result<Box<dyn FrameS
             interface,
         } => Box::new(udp::open(bind, Some(group), interface.as_deref())?),
         Transport::Udp { bind } => Box::new(udp::open(bind, None, None)?),
+        Transport::PcapReplay {
+            path,
+            speed,
+            looping,
+            port,
+            max_gap_ms,
+        } => Box::new(replay::open(path, *speed, *looping, *port, *max_gap_ms)?),
         Transport::TcpServer { bind, framing } => Box::new(tcp_server::open(bind, *framing).await?),
         Transport::TcpClient { connect, framing } => Box::new(tcp::open(connect, *framing)?),
         Transport::Dir {
