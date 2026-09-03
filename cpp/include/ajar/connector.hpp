@@ -14,6 +14,7 @@
 
 #include <array>
 #include <cstdint>
+#include <functional>
 #include <stdexcept>
 #include <optional>
 #include <string>
@@ -87,6 +88,47 @@ std::vector<std::uint8_t> seal(const std::string& canonical, const SigningKey& k
 // embarrassingly parallel.
 std::optional<std::string> verify(const std::vector<std::uint8_t>& sealed,
                                   const std::array<std::uint8_t, 32>& verifying_key);
+
+// The consume side, with the transport left where it belongs: yours. A
+// verified event as your code receives it, decoded, with the subject it
+// arrived on.
+struct Delivery {
+  Event event;
+  std::string subject;
+};
+
+// Which verified events to hand back. A skip is counted, never an error.
+// skip_source_ids drops events this consumer itself published — the
+// self-consume guard for a consume-derive-republish loop. skip_derived drops
+// any event carrying a `model` attribute (the lineage convention), leaving
+// only sensor-original events.
+struct ConsumerGuards {
+  std::vector<std::string> skip_source_ids;
+  bool skip_derived = false;
+};
+
+// What the handler did with everything it saw, for health metrics and the
+// wire gates. rejected counts envelopes that failed verification or would not
+// decode; skipped counts guard refusals.
+struct ConsumerStats {
+  std::uint64_t accepted = 0;
+  std::uint64_t rejected = 0;
+  std::uint64_t skipped = 0;
+};
+
+// One-call consume with verification structurally unskippable, mirroring the
+// Go SDK's VerifyingHandler. Returns a callable to feed each raw message
+// (payload bytes and subject) from whatever transport you already run — any
+// NATS client, a bridge, a replayed capture. `handle` is invoked only with
+// events whose envelope checks under `egress_key` (Core's egress key from the
+// handover pack) and that pass the guards; everything else is counted in
+// `stats` (which may be null) and dropped. Same hot-path economics as
+// verify(): no exception on refusal, no lock, callable from any one thread at
+// a time.
+std::function<void(const std::vector<std::uint8_t>&, const std::string&)>
+verifying_handler(const std::array<std::uint8_t, 32>& egress_key,
+                  ConsumerGuards guards, ConsumerStats* stats,
+                  std::function<void(Delivery)> handle);
 
 // Ergonomic, fail-closed Event construction. Auto-sorts attributes, rejects
 // duplicate keys, enforces required fields and limits, offers UUIDv7 / RFC 3339

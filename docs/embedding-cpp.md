@@ -187,25 +187,33 @@ ajar-conformance run --impl ./your-adapter
 
 The same envelope, the other direction: Core re-signs every event that passes
 governance, and you verify it with the egress key from your operator's handover
-pack. One function is the whole trust check:
+pack. The SDK ships the whole trust check as one call — `verifying_handler`
+returns a callable you feed each raw message from whatever transport you
+already run (any NATS client, a bridge, a replayed capture); your callback
+only ever sees events that verified:
 
 ```cpp
 // Subscribe with your own NATS client to ajar.egress.<format>.>   (NEVER
 // ajar.cue.> — effector cues are a separate channel by hard rule.)
-static bool egress_subject_ok(const std::string& s) {
-  return s.rfind("ajar.egress.", 0) == 0;
-}
+ajar::ConsumerGuards guards;
+guards.skip_source_ids = {"my-fuser-1"};  // never re-consume your own events
+guards.skip_derived = false;              // true = sensor-original events only
 
-void on_message(const std::vector<std::uint8_t>& sealed) {
-  static std::set<std::string> seen;                     // dedupe on event id
-  const auto canonical = ajar::verify(sealed, kEgressKey);
-  if (!canonical) return;                                // count it; never use it
-  ajar::Event event;
-  event.ParseFromString(*canonical);
-  if (!seen.insert(event.id()).second) return;           // redelivery is normal
-  handle(event);                                         // markings included
-}
+ajar::ConsumerStats stats;                // accepted / rejected / skipped
+const auto on_message = ajar::verifying_handler(
+    kEgressKey, guards, &stats, [](ajar::Delivery d) {
+      static std::set<std::string> seen;               // dedupe on event id
+      if (!seen.insert(d.event.id()).second) return;   // redelivery is normal
+      handle(d.event);                                 // markings included
+    });
+
+// then, in your subscription loop:
+on_message(msg_bytes, msg_subject);
 ```
+
+Tampered or misdirected payloads are counted in `stats.rejected` and dropped
+before your callback; there is no code path that hands you an unverified
+event. (`ajar::verify()` remains available if you want the raw primitive.)
 
 Three rules, and you are done:
 
