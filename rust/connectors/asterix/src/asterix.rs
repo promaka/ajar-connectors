@@ -817,6 +817,11 @@ impl AsterixParser {
             .payload(t.raw.clone())
             .metadata("source_uid", source_uid)
             .metadata("asterix_category", t.category.to_string());
+        // The track number (I048/161, I062/040) is the sensor's own stable track id
+        // — the governed correlation key a consumer keys on, not just provenance.
+        if let Some(track) = t.track {
+            b = b.attribute("track_id", track.to_string());
+        }
         // Absolute position -> structured location (metres); else the polar
         // measurement rides as metadata so nothing is lost.
         if let (Some(lat), Some(lon)) = (t.lat, t.lon) {
@@ -1320,6 +1325,8 @@ mod tests {
         assert_eq!(ev.entity_type, "mim:aircraft");
         assert_eq!(meta(&ev, "source_uid"), Some("icao:406201"));
         assert_eq!(meta(&ev, "asterix_category"), Some("62"));
+        // The I062/040 track number is the governed correlation key.
+        assert_eq!(attr(&ev, "track_id"), Some("4095"));
         assert_eq!(attr(&ev, "speed"), Some("100.00")); // 194.38 kn * 0.514444
         assert_eq!(attr(&ev, "course"), Some("90.0"));
         assert_eq!(attr(&ev, "callsign"), Some("BAW123"));

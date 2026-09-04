@@ -587,7 +587,10 @@ impl AisParser {
             .new_id()
             .payload(p.raw.clone())
             .metadata("source_uid", p.mmsi.to_string())
-            .metadata("mmsi", p.mmsi.to_string());
+            .metadata("mmsi", p.mmsi.to_string())
+            // MMSI is the vessel's stable track key — the governed correlation key a
+            // consumer keys on (`track_id`), not just provenance metadata.
+            .attribute("track_id", p.mmsi.to_string());
         if let (Some(lat), Some(lon)) = (p.lat, p.lon) {
             b = b.location(lat, lon, 0.0);
         }
@@ -1018,6 +1021,7 @@ mod tests {
         assert_eq!(attr_of(&ev, "vessel_type"), Some("passenger"));
         // MMSI is the stable track identity (source_uid) and native id; IMO native.
         assert_eq!(meta_of(&ev, "source_uid"), Some("603916439"));
+        assert_eq!(attr_of(&ev, "track_id"), Some("603916439")); // governed correlation key
         assert_eq!(meta_of(&ev, "mmsi"), Some("603916439"));
         assert!(ev.metadata.iter().any(|m| m.key == "imo"));
     }
