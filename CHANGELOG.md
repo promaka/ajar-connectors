@@ -13,6 +13,8 @@ Two version lines are tracked independently (see COMPATIBILITY.md):
 
 ## [Unreleased]
 
+## [0.5.11] - 2026-09-05
+
 ### Added
 
 - ASTERIX CAT010 and CAT034. CAT010 surface movement reports (airport surface

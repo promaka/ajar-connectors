@@ -13,7 +13,7 @@ dependencies = [
 
 [[package]]
 name = "ajar-connector"
-version = "0.5.10"
+version = "0.5.11"
 dependencies = [
  "async-nats",
  "base64 0.23.1",
@@ -35,7 +35,7 @@ dependencies = [
 
 [[package]]
 name = "ajar-verify"
-version = "0.5.10"
+version = "0.5.11"
 dependencies = [
  "ajar-connector",
  "hex",
@@ -149,7 +149,7 @@ dependencies = [
 
 [[package]]
 name = "conformance"
-version = "0.5.10"
+version = "0.5.11"
 dependencies = [
  "ajar-connector",
  "base64 0.23.1",
