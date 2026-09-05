@@ -69,6 +69,7 @@ add_library(ajar_connector STATIC
   src/builder.cpp
   src/profile.cpp
   src/validate.cpp
+  src/consumer.cpp
   ${GEN_DIR}/event.pb.cc)
 target_include_directories(ajar_connector PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -99,6 +100,9 @@ target_link_libraries(validate_test PRIVATE ajar_connector)
 
 add_executable(verify_test conformance/verify_test.cpp)
 target_link_libraries(verify_test PRIVATE ajar_connector)
+
+add_executable(consumer_test conformance/consumer_test.cpp)
+target_link_libraries(consumer_test PRIVATE ajar_connector)
 
 add_executable(cot_roundtrip examples/cot_roundtrip.cpp)
 target_link_libraries(cot_roundtrip PRIVATE cot_connector)
@@ -150,6 +154,7 @@ add_test(NAME conformance COMMAND conformance)
 add_test(NAME cot_roundtrip COMMAND cot_roundtrip)
 add_test(NAME validate COMMAND validate_test)
 add_test(NAME seal_verify COMMAND verify_test)
+add_test(NAME consumer_handler COMMAND consumer_test)
 add_test(NAME template_check COMMAND connector_template --check)
 add_test(NAME embedded_conformance COMMAND embedded_conformance)
 if(cnats_FOUND)

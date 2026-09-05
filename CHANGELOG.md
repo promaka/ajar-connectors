@@ -26,6 +26,16 @@ Two version lines are tracked independently (see COMPATIBILITY.md):
   (`skip_source_ids`, skip-derived) and accept/reject/skip counters, and
   both are wire-gated against a real broker with exact counts.
 
+- `ajar::verifying_handler` (C++): the same verified consume side for the
+  desktop C++ SDK, completing the set in all four languages. It returns a
+  callable that takes each raw message from whatever transport the embedder
+  already runs and invokes their callback only with events that verified
+  under the egress key and passed the self-consume guards
+  (`skip_source_ids`, `skip_derived`), with accept/reject/skip counters. No
+  new dependency and no transport in the SDK; `ajar::verify()` remains the
+  raw primitive. Gated by a conformance test running the same adversarial
+  five-event scenario as the other three languages.
+
 - `ajar_connector.consumer` (Python, `pip install "ajar-connector[consumer]"`):
   the consume side of the SDK, mirroring the producer module. One call
   subscribes to governed egress and yields only events whose signature
