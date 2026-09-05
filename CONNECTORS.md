@@ -17,15 +17,24 @@ same connector with a different four-line transport section.
 
 ## Air
 
-### `ajar-asterix` (EUROCONTROL ASTERIX, CAT021 / CAT048 / CAT062)
+### `ajar-asterix` (EUROCONTROL ASTERIX, CAT010 / CAT021 / CAT034 / CAT048 / CAT062)
 
-The surveillance air picture: cooperative traffic from ADS-B ground stations
-(CAT021), primary and secondary radar returns (CAT048), and the fused recognised
-track from an SDPS (CAT062). Primary and secondary surveillance radars (PSR, SSR,
-Mode S) and air-defence radars from Thales, Indra, Leonardo, Hensoldt and others
-emit it, as does NATO ACCS. CAT048 reports carry range and azimuth relative to the
-radar, so set the radar's position in `[sensor]` to geolocate them. Usually arrives
-as UDP multicast on the surveillance LAN.
+The surveillance picture, air and surface: cooperative traffic from ADS-B ground
+stations (CAT021), primary and secondary radar returns (CAT048), surface movement
+reports (CAT010: airport surface radars and multilateration, and the sea-surface
+output of coastal and naval surveillance radars), the fused recognised track from
+an SDPS (CAT062), and the radar's own service messages (CAT034). Primary and
+secondary surveillance radars (PSR, SSR, Mode S), air-defence and coastal radars
+from Thales, Indra, Leonardo, Hensoldt, Terma and others emit it, as does NATO
+ACCS. CAT048 and CAT010 reports carry range and azimuth (or x/y offsets) relative
+to the radar, so set the radar's position in `[sensor]` to geolocate them. A
+CAT010 target is whatever the operator says it is: `[entity_map] cat010 =
+"mim:vessel"` for a coastal radar, `"mim:land-vehicle"` for an airport feed.
+CAT034 makes the radar itself part of the governed picture: its status (NOGO,
+overloads, rotation period, position) is published once per antenna rotation as
+a signed `mim:sensor` heartbeat, and jamming strobes are published as they
+happen, so a radar going quiet or being jammed is a verifiable event rather than
+a gap. Usually arrives as UDP multicast on the surveillance LAN.
 
 ### `ajar-adsb` (ADS-B, SBS-1 / BaseStation)
 
@@ -117,7 +126,7 @@ file, stdin or exec.
 
 | If your system outputs | Use |
 |---|---|
-| Air surveillance radar or SDPS tracks | `ajar-asterix` |
+| Air or surface surveillance radar, radar health, or SDPS tracks | `ajar-asterix` |
 | ADS-B receiver lines (BaseStation) | `ajar-adsb` |
 | AIS / NMEA sentences | `ais-nmea` |
 | GMTI radar (STANAG 4607) | `ajar-gmti` |

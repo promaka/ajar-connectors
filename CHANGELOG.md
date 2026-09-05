@@ -15,6 +15,27 @@ Two version lines are tracked independently (see COMPATIBILITY.md):
 
 ### Added
 
+- ASTERIX CAT010 and CAT034. CAT010 surface movement reports (airport surface
+  radars and multilateration, and the sea-surface output of coastal and naval
+  surveillance radars) decode in all three position forms: WGS-84, polar in
+  metres, and Cartesian offsets, the latter two geolocated against the
+  configured radar site with no slant correction since the target is on the
+  surface. The operator chooses what a surface target is with `[entity_map]
+  cat010 = "mim:vessel"` (or `mim:land-vehicle`); unset, the report's own
+  content decides. Standard deviation of position, target size and
+  orientation, vehicle fleet and sensor technique ride as metadata. CAT034
+  radar service messages stop being skipped: status (NOGO, processor and
+  transmitter overloads, monitoring, time source) is merged per radar across
+  messages and published once per antenna rotation as a signed `mim:sensor`
+  heartbeat carrying rotation period and the radar's own position; jamming
+  strobes publish with their polar window; sector crossings are counted, not
+  published. New counters: north markers, sector crossings, jamming strobes,
+  and heartbeats sent while degraded. Gated by decoder tests for every
+  position form, the status merge and recovery, one datagram publishing the
+  heartbeat and the tracks behind it, the fuzz harness over both new
+  categories, and an ontology check that every type and attribute the
+  connector can emit is declared.
+
 - The verified consume side in Go and Rust, mirroring the Python consumer:
   verification is structurally unskippable in all three. Go's
   `VerifyingHandler` wraps a per-event handler so only events whose
@@ -61,6 +82,13 @@ Two version lines are tracked independently (see COMPATIBILITY.md):
   producer packet it is `--no-exec` (verify, place, configure, preflight)
   plus a stable `check passed:` line; for a consumer packet it validates the
   subject, egress key and referenced files without subscribing.
+
+### Fixed
+
+- ASTERIX CAT021 emitter category was published as an `aircraft_type`
+  attribute, which the ontology does not declare, so Core quarantined it
+  silently on every event. It is now `emitter_category` metadata, which is
+  always kept. Found by the new ontology gate in the connector's tests.
 
 ## [0.5.10] - 2026-09-02
 

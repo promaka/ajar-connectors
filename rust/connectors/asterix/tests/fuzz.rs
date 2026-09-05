@@ -22,15 +22,15 @@ proptest! {
 
     /// A real category byte, an arbitrary declared length, and a random record
     /// body — exercises the FSPEC walk, compound bitmaps, and every length model
-    /// across CAT021/048/062. Must never panic.
+    /// across CAT010/021/034/048/062. Must never panic.
     #[test]
     fn category_shaped_input_never_panics(
-        cat in prop::sample::select(vec![21u8, 48, 62]),
+        cat in prop::sample::select(vec![10u8, 21, 34, 48, 62]),
         body in proptest::collection::vec(any::<u8>(), 0..400),
     ) {
         let len = (body.len() + 3) as u16;
         let mut block = vec![cat, (len >> 8) as u8, len as u8];
         block.extend_from_slice(&body);
-        let _ = parser().parse_block(&block);
+        let _ = parser().parse_datagram(&block);
     }
 }
