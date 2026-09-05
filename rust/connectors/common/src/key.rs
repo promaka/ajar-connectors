@@ -7,7 +7,18 @@ use ed25519_dalek::SigningKey;
 /// Load the signing seed from `path`: either 32 raw bytes, or 64-char hex text
 /// (both are portable in an air-gap bundle). Fails closed on anything else.
 pub fn load(path: &str) -> anyhow::Result<SigningKey> {
-    let raw = std::fs::read(path).map_err(|e| anyhow!("reading signing key {path}: {e}"))?;
+    let raw = std::fs::read(path).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            anyhow!(
+                "signing key {path} not found. If your operator issued a packet, \
+                 `ajar-up <packet.tar>` places it there; a key you generated yourself \
+                 goes at this path as 32 raw bytes or 64 hex characters (onboarding \
+                 guide, Keys)"
+            )
+        } else {
+            anyhow!("reading signing key {path}: {e}")
+        }
+    })?;
     let seed: [u8; 32] = if raw.len() == 32 {
         raw.as_slice().try_into().expect("length checked")
     } else {
@@ -25,6 +36,13 @@ pub fn load(path: &str) -> anyhow::Result<SigningKey> {
 #[cfg(test)]
 mod tests {
     use super::load;
+
+    #[test]
+    fn a_missing_seed_says_where_it_comes_from() {
+        let msg = load("/nonexistent/dir/x.seed").unwrap_err().to_string();
+        assert!(msg.contains("not found"), "{msg}");
+        assert!(msg.contains("ajar-up <packet.tar>"), "{msg}");
+    }
     use ed25519_dalek::SigningKey;
     use std::io::Write as _;
 

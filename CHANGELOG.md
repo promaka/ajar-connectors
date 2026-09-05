@@ -90,6 +90,21 @@ Two version lines are tracked independently (see COMPATIBILITY.md):
   silently on every event. It is now `emitter_category` metadata, which is
   always kept. Found by the new ontology gate in the connector's tests.
 
+- The first-hour errors a stranger actually hits now say what to do. A typo
+  in a config field or a transport kind is answered with the closest valid
+  name (`did you mean the field nats_url?`) instead of only the list of
+  every name. A missing signing key says that `ajar-up` places it from the
+  packet, or where a self-generated one goes. A broker that cannot be reached
+  no longer produces an endless stream of `client error: nats: IO error` at
+  INFO with no address: the connector logs once, then every 30 seconds, which
+  address failed, what the OS said, that it keeps retrying and spools, and
+  that `ajar-doctor` tests the endpoint; async-nats's own event chatter is
+  quiet by default. `ajar-up` given a file that is not a tar says it is not a
+  packet and what a packet is, and a missing packet path says what file to
+  look for. Each message is asserted by a test. The doctor's hints and the
+  links in HOW_IT_WORKS and COMPATIBILITY now point at the rewritten
+  onboarding guide's sections rather than the old numbered ones.
+
 ## [0.5.10] - 2026-09-02
 
 ### Added

@@ -419,15 +419,127 @@ impl Config {
     /// by the config shape itself (a missing `group` on `udp-multicast` is a parse
     /// error), so there is nothing further to check here.
     pub fn load(path: &str) -> anyhow::Result<Self> {
-        let text = std::fs::read_to_string(path)
-            .map_err(|e| anyhow::anyhow!("reading config {path}: {e}"))?;
-        toml::from_str(&text).map_err(|e| anyhow::anyhow!("parsing config {path}: {e}"))
+        let text = std::fs::read_to_string(path).map_err(|e| {
+            anyhow::anyhow!(
+                "reading config {path}: {e}. The example config shipped next to the \
+                 connector (*.example.toml) shows every field; copy it and edit."
+            )
+        })?;
+        toml::from_str(&text).map_err(|e| {
+            let msg = e.to_string();
+            match did_you_mean(&msg) {
+                Some(hint) => anyhow::anyhow!("parsing config {path}: {msg}\n{hint}"),
+                None => anyhow::anyhow!("parsing config {path}: {msg}"),
+            }
+        })
     }
+}
+
+/// For an unknown-field or unknown-variant parse error, the closest name the
+/// config accepts, as a one-line hint. A typo in a config is the most common
+/// first-hour failure; the list of every valid name is true but not helpful.
+fn did_you_mean(msg: &str) -> Option<String> {
+    let (what, rest) = msg
+        .split_once("unknown field `")
+        .map(|(_, r)| ("field", r))
+        .or_else(|| {
+            msg.split_once("unknown variant `")
+                .map(|(_, r)| ("value", r))
+        })?;
+    let (typo, rest) = rest.split_once('`')?;
+    let (_, list) = rest.split_once("expected one of ")?;
+    let candidates: Vec<&str> = list
+        .split(',')
+        .filter_map(|c| c.trim().trim_matches('`').split('`').next())
+        .filter(|c| !c.is_empty())
+        .collect();
+    let best = candidates
+        .iter()
+        .map(|c| (edit_distance(typo, c), *c))
+        .min()?;
+    (best.0 <= 2.max(typo.len() / 3)).then(|| format!("did you mean the {what} `{}`?", best.1))
+}
+
+/// Levenshtein distance, for `did_you_mean`.
+fn edit_distance(a: &str, b: &str) -> usize {
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+    let mut prev: Vec<usize> = (0..=b.len()).collect();
+    for (i, ca) in a.iter().enumerate() {
+        let mut cur = vec![i + 1];
+        for (j, cb) in b.iter().enumerate() {
+            let cost = usize::from(ca != cb);
+            cur.push((prev[j] + cost).min(prev[j + 1] + 1).min(cur[j] + 1));
+        }
+        prev = cur;
+    }
+    prev[b.len()]
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn write(name: &str, body: &str) -> String {
+        let dir =
+            std::env::temp_dir().join(format!("ajar-config-test-{}-{}", std::process::id(), name));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("c.toml");
+        std::fs::write(&p, body).unwrap();
+        p.to_string_lossy().into_owned()
+    }
+
+    #[test]
+    fn a_typo_in_a_field_name_is_answered_with_the_right_name() {
+        let p = write(
+            "typo-field",
+            "source_id = \"x\"\nnats_ur = \"nats://h:4222\"\nsigning_key_path = \"k\"\n\
+             [transport]\nkind = \"udp\"\nbind = \"0.0.0.0:1\"\n",
+        );
+        let msg = Config::load(&p).unwrap_err().to_string();
+        assert!(msg.contains("unknown field `nats_ur`"), "{msg}");
+        assert!(msg.contains("did you mean the field `nats_url`?"), "{msg}");
+    }
+
+    #[test]
+    fn a_typo_in_a_transport_kind_is_answered_with_the_right_kind() {
+        let p = write(
+            "typo-kind",
+            "source_id = \"x\"\nnats_url = \"nats://h:4222\"\nsigning_key_path = \"k\"\n\
+             [transport]\nkind = \"udp-multicst\"\nbind = \"0.0.0.0:1\"\ngroup = \"239.1.1.1\"\n",
+        );
+        let msg = Config::load(&p).unwrap_err().to_string();
+        assert!(
+            msg.contains("did you mean the value `udp-multicast`?"),
+            "{msg}"
+        );
+    }
+
+    #[test]
+    fn a_missing_config_points_at_the_example() {
+        let msg = Config::load("/nonexistent/dir/x.toml")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            msg.contains("reading config /nonexistent/dir/x.toml"),
+            "{msg}"
+        );
+        assert!(msg.contains("*.example.toml"), "{msg}");
+    }
+
+    #[test]
+    fn far_off_names_get_no_guess() {
+        assert_eq!(edit_distance("kitten", "sitting"), 3);
+        assert!(
+            did_you_mean("unknown field `zzzzzzzz`, expected one of `source_id`, `nats_url`")
+                .is_none()
+        );
+        assert_eq!(
+            did_you_mean("unknown field `sorce_id`, expected one of `source_id`, `nats_url`")
+                .as_deref(),
+            Some("did you mean the field `source_id`?")
+        );
+    }
 
     fn transport(toml_str: &str) -> Transport {
         #[derive(Deserialize)]
