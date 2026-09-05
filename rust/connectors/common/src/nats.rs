@@ -18,7 +18,40 @@ use anyhow::{bail, Context};
 pub async fn connect(url: &str) -> anyhow::Result<async_nats::Client> {
     install_crypto_provider();
 
-    let mut opts = async_nats::ConnectOptions::new().retry_on_initial_connect();
+    // The initial connect retries forever so a connector survives a broker
+    // that is not up yet (and spools meanwhile). The cost is that a wrong URL
+    // or a closed firewall looks like patience unless somebody says so: the
+    // event callback says so, once, then every 30 seconds.
+    let urls = url.to_string();
+    let last_warn = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let mut opts = async_nats::ConnectOptions::new()
+        .retry_on_initial_connect()
+        .event_callback(move |event| {
+            let urls = urls.clone();
+            let last_warn = last_warn.clone();
+            async move {
+                match event {
+                    async_nats::Event::Connected => {
+                        tracing::info!("connected to NATS at {urls}");
+                    }
+                    async_nats::Event::Disconnected => {
+                        tracing::warn!(
+                            "disconnected from NATS at {urls}; reconnecting, sealed events \
+                             spool meanwhile when a spool is configured"
+                        );
+                    }
+                    async_nats::Event::ClientError(e) => {
+                        if warn_due(&last_warn, 30) {
+                            tracing::warn!("{}", unreachable_message(&urls, &e.to_string()));
+                        }
+                    }
+                    async_nats::Event::ServerError(e) => {
+                        tracing::warn!("NATS server error from {urls}: {e}");
+                    }
+                    other => tracing::debug!("NATS event: {other}"),
+                }
+            }
+        });
 
     let ca = non_empty_env("AJAR_TLS_CA");
     let cert = non_empty_env("AJAR_TLS_CERT");
@@ -61,6 +94,32 @@ pub async fn connect(url: &str) -> anyhow::Result<async_nats::Client> {
         .collect::<Result<_, _>>()
         .with_context(|| format!("parsing nats_url {url:?}"))?;
     opts.connect(servers).await.context("connecting to NATS")
+}
+
+/// What a stranger needs to read when the broker cannot be reached: which
+/// address, what the OS said, that the connector keeps trying, and what to do.
+fn unreachable_message(urls: &str, err: &str) -> String {
+    format!(
+        "cannot reach NATS at {urls}: {err}. Retrying; sealed events spool meanwhile when \
+         a spool is configured. Check the URL and port, and that a firewall allows this \
+         outbound connection; `ajar-doctor <config>` tests the endpoint and names the fix"
+    )
+}
+
+/// True once per `every` seconds: the first time, then after the interval.
+fn warn_due(last: &std::sync::atomic::AtomicU64, every: u64) -> bool {
+    use std::sync::atomic::Ordering::Relaxed;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let prev = last.load(Relaxed);
+    if prev == 0 || now.saturating_sub(prev) >= every {
+        last.store(now.max(1), Relaxed);
+        true
+    } else {
+        false
+    }
 }
 
 /// Whether the deployment demands TLS: `AJAR_REQUIRE_TLS` set truthy, or a
@@ -108,6 +167,22 @@ fn install_crypto_provider() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_unreachable_message_names_address_cause_and_fix() {
+        let m = unreachable_message("nats://10.0.0.5:4222", "connection refused");
+        assert!(m.contains("nats://10.0.0.5:4222"));
+        assert!(m.contains("connection refused"));
+        assert!(m.contains("firewall") && m.contains("ajar-doctor"));
+    }
+
+    #[test]
+    fn the_warning_fires_first_time_then_waits() {
+        let last = std::sync::atomic::AtomicU64::new(0);
+        assert!(warn_due(&last, 30));
+        assert!(!warn_due(&last, 30));
+        assert!(warn_due(&last, 0));
+    }
 
     // Env-var tests share process state, so one test walks every case in
     // sequence rather than racing siblings.

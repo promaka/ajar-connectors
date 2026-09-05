@@ -106,11 +106,22 @@ impl Packet {
 pub fn open(tar_path: &Path, dir: &Path) -> anyhow::Result<Packet> {
     std::fs::create_dir_all(dir)
         .with_context(|| format!("creating working directory {}", dir.display()))?;
-    let file = std::fs::File::open(tar_path)
-        .with_context(|| format!("opening packet {}", tar_path.display()))?;
+    let file = std::fs::File::open(tar_path).with_context(|| {
+        format!(
+            "opening packet {} (the <id>.packet.tar file your operator sent)",
+            tar_path.display()
+        )
+    })?;
+    let not_a_packet = || {
+        format!(
+            "{} is not a packet: expected the tar archive your operator produced with \
+             `ajar onboard`",
+            tar_path.display()
+        )
+    };
     let mut archive = tar::Archive::new(file);
-    for entry in archive.entries().context("reading the packet tar")? {
-        let mut entry = entry.context("reading a packet entry")?;
+    for entry in archive.entries().with_context(not_a_packet)? {
+        let mut entry = entry.with_context(not_a_packet)?;
         let name = entry.path().context("packet entry path")?.into_owned();
         // Flat names only: a packet has no business writing outside its dir.
         if name.components().count() != 1

@@ -223,7 +223,7 @@ fn check_signing_key(out: &mut Vec<Finding>, cfg: &Inputs) -> Option<String> {
                 format!("{e:#}"),
                 "The seed file must be exactly 32 raw bytes or 64 hex characters. If you have \
                  an OpenSSL-generated PEM, extract the seed as shown in the onboarding guide \
-                 (section 6), or mint a fresh pair with `ajar-sink mint <source_id> <dir>` \
+                 (Keys section), or mint a fresh pair with `ajar-sink mint <source_id> <dir>` \
                  and register the new .pub with your operator."
                     .to_string(),
             ));
@@ -691,8 +691,8 @@ fn check_policy(
                 "TLS is required (tls:// URL or AJAR_REQUIRE_TLS) but no AJAR_TLS_* is set",
                 "The runtime refuses to connect in cleartext when TLS is demanded. Export \
                  AJAR_TLS_CA, AJAR_TLS_CERT and AJAR_TLS_KEY pointing at the CA bundle, \
-                 client certificate and key from your operator (deployment section 7a shows \
-                 the exact block)."
+                 client certificate and key from your operator (the onboarding guide's \
+                 Production behaviour section shows the exact block)."
                     .to_string(),
             ));
             None

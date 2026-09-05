@@ -95,7 +95,8 @@ migration into your own review cycle instead of discovering it in ours.
 
    On an air-gapped or accredited network none of these will resolve. Vendor the
    full dependency closure at the tag on a connected machine and carry it across —
-   see the offline bundle recipe in [ONBOARDING.md](ONBOARDING.md#5-build-it).
+   see the offline bundle recipe in
+   [ONBOARDING.md](ONBOARDING.md#building-for-an-air-gapped-network).
 2. **Keep your signing key.** Your identity is your key; rotating it requires
    re-registering the public half with your operator. Store the private seed
    safely (see [SECURITY.md](SECURITY.md)).
