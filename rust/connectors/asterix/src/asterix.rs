@@ -1,7 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
-//! EUROCONTROL ASTERIX -> canonical Ajar events. Handles the air-picture
-//! categories:
+//! EUROCONTROL ASTERIX -> canonical Ajar events. Handles the surveillance
+//! categories a radar head or its processing chain emits:
+//!  - **CAT010** monosensor surface movement reports (airport surface and, for
+//!    coastal and naval surveillance radars, sea-surface targets; WGS-84, polar
+//!    or Cartesian position, the latter two geolocated against a sensor site).
 //!  - **CAT021** ADS-B target reports (cooperative traffic, WGS-84 position).
+//!  - **CAT034** monoradar service messages: the radar's own heartbeat. Its
+//!    status is tracked per radar and emitted once per antenna rotation as a
+//!    signed `mim:sensor` event (jamming strobes emit too); sector crossings are
+//!    counted, not published.
 //!  - **CAT048** monoradar target reports (primary + Mode S/SSR; position is
 //!    radar-relative polar, geolocated against a configured sensor site).
 //!  - **CAT062** SDPS system tracks (the fused, recognised air picture; WGS-84
@@ -22,7 +29,9 @@
 use ajar_connector::{Event, EventBuilder};
 use ajar_connector_common::{Enrichment, FrameParser, ParseError};
 
+const CAT010: u8 = 10;
 const CAT021: u8 = 21;
+const CAT034: u8 = 34;
 const CAT048: u8 = 48;
 const CAT062: u8 = 62;
 
@@ -375,6 +384,394 @@ fn decode_048(items: &[(u8, &[u8])], sensor: Option<&Sensor>) -> AsterixTarget {
 }
 
 // ============================================================================
+// CAT010 — Monosensor surface movement data (Edition 1.1). Airport surface
+// (SMR, MLAT, ADS-B) and, for coastal and naval surveillance radars, sea
+// surface. Position is WGS-84, polar (metres) or Cartesian offsets from the
+// sensor reference point.
+// ============================================================================
+
+#[rustfmt::skip]
+const UAP010: &[Field] = &[
+    Field::Fixed(2),                                  // 1  I010/010 Data Source Identifier
+    Field::Fixed(1),                                  // 2  I010/000 Message Type
+    Field::Extended(1),                               // 3  I010/020 Target Report Descriptor
+    Field::Fixed(3),                                  // 4  I010/140 Time of Day
+    Field::Fixed(8),                                  // 5  I010/041 Position in WGS-84
+    Field::Fixed(4),                                  // 6  I010/040 Measured Position (polar)
+    Field::Fixed(4),                                  // 7  I010/042 Position (Cartesian)
+    Field::Fixed(4),                                  // 8  I010/200 Calculated Track Velocity (polar)
+    Field::Fixed(4),                                  // 9  I010/202 Calculated Track Velocity (Cartesian)
+    Field::Fixed(2),                                  // 10 I010/161 Track Number
+    Field::Extended(1),                               // 11 I010/170 Track Status
+    Field::Fixed(2),                                  // 12 I010/060 Mode-3/A Code
+    Field::Fixed(3),                                  // 13 I010/220 Target Address
+    Field::Fixed(7),                                  // 14 I010/245 Target Identification
+    Field::Repetitive(8),                             // 15 I010/250 Mode S MB Data
+    Field::Fixed(1),                                  // 16 I010/300 Vehicle Fleet Identification
+    Field::Fixed(2),                                  // 17 I010/090 Flight Level (binary)
+    Field::Fixed(2),                                  // 18 I010/091 Measured Height
+    Field::Extended(1),                               // 19 I010/270 Target Size and Orientation
+    Field::Fixed(1),                                  // 20 I010/550 System Status
+    Field::Fixed(1),                                  // 21 I010/310 Pre-programmed Message
+    Field::Fixed(4),                                  // 22 I010/500 Standard Deviation of Position
+    Field::Repetitive(2),                             // 23 I010/280 Presence
+    Field::Fixed(1),                                  // 24 I010/131 Amplitude of Primary Plot
+    Field::Fixed(2),                                  // 25 I010/210 Calculated Acceleration
+    Field::Spare,                                     // 26 spare
+    Field::Explicit,                                  // 27 I010/SP Special Purpose
+    Field::Explicit,                                  // 28 I010/RE Reserved Expansion
+];
+/// LSB of I010/041 latitude and longitude: 180 / 2^31 degrees.
+const LSB_041: f64 = 180.0 / (1u64 << 31) as f64;
+/// I010/000 message type that carries a target; the rest are status messages.
+const CAT010_TARGET_REPORT: u8 = 1;
+
+fn decode_010(items: &[(u8, &[u8])], sensor: Option<&Sensor>) -> AsterixTarget {
+    let mut t = AsterixTarget::new(CAT010);
+    for &(frn, item) in items {
+        match frn {
+            1 => (t.sac, t.sic) = (item[0], item[1]),
+            2 => t.message_type = Some(item[0]),
+            3 => {
+                // I010/020: TYP (bits 8-6) names the sensor technique; the
+                // truth bits SIM/TST/RAB sit in the first extension.
+                t.report_type = Some(match item[0] >> 5 {
+                    0 => "ssr-multilateration",
+                    1 => "mode-s-multilateration",
+                    2 => "ads-b",
+                    3 => "psr",
+                    4 => "magnetic-loop",
+                    5 => "hf-multilateration",
+                    _ => "other",
+                });
+                if item[0] & 0x01 != 0 {
+                    if let Some(&ext) = item.get(1) {
+                        t.simulated = ext & 0x80 != 0;
+                        t.test_target = ext & 0x40 != 0;
+                        t.field_monitor = ext & 0x20 != 0;
+                    }
+                }
+            }
+            4 => t.time_of_day = Some(be(item, 0, 3) as f64 / 128.0),
+            5 => {
+                let lat = signed(item, 0, 4) * LSB_041;
+                let lon = signed(item, 4, 4) * LSB_041;
+                t.set_pos(lat, lon);
+            }
+            6 => {
+                // Measured position: RHO in metres (LSB 1 m), THETA 360/2^16.
+                // Kept in NM in `polar` so one field means one thing across
+                // categories; a surface target needs no slant correction.
+                let rho_m = u16::from_be_bytes([item[0], item[1]]) as f64;
+                let theta = u16::from_be_bytes([item[2], item[3]]) as f64 * ANGLE_16;
+                t.polar = Some((rho_m / NM_TO_M, theta));
+            }
+            7 => {
+                // Cartesian offsets from the sensor reference point, metres:
+                // X east, Y north.
+                let x = signed(item, 0, 2);
+                let y = signed(item, 2, 2);
+                t.cartesian = Some((x, y));
+            }
+            8 => {
+                let gs = u16::from_be_bytes([item[0], item[1]]);
+                let hd = u16::from_be_bytes([item[2], item[3]]);
+                t.ground_speed = Some(gs as f64 * 2f64.powi(-14) * 3600.0); // NM/s -> kt
+                t.track_angle = Some(hd as f64 * ANGLE_16);
+            }
+            9 => {
+                // Cartesian velocity, LSB 0.25 m/s: Vx east, Vy north.
+                let vx = signed(item, 0, 2) * 0.25;
+                let vy = signed(item, 2, 2) * 0.25;
+                let speed_mps = (vx * vx + vy * vy).sqrt();
+                t.ground_speed = Some(speed_mps / KNOTS_TO_MPS);
+                if speed_mps > 0.0 {
+                    t.track_angle = Some(vx.atan2(vy).to_degrees().rem_euclid(360.0));
+                }
+            }
+            10 => t.track = Some((u16::from_be_bytes([item[0], item[1]]) & 0x0FFF) as u32),
+            12 => {
+                let w = u16::from_be_bytes([item[0], item[1]]);
+                if w & 0xC000 == 0 {
+                    t.squawk = Some(mode_3a(w));
+                }
+            }
+            13 => t.icao = Some(be(item, 0, 3) as u32),
+            14 => t.callsign = aircraft_id(&item[1..7]),
+            16 => t.vehicle_fleet = vehicle_fleet(item[0]),
+            17 => {
+                if item[0] & 0xC0 == 0 {
+                    let raw = u16::from_be_bytes([item[0], item[1]]) & 0x3FFF;
+                    t.alt_ft = Some(sign_extend(raw as u64, 14) as f64 * 25.0);
+                }
+            }
+            18 => t.alt_ft = Some(signed(item, 0, 2) * 6.25),
+            19 => {
+                // Target size and orientation: LENGTH (m), then ORIENTATION
+                // (360/128 deg) and WIDTH (m) in the extensions.
+                let length = (item[0] >> 1) as f64;
+                let orientation = item.get(1).map(|o| (o >> 1) as f64 * 360.0 / 128.0);
+                let width = item.get(2).map(|o| (o >> 1) as f64);
+                t.size = Some((length, width, orientation));
+            }
+            22 => {
+                // Standard deviation of position, LSB 0.25 m.
+                t.position_sd = Some((item[0] as f64 * 0.25, item[1] as f64 * 0.25));
+            }
+            _ => {}
+        }
+    }
+    if t.lat.is_none() {
+        if let Some(s) = sensor {
+            if let Some((rho_nm, theta)) = t.polar {
+                // Surface targets: the measured range is the ground range.
+                let (lat, lon) = forward_geodetic(s.lat, s.lon, theta, rho_nm * NM_TO_M);
+                t.set_pos(lat, lon);
+            } else if let Some((x, y)) = t.cartesian {
+                let dist = (x * x + y * y).sqrt();
+                let bearing = x.atan2(y).to_degrees().rem_euclid(360.0);
+                let (lat, lon) = forward_geodetic(s.lat, s.lon, bearing, dist);
+                t.set_pos(lat, lon);
+            }
+        }
+    }
+    t
+}
+
+/// I010/300 Vehicle Fleet Identification.
+fn vehicle_fleet(code: u8) -> Option<&'static str> {
+    Some(match code {
+        1 => "atc-equipment-maintenance",
+        2 => "airport-maintenance",
+        3 => "fire",
+        4 => "bird-scarer",
+        5 => "snow-plough",
+        6 => "runway-sweeper",
+        7 => "emergency",
+        8 => "police",
+        9 => "bus",
+        10 => "tug",
+        11 => "grass-cutter",
+        12 => "fuel",
+        13 => "baggage",
+        14 => "catering",
+        15 => "aircraft-maintenance",
+        16 => "flyco",
+        _ => return None,
+    })
+}
+
+// ============================================================================
+// CAT034 — Monoradar service messages (Edition 1.27): the radar talking about
+// itself. North marker once per antenna rotation, sector crossings between,
+// system status when it changes, jamming strobes when it sees them.
+// ============================================================================
+
+#[rustfmt::skip]
+const UAP034: &[Field] = &[
+    Field::Fixed(2),                                  // 1  I034/010 Data Source Identifier
+    Field::Fixed(1),                                  // 2  I034/000 Message Type
+    Field::Fixed(3),                                  // 3  I034/030 Time of Day
+    Field::Fixed(1),                                  // 4  I034/020 Sector Number
+    Field::Fixed(2),                                  // 5  I034/041 Antenna Rotation Speed
+    Field::Compound(&SUB_034_050),                    // 6  I034/050 System Configuration and Status
+    Field::Compound(&SUB_034_060),                    // 7  I034/060 System Processing Mode
+    Field::Repetitive(2),                             // 8  I034/070 Message Count Values
+    Field::Fixed(8),                                  // 9  I034/100 Generic Polar Window
+    Field::Fixed(1),                                  // 10 I034/110 Data Filter
+    Field::Fixed(8),                                  // 11 I034/120 3D-Position of Data Source
+    Field::Fixed(2),                                  // 12 I034/090 Collimation Error
+    Field::Explicit,                                  // 13 I034/RE Reserved Expansion
+    Field::Explicit,                                  // 14 I034/SP Special Purpose
+];
+/// I034/050 subfields: COM (1), spare, spare, PSR (1), SSR (1), MDS (2), spare.
+const SUB_034_050: [Field; 7] = [
+    Field::Fixed(1),
+    Field::Spare,
+    Field::Spare,
+    Field::Fixed(1),
+    Field::Fixed(1),
+    Field::Fixed(2),
+    Field::Spare,
+];
+/// I034/060 subfields: COM (1), spare, spare, PSR (1), SSR (1), MDS (1), spare.
+const SUB_034_060: [Field; 7] = [
+    Field::Fixed(1),
+    Field::Spare,
+    Field::Spare,
+    Field::Fixed(1),
+    Field::Fixed(1),
+    Field::Fixed(1),
+    Field::Spare,
+];
+/// LSB of I034/120 latitude and longitude: 180 / 2^23 degrees.
+const LSB_120: f64 = 180.0 / (1u64 << 23) as f64;
+
+/// I034/000 message types.
+const NORTH_MARKER: u8 = 1;
+const SECTOR_CROSSING: u8 = 2;
+const JAMMING_STROBE: u8 = 4;
+const SSR_JAMMING_STROBE: u8 = 6;
+const MODE_S_JAMMING_STROBE: u8 = 7;
+
+/// A radar's self-reported health, from I034/050 COM/PSR/SSR/MDS. Every field
+/// is `None` until the radar has said so; a status message never carries all
+/// of them, so the parser merges each new message into the last known state.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct RadarStatus {
+    /// NOGO: the radar declares itself not operational.
+    pub nogo: Option<bool>,
+    /// Radar data processor overload.
+    pub rdp_overload: Option<bool>,
+    /// Transmission subsystem overload.
+    pub xmt_overload: Option<bool>,
+    /// Monitoring system disconnected.
+    pub monitoring_disconnected: Option<bool>,
+    /// Time source invalid.
+    pub time_source_invalid: Option<bool>,
+    /// Primary radar overload.
+    pub psr_overload: Option<bool>,
+    /// Secondary radar overload.
+    pub ssr_overload: Option<bool>,
+    /// Mode S surveillance overload.
+    pub mds_overload: Option<bool>,
+}
+
+impl RadarStatus {
+    fn merge(&mut self, other: RadarStatus) {
+        macro_rules! take {
+            ($($f:ident),*) => { $( if other.$f.is_some() { self.$f = other.$f; } )* };
+        }
+        take!(
+            nogo,
+            rdp_overload,
+            xmt_overload,
+            monitoring_disconnected,
+            time_source_invalid,
+            psr_overload,
+            ssr_overload,
+            mds_overload
+        );
+    }
+    /// Any overload or NOGO the radar has reported.
+    fn degraded(&self) -> bool {
+        [
+            self.nogo,
+            self.rdp_overload,
+            self.xmt_overload,
+            self.psr_overload,
+            self.ssr_overload,
+            self.mds_overload,
+        ]
+        .contains(&Some(true))
+    }
+}
+
+/// One decoded CAT034 record.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ServiceReport {
+    pub sac: u8,
+    pub sic: u8,
+    /// I034/000 message type.
+    pub message_type: u8,
+    /// Time of day, seconds since UTC midnight.
+    pub time_of_day: Option<f64>,
+    /// I034/020 sector number (0..=255, 360/256 degrees each).
+    pub sector: Option<u8>,
+    /// Antenna rotation period in seconds (I034/041).
+    pub rotation_period_s: Option<f64>,
+    /// The radar's own position from I034/120: latitude, longitude, height (m).
+    pub position: Option<(f64, f64, f64)>,
+    /// Status carried by this record alone (merged into the parser's per-radar
+    /// state; `is_none` fields mean "not in this message").
+    pub status: RadarStatus,
+    /// I034/100 polar window: range start/end (NM), azimuth start/end (deg).
+    pub window: Option<(f64, f64, f64, f64)>,
+    /// The raw bytes of this record, preserved verbatim in the signed payload.
+    pub raw: Vec<u8>,
+}
+
+impl ServiceReport {
+    /// The message types that become events: the once-per-rotation heartbeat
+    /// and the strobes that say the radar is being jammed.
+    fn is_published(&self) -> bool {
+        matches!(
+            self.message_type,
+            NORTH_MARKER | JAMMING_STROBE | SSR_JAMMING_STROBE | MODE_S_JAMMING_STROBE
+        )
+    }
+    fn message_name(&self) -> &'static str {
+        match self.message_type {
+            NORTH_MARKER => "north-marker",
+            SECTOR_CROSSING => "sector-crossing",
+            3 => "geographical-filtering",
+            JAMMING_STROBE => "jamming-strobe",
+            5 => "solar-storm",
+            SSR_JAMMING_STROBE => "ssr-jamming-strobe",
+            MODE_S_JAMMING_STROBE => "mode-s-jamming-strobe",
+            _ => "unknown",
+        }
+    }
+}
+
+fn decode_034(items: &[(u8, &[u8])]) -> ServiceReport {
+    let mut r = ServiceReport {
+        sac: 0,
+        sic: 0,
+        message_type: 0,
+        time_of_day: None,
+        sector: None,
+        rotation_period_s: None,
+        position: None,
+        status: RadarStatus::default(),
+        window: None,
+        raw: Vec::new(),
+    };
+    for &(frn, item) in items {
+        match frn {
+            1 => (r.sac, r.sic) = (item[0], item[1]),
+            2 => r.message_type = item[0],
+            3 => r.time_of_day = Some(be(item, 0, 3) as f64 / 128.0),
+            4 => r.sector = Some(item[0]),
+            5 => r.rotation_period_s = Some(u16::from_be_bytes([item[0], item[1]]) as f64 / 128.0),
+            6 => {
+                for (sub, bytes) in walk_compound(&SUB_034_050, item) {
+                    match sub {
+                        0 => {
+                            let com = bytes[0];
+                            r.status.nogo = Some(com & 0x80 != 0);
+                            r.status.rdp_overload = Some(com & 0x10 != 0);
+                            r.status.xmt_overload = Some(com & 0x08 != 0);
+                            r.status.monitoring_disconnected = Some(com & 0x04 != 0);
+                            r.status.time_source_invalid = Some(com & 0x02 != 0);
+                        }
+                        3 => r.status.psr_overload = Some(bytes[0] & 0x10 != 0),
+                        4 => r.status.ssr_overload = Some(bytes[0] & 0x10 != 0),
+                        5 => r.status.mds_overload = Some(bytes[0] & 0x10 != 0),
+                        _ => {}
+                    }
+                }
+            }
+            9 => {
+                let rho_start = u16::from_be_bytes([item[0], item[1]]) as f64 / 256.0;
+                let rho_end = u16::from_be_bytes([item[2], item[3]]) as f64 / 256.0;
+                let theta_start = u16::from_be_bytes([item[4], item[5]]) as f64 * ANGLE_16;
+                let theta_end = u16::from_be_bytes([item[6], item[7]]) as f64 * ANGLE_16;
+                r.window = Some((rho_start, rho_end, theta_start, theta_end));
+            }
+            11 => {
+                let height = signed(item, 0, 2);
+                let lat = signed(item, 2, 3) * LSB_120;
+                let lon = signed(item, 5, 3) * LSB_120;
+                r.position = Some((lat, lon, height));
+            }
+            _ => {}
+        }
+    }
+    r
+}
+
+// ============================================================================
 // CAT062 — SDPS system tracks (fused air picture). WGS-84 position.
 // ============================================================================
 
@@ -591,7 +988,7 @@ fn walk_compound<'a>(subs: &[Field], data: &'a [u8]) -> Vec<(usize, &'a [u8])> {
 /// A decoded ASTERIX air track — the wire facts, no clock. Deterministic.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AsterixTarget {
-    /// ASTERIX category (21, 48, 62) — drives `source_uid` and provenance.
+    /// ASTERIX category (10, 21, 48, 62) — drives `source_uid` and provenance.
     pub category: u8,
     pub sac: u8,
     pub sic: u8,
@@ -603,9 +1000,22 @@ pub struct AsterixTarget {
     /// geolocated to) an absolute position.
     pub lat: Option<f64>,
     pub lon: Option<f64>,
-    /// Radar-relative polar measurement (range NM, azimuth deg) for CAT048 when no
-    /// sensor site is configured to geolocate it.
+    /// Radar-relative polar measurement (range NM, azimuth deg) for CAT048 and
+    /// CAT010 when no sensor site is configured to geolocate it.
     pub polar: Option<(f64, f64)>,
+    /// Cartesian offset from the sensor reference point (x east, y north, metres)
+    /// for CAT010 when no sensor site is configured to geolocate it.
+    pub cartesian: Option<(f64, f64)>,
+    /// I010/000 message type; only a target report (1) is a track.
+    pub message_type: Option<u8>,
+    /// I010/020 TYP: the sensor technique that produced the report.
+    pub report_type: Option<&'static str>,
+    /// I010/300 vehicle fleet, when the target is a known ground vehicle.
+    pub vehicle_fleet: Option<&'static str>,
+    /// I010/270 target length (m), width (m), orientation (deg).
+    pub size: Option<(f64, Option<f64>, Option<f64>)>,
+    /// I010/500 standard deviation of position, x and y (m).
+    pub position_sd: Option<(f64, f64)>,
     /// Altitude in feet (geometric height / flight level).
     pub alt_ft: Option<f64>,
     /// Ground speed in knots.
@@ -643,6 +1053,12 @@ impl AsterixTarget {
             lat: None,
             lon: None,
             polar: None,
+            cartesian: None,
+            message_type: None,
+            report_type: None,
+            vehicle_fleet: None,
+            size: None,
+            position_sd: None,
             alt_ft: None,
             ground_speed: None,
             track_angle: None,
@@ -662,9 +1078,25 @@ impl AsterixTarget {
         self.lon = Some(lon);
     }
     /// A record contributes an event if it carries a position (absolute or, for
-    /// CAT048, a polar measurement) — otherwise it is a status-only record.
+    /// CAT048 and CAT010, a sensor-relative measurement) — otherwise it is a
+    /// status-only record. A CAT010 status message never is, whatever it carries.
     fn is_track(&self) -> bool {
-        self.lat.is_some() || self.polar.is_some()
+        if self.category == CAT010 && self.message_type != Some(CAT010_TARGET_REPORT) {
+            return false;
+        }
+        self.lat.is_some() || self.polar.is_some() || self.cartesian.is_some()
+    }
+    /// The entity type a CAT010 report implies when the operator has not chosen
+    /// one: a known vehicle fleet is a land vehicle, a Mode S address or an
+    /// identification is an aircraft, anything else is an object.
+    fn implied_surface_type(&self) -> &'static str {
+        if self.vehicle_fleet.is_some() {
+            "mim:land-vehicle"
+        } else if self.icao.is_some() || self.callsign.is_some() {
+            "mim:aircraft"
+        } else {
+            "mim:object"
+        }
     }
 }
 
@@ -686,12 +1118,27 @@ pub struct AsterixParser {
     source_id: String,
     enrichment: Enrichment,
     sensor: Option<Sensor>,
+    /// Entity type for CAT010 surface reports, from `[entity_map] cat010`. Unset
+    /// means the report's own content decides (`implied_surface_type`).
+    cat010_type: Option<String>,
+    /// Entity type for CAT034 radar heartbeats, from `[entity_map] cat034`.
+    cat034_type: Option<String>,
+    /// Last known self-reported status per radar (SAC, SIC), merged from every
+    /// CAT034 message so the heartbeat carries the whole picture.
+    radar_status: std::sync::Mutex<std::collections::HashMap<(u8, u8), RadarStatus>>,
     /// Data blocks for categories this connector does not decode: skipped and
-    /// counted, never an error (radar heads interleave CAT034 service blocks
-    /// with CAT048 targets in the same datagram).
+    /// counted, never an error.
     ignored_blocks: std::sync::Arc<std::sync::atomic::AtomicU64>,
     /// SIM/TST/RAB reports: decoded, counted, and kept OUT of the picture.
     test_targets: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    /// CAT034 North markers: one per antenna rotation.
+    north_markers: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    /// CAT034 sector crossings: counted, never published.
+    sector_crossings: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    /// CAT034 jamming strobes of any kind.
+    jamming_strobes: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    /// Heartbeats published while the radar reported NOGO or an overload.
+    radar_degraded: std::sync::Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl AsterixParser {
@@ -700,14 +1147,33 @@ impl AsterixParser {
             source_id: source_id.into(),
             enrichment,
             sensor: None,
+            cat010_type: None,
+            cat034_type: None,
+            radar_status: Default::default(),
             ignored_blocks: Default::default(),
             test_targets: Default::default(),
+            north_markers: Default::default(),
+            sector_crossings: Default::default(),
+            jamming_strobes: Default::default(),
+            radar_degraded: Default::default(),
         }
     }
 
-    /// Set the radar site used to geolocate CAT048 polar measurements.
+    /// Set the radar site used to geolocate CAT048 polar and CAT010 polar or
+    /// Cartesian measurements.
     pub fn with_sensor(mut self, sensor: Option<Sensor>) -> Self {
         self.sensor = sensor;
+        self
+    }
+
+    /// Apply the operator's `[entity_map]`: `cat010` chooses the entity type for
+    /// surface reports (`"mim:vessel"` for a coastal or naval radar,
+    /// `"mim:land-vehicle"` for an airport surface feed), `cat034` the type for
+    /// radar heartbeats (default `mim:sensor`). Other keys are not this
+    /// connector's and are ignored.
+    pub fn with_entity_map(mut self, map: &std::collections::HashMap<String, String>) -> Self {
+        self.cat010_type = map.get("cat010").cloned();
+        self.cat034_type = map.get("cat034").cloned();
         self
     }
 
@@ -715,9 +1181,20 @@ impl AsterixParser {
     /// Radar heads pack multiple blocks per datagram (CAT034 service messages
     /// interleaved with CAT048 targets is the standard shape); a category this
     /// connector does not decode is skipped and counted, never an error, and
-    /// never takes the blocks after it down with it.
+    /// never takes the blocks after it down with it. Service messages are
+    /// decoded and their status remembered; [`parse_datagram`](Self::parse_datagram)
+    /// returns them too.
     pub fn parse_frame(&self, frame: &[u8]) -> Result<Vec<AsterixTarget>, AsterixError> {
+        self.parse_datagram(frame).map(|(t, _)| t)
+    }
+
+    /// Every track and every service report in one datagram.
+    pub fn parse_datagram(
+        &self,
+        frame: &[u8],
+    ) -> Result<(Vec<AsterixTarget>, Vec<ServiceReport>), AsterixError> {
         let mut targets = Vec::new();
+        let mut reports = Vec::new();
         let mut off = 0usize;
         while off < frame.len() {
             let rest = &frame[off..];
@@ -737,15 +1214,66 @@ impl AsterixParser {
                     have: rest.len(),
                 });
             }
-            if matches!(cat, CAT021 | CAT048 | CAT062) {
-                targets.extend(self.parse_block(&rest[..len])?);
-            } else {
-                self.ignored_blocks
-                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            match cat {
+                CAT010 | CAT021 | CAT048 | CAT062 => {
+                    targets.extend(self.parse_block(&rest[..len])?)
+                }
+                CAT034 => reports.extend(self.parse_service_block(&rest[..len])?),
+                _ => {
+                    self.ignored_blocks
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
             }
             off += len;
         }
-        Ok(targets)
+        Ok((targets, reports))
+    }
+
+    /// Decode every CAT034 record in one data block, merging each into the
+    /// radar's remembered status and counting what kind it was.
+    pub fn parse_service_block(&self, frame: &[u8]) -> Result<Vec<ServiceReport>, AsterixError> {
+        let (cat, len) = block_header(frame)?;
+        if cat != CAT034 {
+            return Ok(Vec::new());
+        }
+        let mut reports = Vec::new();
+        let mut off = 3;
+        while off < len {
+            let (items, next) = walk_record_cat(cat, UAP034, &frame[..len], off)?;
+            if next <= off {
+                return Err(AsterixError::BadBlock {
+                    cat: Some(cat),
+                    declared: len,
+                    have: off,
+                });
+            }
+            let mut r = decode_034(&items);
+            r.raw = frame[off..next.min(len)].to_vec();
+            {
+                let mut all = self.radar_status.lock().unwrap_or_else(|e| e.into_inner());
+                let known = all.entry((r.sac, r.sic)).or_default();
+                known.merge(r.status);
+                r.status = *known;
+            }
+            let counter = match r.message_type {
+                NORTH_MARKER => Some(&self.north_markers),
+                SECTOR_CROSSING => Some(&self.sector_crossings),
+                JAMMING_STROBE | SSR_JAMMING_STROBE | MODE_S_JAMMING_STROBE => {
+                    Some(&self.jamming_strobes)
+                }
+                _ => None,
+            };
+            if let Some(c) = counter {
+                c.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
+            if r.message_type == NORTH_MARKER && r.status.degraded() {
+                self.radar_degraded
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
+            reports.push(r);
+            off = next;
+        }
+        Ok(reports)
     }
 
     /// Decode every track-bearing record in one data block. A block for a category
@@ -768,6 +1296,7 @@ impl AsterixParser {
             });
         }
         let uap: &[Field] = match cat {
+            CAT010 => UAP010,
             CAT021 => UAP021,
             CAT048 => UAP048,
             CAT062 => UAP062,
@@ -779,6 +1308,7 @@ impl AsterixParser {
         while off < len {
             let (items, next) = walk_record_cat(cat, uap, &frame[..len], off)?;
             let mut t = match cat {
+                CAT010 => decode_010(&items, self.sensor.as_ref()),
                 CAT021 => decode_021(&items),
                 CAT048 => decode_048(&items, self.sensor.as_ref()),
                 CAT062 => decode_062(&items),
@@ -812,18 +1342,47 @@ impl AsterixParser {
             (None, Some(track)) => format!("asterix:{}:{}:{}:{}", t.category, t.sac, t.sic, track),
             (None, None) => format!("asterix:{}:{}:{}", t.category, t.sac, t.sic),
         };
-        let mut b = EventBuilder::new(self.source_id.clone(), "mim:aircraft")
+        let entity_type = self.entity_type_for(t);
+        let mut b = EventBuilder::new(self.source_id.clone(), entity_type.clone())
             .new_id()
             .payload(t.raw.clone())
             .metadata("source_uid", source_uid)
             .metadata("asterix_category", t.category.to_string());
-        // Absolute position -> structured location (metres); else the polar
-        // measurement rides as metadata so nothing is lost.
+        // A surface report names its domain when the operator chose one.
+        match entity_type.as_str() {
+            "mim:vessel" => b = b.attribute("environment", "SURFACE"),
+            "mim:land-vehicle" => b = b.attribute("environment", "LAND"),
+            _ => {}
+        }
+        // Absolute position -> structured location (metres); else the
+        // sensor-relative measurement rides as metadata so nothing is lost.
         if let (Some(lat), Some(lon)) = (t.lat, t.lon) {
             b = b.location(lat, lon, t.alt_ft.map(|ft| ft * 0.3048).unwrap_or(0.0));
         } else if let Some((rho, theta)) = t.polar {
             b = b.metadata("range_nm", format!("{rho:.3}"));
             b = b.metadata("azimuth_deg", format!("{theta:.3}"));
+        } else if let Some((x, y)) = t.cartesian {
+            b = b.metadata("x_m", format!("{x:.0}"));
+            b = b.metadata("y_m", format!("{y:.0}"));
+        }
+        if let Some((sx, sy)) = t.position_sd {
+            b = b.metadata("position_sd_x_m", format!("{sx:.2}"));
+            b = b.metadata("position_sd_y_m", format!("{sy:.2}"));
+        }
+        if let Some((length, width, orientation)) = t.size {
+            b = b.metadata("target_length_m", format!("{length:.0}"));
+            if let Some(w) = width {
+                b = b.metadata("target_width_m", format!("{w:.0}"));
+            }
+            if let Some(o) = orientation {
+                b = b.metadata("target_orientation_deg", format!("{o:.1}"));
+            }
+        }
+        if let Some(rt) = t.report_type {
+            b = b.metadata("report_type", rt);
+        }
+        if let Some(fleet) = t.vehicle_fleet {
+            b = b.metadata("vehicle_fleet", fleet);
         }
         if let Some(ft) = t.alt_ft {
             b = b.metadata("altitude_ft", format!("{ft:.0}"));
@@ -853,7 +1412,8 @@ impl AsterixParser {
             b = b.attribute("callsign", cs.clone());
         }
         if let Some(cat) = t.emitter {
-            b = b.attribute("aircraft_type", cat);
+            // Not an ontology attribute: kept as metadata, never quarantined.
+            b = b.metadata("emitter_category", cat);
         }
         stamp(b)
             .build()
@@ -868,6 +1428,110 @@ impl AsterixParser {
     fn to_event_now(&self, t: &AsterixTarget) -> Result<Event, AsterixError> {
         self.to_event_with(t, |b| b.now())
     }
+
+    /// The entity type a track publishes as: CAT010 is the operator's choice or
+    /// the report's implication; every air-picture category is an aircraft.
+    fn entity_type_for(&self, t: &AsterixTarget) -> String {
+        if t.category == CAT010 {
+            self.cat010_type
+                .clone()
+                .unwrap_or_else(|| t.implied_surface_type().to_string())
+        } else {
+            "mim:aircraft".to_string()
+        }
+    }
+
+    /// A radar heartbeat or jamming strobe as a signed event about the radar
+    /// itself: its status as last reported, its rotation period, its own
+    /// position (from the message, else the configured site).
+    fn service_event_with(
+        &self,
+        r: &ServiceReport,
+        stamp: impl FnOnce(EventBuilder) -> EventBuilder,
+    ) -> Result<Event, AsterixError> {
+        let entity_type = self
+            .cat034_type
+            .clone()
+            .unwrap_or_else(|| "mim:sensor".to_string());
+        let mut b = EventBuilder::new(self.source_id.clone(), entity_type)
+            .new_id()
+            .payload(r.raw.clone())
+            .metadata("source_uid", format!("asterix:radar:{}:{}", r.sac, r.sic))
+            .metadata("asterix_category", CAT034.to_string())
+            .metadata("message_type", r.message_name());
+        if let Some((lat, lon, h)) = r.position {
+            b = b.location(lat, lon, h);
+        } else if let Some(s) = self.sensor {
+            b = b.location(s.lat, s.lon, s.alt_m);
+        }
+        if let Some(aff) = self.enrichment.hostility.as_deref() {
+            b = b.attribute("hostility", aff);
+        }
+        if let Some(tod) = r.time_of_day {
+            b = b.metadata("time_of_day_s", format!("{tod:.3}"));
+        }
+        if let Some(p) = r.rotation_period_s {
+            b = b.metadata("rotation_period_s", format!("{p:.3}"));
+        }
+        if let Some(sec) = r.sector {
+            b = b.metadata("sector", sec.to_string());
+        }
+        if let Some((r0, r1, a0, a1)) = r.window {
+            b = b.metadata("window_range_start_nm", format!("{r0:.3}"));
+            b = b.metadata("window_range_end_nm", format!("{r1:.3}"));
+            b = b.metadata("window_azimuth_start_deg", format!("{a0:.3}"));
+            b = b.metadata("window_azimuth_end_deg", format!("{a1:.3}"));
+        }
+        let flags = [
+            ("nogo", r.status.nogo),
+            ("rdp_overload", r.status.rdp_overload),
+            ("xmt_overload", r.status.xmt_overload),
+            ("monitoring_disconnected", r.status.monitoring_disconnected),
+            ("time_source_invalid", r.status.time_source_invalid),
+            ("psr_overload", r.status.psr_overload),
+            ("ssr_overload", r.status.ssr_overload),
+            ("mds_overload", r.status.mds_overload),
+        ];
+        for (key, value) in flags {
+            if let Some(v) = value {
+                b = b.metadata(key, if v { "true" } else { "false" });
+            }
+        }
+        stamp(b)
+            .build()
+            .map_err(|e| AsterixError::Build(e.to_string()))
+    }
+
+    /// Build a service event with an explicit timestamp (tests pin this path).
+    pub fn service_event_at(
+        &self,
+        r: &ServiceReport,
+        observed: &str,
+    ) -> Result<Event, AsterixError> {
+        self.service_event_with(r, |b| b.timestamp(observed))
+    }
+}
+
+/// The category and declared length of a data block, checked against the bytes
+/// actually present.
+fn block_header(frame: &[u8]) -> Result<(u8, usize), AsterixError> {
+    if frame.len() < 3 {
+        return Err(AsterixError::BadBlock {
+            cat: None,
+            declared: 0,
+            have: frame.len(),
+        });
+    }
+    let cat = frame[0];
+    let len = u16::from_be_bytes([frame[1], frame[2]]) as usize;
+    if len < 3 || len > frame.len() {
+        return Err(AsterixError::BadBlock {
+            cat: Some(cat),
+            declared: len,
+            have: frame.len(),
+        });
+    }
+    Ok((cat, len))
 }
 
 /// Walk one record starting at `off`: decode the FSPEC, slice each present item by
@@ -921,8 +1585,11 @@ fn walk_record_cat<'a>(
 
 impl FrameParser for AsterixParser {
     fn parse(&self, frame: &[u8]) -> Result<Vec<Event>, ParseError> {
-        let targets = self.parse_frame(frame).map_err(box_err)?;
-        let mut events = Vec::with_capacity(targets.len());
+        let (targets, reports) = self.parse_datagram(frame).map_err(box_err)?;
+        let mut events = Vec::with_capacity(targets.len() + reports.len());
+        for r in reports.iter().filter(|r| r.is_published()) {
+            events.push(self.service_event_with(r, |b| b.now()).map_err(box_err)?);
+        }
         for t in &targets {
             // A simulated, test or field-monitor report is real wire traffic
             // but not a real object: counted, never published as a track.
@@ -940,6 +1607,16 @@ impl FrameParser for AsterixParser {
         vec![
             ("asterix_ignored_blocks_total", self.ignored_blocks.clone()),
             ("asterix_test_targets_total", self.test_targets.clone()),
+            ("asterix_north_markers_total", self.north_markers.clone()),
+            (
+                "asterix_sector_crossings_total",
+                self.sector_crossings.clone(),
+            ),
+            (
+                "asterix_jamming_strobes_total",
+                self.jamming_strobes.clone(),
+            ),
+            ("asterix_radar_degraded_total", self.radar_degraded.clone()),
         ]
     }
 }
@@ -1111,18 +1788,31 @@ mod tests {
         // CAT048 targets in one datagram. The old walk stopped at the first
         // block's declared length and silently dropped everything after it.
         let p = parser();
-        let mut datagram = vec![34, 0, 6, 25, 10, 0]; // CAT034 service block (ignored)
+        let mut datagram = block(34, &cat034_north_marker()); // service block first
         datagram.extend(block(48, &cat048_record()));
-        let targets = p.parse_frame(&datagram).unwrap();
+        let (targets, reports) = p.parse_datagram(&datagram).unwrap();
         assert_eq!(
             targets.len(),
             1,
             "the CAT048 block behind CAT034 must decode"
         );
         assert_eq!(
-            p.ignored_blocks.load(std::sync::atomic::Ordering::Relaxed),
+            reports.len(),
             1,
-            "the skipped service block is counted, not vanished"
+            "the service block is decoded, not skipped"
+        );
+        assert_eq!(
+            p.ignored_blocks.load(std::sync::atomic::Ordering::Relaxed),
+            0,
+            "nothing in this datagram was ignored"
+        );
+        // A category nobody decodes is still counted, never an error.
+        let mut datagram = vec![240, 0, 4, 0]; // CAT240 video: not ours
+        datagram.extend(block(48, &cat048_record()));
+        assert_eq!(p.parse_frame(&datagram).unwrap().len(), 1);
+        assert_eq!(
+            p.ignored_blocks.load(std::sync::atomic::Ordering::Relaxed),
+            1
         );
     }
 
@@ -1350,5 +2040,308 @@ mod tests {
         r.extend_from_slice(&[25, 10]);
         r.push(0xC0); // 380 says ADR+ID present but no bytes follow
         let _ = parser().parse_block(&block(62, &r));
+    }
+    // ---- CAT010 ------------------------------------------------------------
+    fn cat010_wgs84_record() -> Vec<u8> {
+        let lat = (60.0 / LSB_041) as i32;
+        let lon = (25.0 / LSB_041) as i32;
+        let mut r = fspec(&[1, 2, 4, 5, 8, 10, 22]);
+        r.extend_from_slice(&[25, 10]); // 010 SAC/SIC
+        r.push(1); // 000 target report
+        r.extend_from_slice(&300u32.to_be_bytes()[1..]); // 140 time of day
+        r.extend_from_slice(&lat.to_be_bytes()); // 041 lat
+        r.extend_from_slice(&lon.to_be_bytes()); // 041 lon
+        r.extend_from_slice(&u16b(2048)); // 200 ground speed -> 450 kt
+        r.extend_from_slice(&u16b(16384)); // 200 track angle -> 90 deg
+        r.extend_from_slice(&u16b(77)); // 161 track number
+        r.extend_from_slice(&[8, 12, 0, 0]); // 500 sd: 2.0 m, 3.0 m
+        r
+    }
+
+    #[test]
+    fn cat010_wgs84_report_is_a_surface_track_with_uncertainty_kept() {
+        let p = parser();
+        let t = &p.parse_block(&block(10, &cat010_wgs84_record())).unwrap()[0];
+        assert!((t.lat.unwrap() - 60.0).abs() < 1e-6);
+        assert!((t.lon.unwrap() - 25.0).abs() < 1e-6);
+        assert!((t.ground_speed.unwrap() - 450.0).abs() < 0.1);
+        assert_eq!(t.track, Some(77));
+        assert_eq!(t.position_sd, Some((2.0, 3.0)));
+        let ev = p.to_event_at(t, "2026-06-10T08:00:00Z").unwrap();
+        // No operator choice, no vehicle fleet, no Mode S identity: an object.
+        assert_eq!(ev.entity_type, "mim:object");
+        assert_eq!(meta(&ev, "source_uid"), Some("asterix:10:25:10:77"));
+        assert_eq!(meta(&ev, "asterix_category"), Some("10"));
+        assert_eq!(meta(&ev, "position_sd_x_m"), Some("2.00"));
+        assert_eq!(meta(&ev, "position_sd_y_m"), Some("3.00"));
+        assert_eq!(attr(&ev, "course"), Some("90.0"));
+        assert_eq!(attr(&ev, "environment"), None, "no domain without a choice");
+    }
+
+    #[test]
+    fn cat010_entity_map_makes_a_coastal_radar_emit_vessels() {
+        let mut map = std::collections::HashMap::new();
+        map.insert("cat010".to_string(), "mim:vessel".to_string());
+        let p = parser().with_entity_map(&map);
+        let t = &p.parse_block(&block(10, &cat010_wgs84_record())).unwrap()[0];
+        let ev = p.to_event_at(t, "2026-06-10T08:00:00Z").unwrap();
+        assert_eq!(ev.entity_type, "mim:vessel");
+        assert_eq!(attr(&ev, "environment"), Some("SURFACE"));
+    }
+
+    #[test]
+    fn cat010_implied_type_follows_the_report_content() {
+        // A vehicle fleet id makes a land vehicle; a Mode S address an aircraft.
+        let mut r = fspec(&[1, 2, 5, 16]);
+        r.extend_from_slice(&[25, 10]);
+        r.push(1);
+        r.extend_from_slice(&[0u8; 8]); // 041 at 0,0
+        r.push(3); // 300 fire vehicle
+        let p = parser();
+        let t = &p.parse_block(&block(10, &r)).unwrap()[0];
+        assert_eq!(t.vehicle_fleet, Some("fire"));
+        let ev = p.to_event_at(t, "2026-06-10T08:00:00Z").unwrap();
+        assert_eq!(ev.entity_type, "mim:land-vehicle");
+        assert_eq!(attr(&ev, "environment"), Some("LAND"));
+        assert_eq!(meta(&ev, "vehicle_fleet"), Some("fire"));
+
+        let mut r = fspec(&[1, 2, 5, 13]);
+        r.extend_from_slice(&[25, 10]);
+        r.push(1);
+        r.extend_from_slice(&[0u8; 8]);
+        r.extend_from_slice(&[0x4C, 0xA2, 0xD6]); // 220 target address
+        let t = &p.parse_block(&block(10, &r)).unwrap()[0];
+        let ev = p.to_event_at(t, "2026-06-10T08:00:00Z").unwrap();
+        assert_eq!(ev.entity_type, "mim:aircraft");
+        assert_eq!(meta(&ev, "source_uid"), Some("icao:4CA2D6"));
+    }
+
+    #[test]
+    fn cat010_polar_and_cartesian_geolocate_against_the_site_without_slant_correction() {
+        let p = parser().with_sensor(Some(Sensor {
+            lat: 60.0,
+            lon: 25.0,
+            alt_m: 0.0,
+        }));
+        // Polar: 1852 m (one NM) due north. RHO is metres in CAT010.
+        let mut r = fspec(&[1, 2, 6]);
+        r.extend_from_slice(&[25, 10]);
+        r.push(1);
+        r.extend_from_slice(&u16b(1852));
+        r.extend_from_slice(&u16b(0));
+        let t = &p.parse_block(&block(10, &r)).unwrap()[0];
+        let dlat = t.lat.unwrap() - 60.0;
+        assert!((dlat - 0.01666).abs() < 0.0005, "one NM north = {dlat} deg");
+        assert!((t.lon.unwrap() - 25.0).abs() < 1e-9);
+        // Cartesian: 1000 m due east.
+        let mut r = fspec(&[1, 2, 7]);
+        r.extend_from_slice(&[25, 10]);
+        r.push(1);
+        r.extend_from_slice(&(1000i16).to_be_bytes());
+        r.extend_from_slice(&(0i16).to_be_bytes());
+        let t = &p.parse_block(&block(10, &r)).unwrap()[0];
+        // A great-circle step due east bends a hair toward the equator: ~1e-6
+        // degrees over 1 km at 60N, which is the geometry, not an error.
+        assert!((t.lat.unwrap() - 60.0).abs() < 1e-4, "east keeps latitude");
+        let dlon = t.lon.unwrap() - 25.0;
+        assert!(
+            (0.0175..0.0185).contains(&dlon),
+            "1 km east at 60N = {dlon} deg"
+        );
+        // Without a site the offsets ride as metadata, nothing lost.
+        let t = &parser().parse_block(&block(10, &r)).unwrap()[0];
+        let ev = parser().to_event_at(t, "2026-06-10T08:00:00Z").unwrap();
+        assert!(ev.location.is_none());
+        assert_eq!(meta(&ev, "x_m"), Some("1000"));
+        assert_eq!(meta(&ev, "y_m"), Some("0"));
+    }
+
+    #[test]
+    fn cat010_cartesian_velocity_becomes_speed_and_course() {
+        let mut r = fspec(&[1, 2, 5, 9]);
+        r.extend_from_slice(&[25, 10]);
+        r.push(1);
+        r.extend_from_slice(&[0u8; 8]);
+        r.extend_from_slice(&(40i16).to_be_bytes()); // Vx = 10 m/s east
+        r.extend_from_slice(&(0i16).to_be_bytes()); //  Vy = 0
+        let t = &parser().parse_block(&block(10, &r)).unwrap()[0];
+        assert!((t.ground_speed.unwrap() * KNOTS_TO_MPS - 10.0).abs() < 0.01);
+        assert!((t.track_angle.unwrap() - 90.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn cat010_status_messages_and_test_targets_never_become_tracks() {
+        // A periodic status message carries a position field but is not a target.
+        let mut r = fspec(&[1, 2, 5]);
+        r.extend_from_slice(&[25, 10]);
+        r.push(3); // 000 periodic status message
+        r.extend_from_slice(&[0u8; 8]);
+        let p = parser();
+        assert!(p.parse_block(&block(10, &r)).unwrap().is_empty());
+        // SIM lives in the first extension of I010/020 (not the first octet).
+        let mut r = fspec(&[1, 2, 3, 5]);
+        r.extend_from_slice(&[25, 10]);
+        r.push(1);
+        r.extend_from_slice(&[0x60 | 0x01, 0x80]); // TYP=PSR, FX; ext: SIM
+        r.extend_from_slice(&[0u8; 8]);
+        let t = &p.parse_block(&block(10, &r)).unwrap()[0];
+        assert!(t.simulated);
+        assert_eq!(t.report_type, Some("psr"));
+        assert!(p.parse(&block(10, &r)).unwrap().is_empty());
+        assert_eq!(p.test_targets.load(std::sync::atomic::Ordering::Relaxed), 1);
+    }
+
+    // ---- CAT034 ------------------------------------------------------------
+    fn cat034_north_marker() -> Vec<u8> {
+        let lat = (60.0 / LSB_120) as i64;
+        let lon = (25.0 / LSB_120) as i64;
+        let mut r = fspec(&[1, 2, 3, 5, 11]);
+        r.extend_from_slice(&[25, 10]); // 010
+        r.push(NORTH_MARKER); // 000
+        r.extend_from_slice(&300u32.to_be_bytes()[1..]); // 030 time
+        r.extend_from_slice(&u16b(512)); // 041: 4.000 s per rotation
+        r.extend_from_slice(&(50i16).to_be_bytes()); // 120 height 50 m
+        r.extend_from_slice(&lat.to_be_bytes()[5..]); // 120 lat (3 bytes)
+        r.extend_from_slice(&lon.to_be_bytes()[5..]); // 120 lon (3 bytes)
+        r
+    }
+    fn cat034_sector_crossing_with_status(com: u8) -> Vec<u8> {
+        let mut r = fspec(&[1, 2, 4, 6]);
+        r.extend_from_slice(&[25, 10]);
+        r.push(SECTOR_CROSSING);
+        r.push(96); // 020 sector 96 = 135 deg
+        r.extend_from_slice(&[0x80, com]); // 050: COM present, FX=0
+        r
+    }
+
+    #[test]
+    fn cat034_status_is_remembered_across_messages_and_rides_the_heartbeat() {
+        let p = parser();
+        // A sector crossing reports NOGO + RDP overload; it is counted, not published.
+        let r = p
+            .parse_service_block(&block(34, &cat034_sector_crossing_with_status(0x90)))
+            .unwrap();
+        assert_eq!(r.len(), 1);
+        assert!(!r[0].is_published());
+        assert_eq!(r[0].status.nogo, Some(true));
+        assert_eq!(r[0].status.rdp_overload, Some(true));
+        assert_eq!(r[0].status.xmt_overload, Some(false));
+        assert_eq!(r[0].sector, Some(96));
+        // The next North marker carries no status item itself but the
+        // heartbeat reports what the radar last said.
+        let r = p
+            .parse_service_block(&block(34, &cat034_north_marker()))
+            .unwrap();
+        let nm = &r[0];
+        assert!(nm.is_published());
+        assert_eq!(nm.rotation_period_s, Some(4.0));
+        assert_eq!(nm.status.nogo, Some(true));
+        let (lat, lon, h) = nm.position.unwrap();
+        assert!((lat - 60.0).abs() < 1e-4 && (lon - 25.0).abs() < 1e-4 && h == 50.0);
+        let ev = p.service_event_at(nm, "2026-06-10T08:00:00Z").unwrap();
+        assert_eq!(ev.entity_type, "mim:sensor");
+        assert_eq!(meta(&ev, "source_uid"), Some("asterix:radar:25:10"));
+        assert_eq!(meta(&ev, "message_type"), Some("north-marker"));
+        assert_eq!(meta(&ev, "rotation_period_s"), Some("4.000"));
+        assert_eq!(meta(&ev, "nogo"), Some("true"));
+        assert_eq!(meta(&ev, "rdp_overload"), Some("true"));
+        assert_eq!(
+            meta(&ev, "psr_overload"),
+            None,
+            "never claimed, never stated"
+        );
+        let loc = ev.location.as_ref().unwrap();
+        assert!((loc.latitude - 60.0).abs() < 1e-4);
+        assert_eq!(ev.payload, nm.raw, "the raw record is sealed verbatim");
+        use std::sync::atomic::Ordering::Relaxed;
+        assert_eq!(p.north_markers.load(Relaxed), 1);
+        assert_eq!(p.sector_crossings.load(Relaxed), 1);
+        assert_eq!(p.radar_degraded.load(Relaxed), 1);
+        // Recovery: a status message clears NOGO; the next heartbeat is clean.
+        p.parse_service_block(&block(34, &cat034_sector_crossing_with_status(0x00)))
+            .unwrap();
+        let r = p
+            .parse_service_block(&block(34, &cat034_north_marker()))
+            .unwrap();
+        assert_eq!(r[0].status.nogo, Some(false));
+        assert_eq!(p.radar_degraded.load(Relaxed), 1);
+    }
+
+    #[test]
+    fn cat034_jamming_strobe_is_published_with_its_window() {
+        let mut r = fspec(&[1, 2, 9]);
+        r.extend_from_slice(&[25, 10]);
+        r.push(JAMMING_STROBE);
+        r.extend_from_slice(&u16b(2560)); // 100 rho start 10 NM
+        r.extend_from_slice(&u16b(5120)); //     rho end 20 NM
+        r.extend_from_slice(&u16b(8192)); //     theta start 45
+        r.extend_from_slice(&u16b(16384)); //    theta end 90
+        let p = parser();
+        let rep = &p.parse_service_block(&block(34, &r)).unwrap()[0];
+        assert!(rep.is_published());
+        let ev = p.service_event_at(rep, "2026-06-10T08:00:00Z").unwrap();
+        assert_eq!(meta(&ev, "message_type"), Some("jamming-strobe"));
+        assert_eq!(meta(&ev, "window_range_start_nm"), Some("10.000"));
+        assert_eq!(meta(&ev, "window_range_end_nm"), Some("20.000"));
+        assert_eq!(meta(&ev, "window_azimuth_start_deg"), Some("45.000"));
+        assert_eq!(meta(&ev, "window_azimuth_end_deg"), Some("90.000"));
+        assert_eq!(
+            p.jamming_strobes.load(std::sync::atomic::Ordering::Relaxed),
+            1
+        );
+    }
+
+    #[test]
+    fn one_datagram_publishes_the_heartbeat_and_the_tracks_behind_it() {
+        let p = parser().with_sensor(Some(Sensor {
+            lat: 60.0,
+            lon: 25.0,
+            alt_m: 0.0,
+        }));
+        let mut datagram = block(34, &cat034_north_marker());
+        datagram.extend(block(34, &cat034_sector_crossing_with_status(0x00)));
+        datagram.extend(block(48, &cat048_record()));
+        datagram.extend(block(10, &cat010_wgs84_record()));
+        let events = p.parse(&datagram).unwrap();
+        let types: Vec<&str> = events.iter().map(|e| e.entity_type.as_str()).collect();
+        assert_eq!(types, ["mim:sensor", "mim:aircraft", "mim:object"]);
+    }
+
+    // ---- ontology gate -------------------------------------------------------
+    #[test]
+    fn every_attribute_and_type_the_connector_can_emit_is_declared() {
+        // The same check the connector runs at boot, over everything this
+        // decoder can produce: a name the ontology does not declare would be
+        // quarantined silently in Core, so it fails here instead.
+        let declared = ajar_connector_common::ontology::Declared {
+            entity_types: [
+                "mim:aircraft",
+                "mim:object",
+                "mim:vessel",
+                "mim:land-vehicle",
+                "mim:sensor",
+            ]
+            .iter()
+            .map(|s| s.to_string())
+            .collect(),
+            attributes: [
+                "hostility",
+                "speed",
+                "course",
+                "vertical_rate",
+                "squawk",
+                "callsign",
+                "environment",
+            ]
+            .iter()
+            .map(|s| s.to_string())
+            .collect(),
+            fixed_values: [("environment", "SURFACE"), ("environment", "LAND")]
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+        };
+        let faults = ajar_connector_common::ontology::check(&declared);
+        assert!(faults.is_empty(), "undeclared: {faults:?}");
     }
 }

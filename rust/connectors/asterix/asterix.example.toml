@@ -3,12 +3,17 @@
 # Example ASTERIX ingress config. Copy, adjust, and run:
 #   ajar-asterix ./asterix.toml
 #
-# One connector decodes whatever air-picture categories arrive on its feed:
+# One connector decodes whatever surveillance categories arrive on its feed:
+#   CAT010 surface movement reports (airport surface; coastal and naval radars
+#          use it for sea-surface targets; WGS-84, polar or Cartesian position)
 #   CAT021 ADS-B target reports (cooperative traffic, WGS-84 position)
+#   CAT034 radar service messages: the radar's own heartbeat. Its status (NOGO,
+#          overloads, rotation period, position) is published once per antenna
+#          rotation as a mim:sensor event; jamming strobes are published too
 #   CAT048 monoradar target reports (primary + Mode S/SSR; range/azimuth position)
 #   CAT062 SDPS system tracks (the fused, recognised air picture; WGS-84 position)
 # Blocks of any other category ride past untouched. A second feed is a second copy
-# of this file with a different source_id, key, and group — no rebuild.
+# of this file with a different source_id, key, and group, no rebuild.
 
 source_id = "radar-adsb-1"
 nats_url = "nats://127.0.0.1:4222"
@@ -18,15 +23,24 @@ signing_key_path = "/etc/ajar/radar-adsb-1.seed"
 # The air picture carries no hostility of its own; assign one for the COP.
 # default_hostility = "Unknown"
 
-# CAT048 only: monoradar reports are range/azimuth RELATIVE to the radar, so the
-# connector needs the radar's site to geolocate them onto the map. Set it to this
-# radar's position. Without it, CAT048 reports still flow — the range/azimuth ride
-# as metadata — but carry no absolute location. CAT021/CAT062 ignore this (their
-# positions are already WGS-84).
+# CAT048 and CAT010: monoradar reports are range/azimuth (or x/y offsets)
+# RELATIVE to the radar, so the connector needs the radar's site to geolocate them
+# onto the map. Set it to this radar's position. Without it, the reports still
+# flow with the range/azimuth or offsets as metadata, but carry no absolute
+# location. CAT021/CAT062 ignore this (their positions are already WGS-84).
 # [sensor]
 # lat = 60.31
 # lon = 24.97
 # alt_m = 55.0
+
+# What a CAT010 surface report is. The wire format cannot say whether a surface
+# target is a ship or a baggage tug, so the operator does: a coastal or naval
+# radar emits vessels, an airport surface feed emits land vehicles. Unset, the
+# report's own content decides (a vehicle fleet id makes a land vehicle, a Mode S
+# identity an aircraft, anything else a plain object). `cat034` chooses the type
+# the radar heartbeat publishes as (default mim:sensor).
+# [entity_map]
+# cat010 = "mim:vessel"
 
 [transport]
 # ASTERIX is usually distributed as UDP multicast on a surveillance LAN.
