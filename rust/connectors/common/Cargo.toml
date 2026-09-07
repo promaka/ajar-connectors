@@ -10,6 +10,10 @@ repository.workspace = true
 authors.workspace = true
 publish = false
 
+[[example]]
+name = "dds_probe"
+required-features = ["dds"]
+
 [features]
 # The heavier transports are opt-in so the default build stays lean for
 # air-gapped deployment; a connector enables only the method(s) it needs.
@@ -17,6 +21,10 @@ serial = ["dep:tokio-serial"]
 mqtt = ["dep:rumqttc"]
 rest-poll = ["dep:reqwest"]
 websocket = ["dep:tokio-tungstenite", "dep:futures-util"]
+# DDS (OMG Data Distribution Service): the bus inside naval combat systems and
+# under ROS 2. Pure Rust, no C bindings. Every ingress connector enables it by
+# default; a lean build turns it off with --no-default-features.
+dds = ["dep:rustdds", "dep:futures-util"]
 
 [dependencies]
 ajar-connector.workspace = true
@@ -39,6 +47,7 @@ rustls-pki-types.workspace = true
 # Feature-gated transport dependencies.
 tokio-serial = { version = "5", optional = true }
 rumqttc = { version = "0.25", default-features = false, features = ["use-rustls-no-provider"], optional = true }
+rustdds = { version = "0.14", default-features = false, optional = true }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-no-provider"], optional = true }
 # ring, to match the one crypto provider already in the process (see workspace note).
 futures-util = { workspace = true, optional = true }

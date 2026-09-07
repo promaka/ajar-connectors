@@ -27,6 +27,14 @@ ignore = [
   { id = "RUSTSEC-2026-0098", reason = "optional mqtt feature only; rumqttc pins 0.102; not in shipped artefacts" },
   { id = "RUSTSEC-2026-0099", reason = "optional mqtt feature only; rumqttc pins 0.102; not in shipped artefacts" },
   { id = "RUSTSEC-2026-0104", reason = "optional mqtt feature only; rumqttc pins 0.102; not in shipped artefacts" },
+  # The DDS transport's stack (rustdds) still depends on mio 0.6, which pulls
+  # net2, and on netdev, which pulls the paste macro crate. Both advisories are
+  # unmaintained, not vulnerable: net2 is socket-option plumbing on a LAN
+  # socket, paste runs at compile time only. These DO reach shipped binaries,
+  # since every ingress connector ships dds. Drop both when rustdds releases
+  # without mio 0.6 (its mio 0.8 support exists behind a feature today).
+  { id = "RUSTSEC-2020-0016", reason = "net2 via rustdds's mio 0.6; unmaintained, not vulnerable; drop when rustdds moves to mio 0.8" },
+  { id = "RUSTSEC-2024-0436", reason = "paste via rustdds's netdev; compile-time macro crate; unmaintained, not vulnerable" },
 ]
 
 [licenses]

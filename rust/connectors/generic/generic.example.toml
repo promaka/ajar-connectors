@@ -15,6 +15,16 @@ signing_key_path = "/etc/ajar/acme-sensor-1.seed"
 # Feeds mapped generically usually carry no hostility; stamp one for the COP.
 # default_hostility = "Friend"
 
+# JSON published on a DDS topic as a single string field (a ROS 2
+# std_msgs/String, or any typed struct with one string)? `payload = "string"`
+# hands the mapping the text alone. See the doctor for the type name.
+# [transport]
+# kind = "dds"
+# domain = 0
+# topic = "rt/detections"
+# type_name = "std_msgs::msg::dds_::String_"
+# payload = "string"
+
 [transport]
 kind = "tcp-client"
 connect = "sensor-gateway.example.mil:9000"

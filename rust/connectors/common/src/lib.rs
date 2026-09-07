@@ -45,6 +45,8 @@ pub mod tcp;
 pub mod tcp_server;
 pub mod udp;
 
+#[cfg(feature = "dds")]
+pub mod dds;
 #[cfg(feature = "mqtt")]
 pub mod mqtt;
 #[cfg(feature = "rest-poll")]
@@ -60,6 +62,8 @@ pub mod ws;
 pub const MAX_FRAME_BYTES: usize = 64 * 1024;
 
 pub use config::{Config, Enrichment, Framing, SensorSite, SpoolSetting, Transport};
+#[cfg(feature = "dds")]
+pub use config::{DdsOptions, DdsPayload, DdsReliability};
 
 /// The seal's signature prefix length (re-exported for the spool drain).
 pub(crate) fn seal_signature_len() -> usize {
@@ -119,6 +123,8 @@ pub async fn open_source(transport: &Transport) -> anyhow::Result<Box<dyn FrameS
         Transport::Serial { device, baud } => Box::new(serial::open(device, *baud)?),
         #[cfg(feature = "mqtt")]
         Transport::Mqtt { host, topic } => Box::new(mqtt::open(host, topic)?),
+        #[cfg(feature = "dds")]
+        Transport::Dds(opts) => Box::new(dds::open(opts)?),
         #[cfg(feature = "websocket")]
         Transport::WsClient {
             url,
