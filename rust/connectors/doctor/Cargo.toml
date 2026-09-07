@@ -17,8 +17,10 @@ path = "src/main.rs"
 [features]
 # The doctor preflights serial devices; it ships in the same tarball as the
 # serial-capable connectors, so it carries the same default.
-default = ["serial"]
+default = ["serial", "dds"]
 serial = ["ajar-connector-common/serial"]
+# The doctor preflights DDS topics for the connectors that can read them.
+dds = ["ajar-connector-common/dds"]
 
 [dependencies]
 ajar-connector-common.workspace = true

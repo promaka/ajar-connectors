@@ -13,6 +13,31 @@ Two version lines are tracked independently (see COMPATIBILITY.md):
 
 ## [Unreleased]
 
+### Added
+
+- `dds` transport: any connector can read its data from a DDS topic, the bus
+  inside naval combat systems and under ROS 2. The connector joins the domain
+  as one more reader on a topic the ship's or the robot's own systems already
+  publish; nothing on their side changes, and the bytes are signed as they
+  cross. Pure Rust, behind the `dds` feature, shipped in every ingress
+  connector, the doctor and `ajar-up`, inert unless a config says
+  `kind = "dds"`; a lean build is `--no-default-features`.
+  Each sample is delivered as its serialized body, the contents of a
+  `sequence<octet>` field (raw protocol bytes such as ASTERIX blocks) or the
+  text of a `string` field (a ROS 2 `std_msgs/String`, a JSON line), by the
+  `payload` setting; samples are buffered until the connector reads them, up
+  to a stated bound of 4096, so a burst is not overwritten by the DDS default
+  of keeping only the latest. A sample larger than the frame limit is dropped
+  whole, never truncated. A dual-NIC box pins discovery to one interface. Only
+  the default partition is joined. The doctor's transport step tells a silent
+  topic's causes apart: no publisher, the topic published under another type
+  name (and which one to set), the same topic and type that will not pair
+  (QoS or partition), or a domain that is not reachable at all. A config that
+  names a transport this binary was built without says so instead of guessing
+  a typo. Gated by loopback tests through the transport and the probe, and by
+  an interoperability job that receives a ROS 2 message from Fast DDS and from
+  Cyclone DDS publishers.
+
 ## [0.5.11] - 2026-09-05
 
 ### Added

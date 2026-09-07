@@ -111,7 +111,7 @@ pub async fn run(opts: &Options) -> Vec<Finding> {
     // Step 2b: the native-feed transport, where a naval first hour actually
     // fails (a serial adapter that is not there, a multicast group joined on
     // the wrong network of a dual-homed box).
-    check_transport(&mut out, &cfg);
+    check_transport(&mut out, &cfg, opts.timeout);
 
     // Step 3: registration, as far as it can be seen from this box.
     check_registration(
@@ -338,7 +338,109 @@ fn check_spool(out: &mut Vec<Finding>, cfg: &Inputs) {
     }
 }
 
-fn check_transport(out: &mut Vec<Finding>, cfg: &Inputs) {
+/// DDS says nothing when a subscription does not pair: a topic name, a type
+/// name, a partition or a QoS that differs from the publisher's produces
+/// silence. A bounded wait on the domain tells the cases apart, and the
+/// verdict is a pure function of what the probe saw, so each branch is tested
+/// without a network.
+#[cfg(feature = "dds")]
+fn check_dds(out: &mut Vec<Finding>, opts: &common::dds::Options, wait: Duration) {
+    match common::dds::probe(opts, wait) {
+        Ok(probe) => out.push(dds_verdict(opts, &probe, wait)),
+        Err(e) => out.push(Finding::fail(
+            "transport",
+            format!("{e:#}"),
+            "The connector will fail the same way. Check the domain id and, on a \
+             dual-NIC box, set transport.interface_ip to the address of the NIC \
+             on the DDS network."
+                .to_string(),
+        )),
+    }
+}
+
+#[cfg(feature = "dds")]
+fn dds_verdict(opts: &common::dds::Options, probe: &common::dds::Probe, wait: Duration) -> Finding {
+    let secs = wait.as_secs();
+    let same_topic: Vec<&(String, String)> = probe
+        .publishers
+        .iter()
+        .filter(|(name, _)| name == &opts.topic)
+        .collect();
+    let exact = same_topic.iter().any(|(_, ty)| ty == &opts.type_name);
+    let other_type = same_topic
+        .iter()
+        .find(|(_, ty)| ty != &opts.type_name)
+        .map(|(_, ty)| ty.clone());
+    match (probe.matched, probe.first_sample_len) {
+        (true, Some(n)) => Finding::ok(
+            "transport",
+            format!("dds publisher matched on {opts}; first sample {n} bytes"),
+        ),
+        // This stack reports a match on topic name alone, so a publisher of
+        // the same topic under another type name looks matched and silent.
+        // The publisher's own announcement is the decisive evidence.
+        (true, None) if !exact && other_type.is_some() => type_mismatch(opts, other_type),
+        (true, None) => Finding::warn(
+            "transport",
+            format!("dds publisher matched on {opts} but sent nothing in {secs} s"),
+            "A matched publisher that stays silent is usually idle (a radar between \
+             detections, a status topic that reports on change), or it keeps history \
+             only for readers that joined earlier. Wait for the source to emit, or \
+             ask its owner how often it publishes."
+                .to_string(),
+        ),
+        (false, _) if exact => Finding::fail(
+            "transport",
+            format!("a publisher of {opts} exists but did not pair with this reader"),
+            "Same topic, same type, no match: the QoS disagrees or the publisher is in a \
+             named partition. If reliability = \"reliable\" is set, the publisher is \
+             best-effort: use \"best-effort\", which pairs with either. This transport \
+             joins the default partition only."
+                .to_string(),
+        ),
+        (false, _) if other_type.is_some() => type_mismatch(opts, other_type),
+        (false, _) if probe.publishers.is_empty() => Finding::fail(
+            "transport",
+            format!("no dds publisher matched on {opts}"),
+            format!(
+                "No publisher of anything was seen in {secs} s: nothing DDS is reachable \
+                 from this box on domain {}. Check the domain id, that the DDS LAN is \
+                 the one this box is on (transport.interface_ip on a dual-NIC box), and \
+                 that multicast is not filtered.",
+                opts.domain
+            ),
+        ),
+        (false, _) => {
+            let mut names: Vec<&str> = probe.publishers.iter().map(|(n, _)| n.as_str()).collect();
+            names.dedup();
+            Finding::fail(
+                "transport",
+                format!("no dds publisher matched on {opts}"),
+                format!(
+                    "The domain is reachable (publishing: {}) but nothing publishes {:?}. \
+                     Check the topic name; the doctor lists what it can hear.",
+                    names.join(", "),
+                    opts.topic
+                ),
+            )
+        }
+    }
+}
+
+#[cfg(feature = "dds")]
+fn type_mismatch(opts: &common::dds::Options, other_type: Option<String>) -> Finding {
+    let other = other_type.unwrap_or_default();
+    Finding::fail(
+        "transport",
+        format!(
+            "dds topic {:?} is published under type name {other:?}, not {:?}",
+            opts.topic, opts.type_name
+        ),
+        format!("DDS pairs only on an exact type name. Set type_name = {other:?}."),
+    )
+}
+
+fn check_transport(out: &mut Vec<Finding>, cfg: &Inputs, timeout: Duration) {
     match &cfg.transport {
         Some(common::Transport::UdpMulticast {
             bind,
@@ -368,6 +470,8 @@ fn check_transport(out: &mut Vec<Finding>, cfg: &Inputs) {
         Some(common::Transport::Serial { device, baud }) => {
             check_serial_device(out, device, *baud);
         }
+        #[cfg(feature = "dds")]
+        Some(common::Transport::Dds(opts)) => check_dds(out, opts, timeout),
         Some(common::Transport::PcapReplay { path, port, .. }) => {
             match std::fs::read(path)
                 .map_err(|e| anyhow::anyhow!("reading capture {path}: {e}"))
@@ -900,5 +1004,139 @@ fn check_clock(out: &mut Vec<Finding>, server_cert: Option<&certs::CertInfo>) {
                 cert.not_before_text, cert.not_after_text
             ),
         ));
+    }
+}
+
+#[cfg(all(test, feature = "dds"))]
+mod dds_verdict_tests {
+    use super::*;
+    use crate::report::Status;
+    use common::dds::{Options, Probe};
+    use common::{DdsPayload, DdsReliability};
+
+    fn opts() -> Options {
+        Options {
+            domain: 0,
+            topic: "RadarAsterix".into(),
+            type_name: "Radar::AsterixBlock".into(),
+            reliability: DdsReliability::BestEffort,
+            payload: DdsPayload::Octets,
+            interface_ip: None,
+        }
+    }
+    fn probe(matched: bool, sample: Option<usize>, publishers: &[(&str, &str)]) -> Probe {
+        Probe {
+            matched,
+            first_sample_len: sample,
+            publishers: publishers
+                .iter()
+                .map(|(t, ty)| (t.to_string(), ty.to_string()))
+                .collect(),
+        }
+    }
+    const WAIT: Duration = Duration::from_secs(5);
+
+    #[test]
+    fn a_matched_publisher_with_a_sample_passes() {
+        let f = dds_verdict(
+            &opts(),
+            &probe(true, Some(28), &[("RadarAsterix", "Radar::AsterixBlock")]),
+            WAIT,
+        );
+        assert_eq!(f.status, Status::Ok);
+        assert!(f.detail.contains("28 bytes"), "{}", f.detail);
+    }
+
+    #[test]
+    fn the_topic_under_another_type_name_names_the_right_one() {
+        // Matched on the topic name alone, silent: the publisher's own
+        // announcement says why.
+        let f = dds_verdict(
+            &opts(),
+            &probe(true, None, &[("RadarAsterix", "Other::Type")]),
+            WAIT,
+        );
+        assert_eq!(f.status, Status::Fail);
+        assert!(
+            f.fix
+                .as_deref()
+                .unwrap_or("")
+                .contains("type_name = \"Other::Type\""),
+            "{:?}",
+            f.fix
+        );
+        // And the same when the stack did not even report a match.
+        let f = dds_verdict(
+            &opts(),
+            &probe(false, None, &[("RadarAsterix", "Other::Type")]),
+            WAIT,
+        );
+        assert_eq!(f.status, Status::Fail);
+        assert!(f.detail.contains("Other::Type"), "{}", f.detail);
+    }
+
+    #[test]
+    fn a_matched_but_idle_publisher_is_a_warning_not_a_failure() {
+        let f = dds_verdict(
+            &opts(),
+            &probe(true, None, &[("RadarAsterix", "Radar::AsterixBlock")]),
+            WAIT,
+        );
+        assert_eq!(f.status, Status::Warn);
+        assert!(f.detail.contains("5 s"), "{}", f.detail);
+        assert!(
+            f.fix.as_deref().unwrap_or("").contains("idle"),
+            "{:?}",
+            f.fix
+        );
+    }
+
+    #[test]
+    fn same_topic_same_type_no_pairing_points_at_qos_and_partition() {
+        let mut o = opts();
+        o.reliability = DdsReliability::Reliable;
+        let f = dds_verdict(
+            &o,
+            &probe(false, None, &[("RadarAsterix", "Radar::AsterixBlock")]),
+            WAIT,
+        );
+        assert_eq!(f.status, Status::Fail);
+        let fix = f.fix.unwrap_or_default();
+        assert!(
+            fix.contains("best-effort") && fix.contains("partition"),
+            "{fix}"
+        );
+    }
+
+    #[test]
+    fn a_silent_domain_points_at_the_network_not_the_topic_name() {
+        let f = dds_verdict(&opts(), &probe(false, None, &[]), WAIT);
+        assert_eq!(f.status, Status::Fail);
+        let fix = f.fix.unwrap_or_default();
+        assert!(
+            fix.contains("interface_ip") && fix.contains("multicast"),
+            "{fix}"
+        );
+        assert!(!fix.contains("topic name"), "{fix}");
+    }
+
+    #[test]
+    fn a_reachable_domain_without_the_topic_lists_what_it_heard() {
+        let f = dds_verdict(
+            &opts(),
+            &probe(
+                false,
+                None,
+                &[
+                    ("Other", "X::Y"),
+                    ("rt/chatter", "std_msgs::msg::dds_::String_"),
+                ],
+            ),
+            WAIT,
+        );
+        assert_eq!(f.status, Status::Fail);
+        let fix = f.fix.unwrap_or_default();
+        assert!(fix.contains("rt/chatter") && fix.contains("Other"), "{fix}");
+        assert!(fix.contains("\"RadarAsterix\""), "{fix}");
     }
 }

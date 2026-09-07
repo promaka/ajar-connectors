@@ -30,6 +30,63 @@ jobs:
       - name: Manifest versions agree
         run: ./scripts/check-versions.sh
 
+  dds-interop:
+    name: dds interop (Fast DDS + Cyclone DDS publishers)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: rust/connectors
+    env:
+      # ros:jazzy-ros-base as of 2026-08-19, pinned by digest like every other
+      # external in this workflow; bump deliberately, not by drift.
+      ROS_IMAGE: ros@sha256:bab7e640bf79cd84957e4e18fcba7d87efc3385b4e3f36a32eeca01638e43206
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust/connectors
+      - name: Build the probe (the connector's own transport, nothing else)
+        run: cargo build -p ajar-connector-common --features dds --example dds_probe
+      # One ROS 2 container on the host network, so discovery is real. ROS 2 is
+      # the realistic peer: Fast DDS is its default middleware and Cyclone DDS
+      # its alternative, and a std_msgs/String is what an unmanned platform
+      # actually publishes. Neither publisher is ours.
+      - name: Start ROS 2 and install the second vendor once
+        run: |
+          set -euo pipefail
+          docker run -d --name ros --network host "$ROS_IMAGE" sleep infinity
+          docker exec ros bash -lc 'apt-get update -qq >/dev/null && apt-get install -y -qq ros-jazzy-rmw-cyclonedds-cpp >/dev/null'
+      - name: Receive from a Fast DDS publisher
+        run: |
+          set -euo pipefail
+          docker exec -d ros bash -lc 'source /opt/ros/jazzy/setup.bash && exec ros2 topic pub -r 5 /chatter std_msgs/msg/String "{data: hello from fastdds}"'
+          for i in $(seq 1 30); do
+            docker exec ros bash -lc 'source /opt/ros/jazzy/setup.bash && ros2 topic list' | grep -q '^/chatter$' && break
+            sleep 2
+          done
+          out=$(target/debug/examples/dds_probe 0 rt/chatter 'std_msgs::msg::dds_::String_' string 60 1)
+          echo "$out"
+          grep -q "hello from fastdds" <<<"$out"
+          # The bracket keeps the pattern from matching the shell that runs it.
+          docker exec ros bash -lc 'pkill -f "[r]os2 topic pub" || true'
+      - name: Receive from a Cyclone DDS publisher
+        run: |
+          set -euo pipefail
+          docker exec -d ros bash -lc 'source /opt/ros/jazzy/setup.bash && RMW_IMPLEMENTATION=rmw_cyclonedds_cpp exec ros2 topic pub -r 5 /chatter std_msgs/msg/String "{data: hello from cyclone}"'
+          for i in $(seq 1 30); do
+            docker exec ros bash -lc 'source /opt/ros/jazzy/setup.bash && RMW_IMPLEMENTATION=rmw_cyclonedds_cpp ros2 topic list' | grep -q '^/chatter$' && break
+            sleep 2
+          done
+          out=$(target/debug/examples/dds_probe 0 rt/chatter 'std_msgs::msg::dds_::String_' string 60 1)
+          echo "$out"
+          grep -q "hello from cyclone" <<<"$out"
+      - name: Container logs and cleanup
+        if: always()
+        run: |
+          docker logs ros 2>&1 | tail -50 || true
+          docker rm -f ros >/dev/null 2>&1 || true
+
   coverage:
     name: line coverage against the floors
     runs-on: ubuntu-latest

@@ -72,6 +72,79 @@ pub struct Config {
     _mapping_extension: Option<toml::Value>,
 }
 
+/// Everything `Transport::Dds` needs. One definition: the runtime, the doctor
+/// and the probe all pass it through unchanged.
+///
+/// The type name must match what the publisher registered, or DDS will not
+/// pair the two. Only the default partition is joined. `payload` says what the
+/// parser is handed: the whole serialized body (`body`, the default), the
+/// contents of a single `sequence<octet>` field (`octets`, for a topic that
+/// carries raw protocol bytes such as ASTERIX blocks), or the text of a single
+/// `string` field (`string`, for a ROS 2 `std_msgs/String` or a JSON line).
+#[cfg(feature = "dds")]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DdsOptions {
+    /// DDS domain id, 0 to 232 (0 unless the deployment says otherwise).
+    #[serde(default)]
+    pub domain: u16,
+    /// Topic name.
+    pub topic: String,
+    /// The publisher's registered type name, e.g. `HelloWorldData::Msg`.
+    pub type_name: String,
+    /// Reader reliability. `best-effort` pairs with any publisher and is the
+    /// default; `reliable` asks for retransmission and pairs only with
+    /// reliable publishers.
+    #[serde(default)]
+    pub reliability: DdsReliability,
+    /// What to hand the parser from each sample.
+    #[serde(default)]
+    pub payload: DdsPayload,
+    /// Use only the network interface holding this IP for discovery and
+    /// data, for dual-NIC boxes where the DDS domain lives on one LAN.
+    #[serde(default)]
+    pub interface_ip: Option<String>,
+}
+
+#[cfg(feature = "dds")]
+impl std::fmt::Display for DdsOptions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "dds domain {} topic {} ({})",
+            self.domain, self.topic, self.type_name
+        )
+    }
+}
+
+/// DDS reader reliability, for `Transport::Dds`.
+#[cfg(feature = "dds")]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum DdsReliability {
+    /// Pairs with any publisher; samples lost on the wire are not resent.
+    #[default]
+    BestEffort,
+    /// Asks the publisher to resend lost samples; pairs only with reliable
+    /// publishers.
+    Reliable,
+}
+
+/// What a DDS sample hands the parser, for `Transport::Dds`.
+#[cfg(feature = "dds")]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum DdsPayload {
+    /// The serialized body as the publisher wrote it.
+    #[default]
+    Body,
+    /// The bytes of a single `sequence<octet>` field, without its length prefix.
+    Octets,
+    /// The text of a single `string` field, without its length prefix or
+    /// terminating NUL.
+    String,
+}
+
 /// The `spool` setting: a bare directory string (defaults for everything
 /// else), or the full table for tuning.
 #[derive(Debug, Clone)]
@@ -191,9 +264,9 @@ fn default_http_path() -> String {
 /// group = "239.2.3.1"
 /// ```
 ///
-/// The feature-gated kinds (`serial`, `mqtt`, `rest-poll`) require the connector
-/// to be built with the matching Cargo feature; DDS is reached through an
-/// external gateway that re-publishes onto one of these kinds, not natively.
+/// The feature-gated kinds (`dds`, `serial`, `mqtt`, `rest-poll`, `ws-client`)
+/// require the connector to be built with the matching Cargo feature; every
+/// ingress connector ships `dds` and the serial-capable ones ship `serial`.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum Transport {
@@ -340,6 +413,20 @@ pub enum Transport {
         #[serde(default = "default_baud")]
         baud: u32,
     },
+    /// Subscribe to a DDS topic and take each sample's serialized bytes as a
+    /// frame. DDS is the bus inside naval combat systems and under ROS 2, so
+    /// this reaches a ship's CMS and any ROS 2 platform with a config block.
+    /// Requires the `dds` feature; see [`DdsOptions`].
+    ///
+    /// ```toml
+    /// [transport]
+    /// kind = "dds"
+    /// domain = 0
+    /// topic = "RadarTracks"
+    /// type_name = "Tracks::Track"
+    /// ```
+    #[cfg(feature = "dds")]
+    Dds(DdsOptions),
     /// Subscribe to an MQTT topic — common for IoT and modern sensor buses.
     /// Requires the `mqtt` feature.
     #[cfg(feature = "mqtt")]
@@ -447,6 +534,17 @@ fn did_you_mean(msg: &str) -> Option<String> {
                 .map(|(_, r)| ("value", r))
         })?;
     let (typo, rest) = rest.split_once('`')?;
+    // A transport kind that exists but was not compiled into this binary is
+    // not a typo, and the nearest name would send the operator the wrong way.
+    if what == "value" {
+        if let Some((kind, feature)) = FEATURE_GATED_KINDS.iter().find(|(k, _)| *k == typo) {
+            return Some(format!(
+                "the {kind:?} transport exists but this binary was built without the \
+                 `{feature}` feature; rebuild with --features {feature}, or use a build \
+                 that ships it"
+            ));
+        }
+    }
     let (_, list) = rest.split_once("expected one of ")?;
     let candidates: Vec<&str> = list
         .split(',')
@@ -459,6 +557,15 @@ fn did_you_mean(msg: &str) -> Option<String> {
         .min()?;
     (best.0 <= 2.max(typo.len() / 3)).then(|| format!("did you mean the {what} `{}`?", best.1))
 }
+
+/// Transport kinds behind Cargo features, with the feature that provides each.
+const FEATURE_GATED_KINDS: &[(&str, &str)] = &[
+    ("dds", "dds"),
+    ("serial", "serial"),
+    ("mqtt", "mqtt"),
+    ("rest-poll", "rest-poll"),
+    ("ws-client", "websocket"),
+];
 
 /// Levenshtein distance, for `did_you_mean`.
 fn edit_distance(a: &str, b: &str) -> usize {
@@ -525,6 +632,15 @@ mod tests {
             "{msg}"
         );
         assert!(msg.contains("*.example.toml"), "{msg}");
+    }
+
+    #[test]
+    fn a_kind_that_was_not_compiled_in_is_named_not_corrected() {
+        let hint =
+            did_you_mean("unknown variant `dds`, expected one of `udp-multicast`, `udp`, `dir`")
+                .unwrap();
+        assert!(hint.contains("built without the `dds` feature"), "{hint}");
+        assert!(!hint.contains("did you mean"), "{hint}");
     }
 
     #[test]

@@ -16,8 +16,10 @@ path = "src/main.rs"
 
 [features]
 # The doctor preflight covers serial devices; same default as the tarball.
-default = ["serial"]
+default = ["serial", "dds"]
 serial = ["ajar-doctor/serial"]
+# The embedded doctor must preflight every transport a packet can name.
+dds = ["ajar-doctor/dds"]
 
 [dependencies]
 ajar-connector.workspace = true

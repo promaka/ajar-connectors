@@ -560,11 +560,13 @@ arrive, so any connector runs on any transport by config:
 | `mqtt` | subscribe a topic | needs the `mqtt` feature (IoT buses) |
 | `rest-poll` | HTTP GET on interval | needs the `rest-poll` feature (pull-only APIs) |
 | `ws-client` | WebSocket, connect out | needs the `websocket` feature; hosted live feeds, subscription message and auth headers supported |
+| `dds` | subscribe a DDS topic | shipped in every ingress connector; the bus inside naval combat systems and under ROS 2; a lean build is `--no-default-features` |
 
-DDS is reached through an external gateway that re-publishes onto one of these
-(usually `udp-multicast` or `mqtt`), not as a native kind. Full onboarding,
-including registering the connector with the sovereign's control plane, is in
-[ONBOARDING.md](ONBOARDING.md).
+The `dds` kind joins the domain as one more reader on a topic the ship's or the
+robot's own systems already publish; nothing on their side changes, and the
+bytes are signed as they cross. Only the default partition is joined. Full
+onboarding, including registering the connector with the sovereign's control
+plane, is in [ONBOARDING.md](ONBOARDING.md).
 
 Build and test them on their own (they resolve their transport-heavy deps
 independently of the SDK workspace):

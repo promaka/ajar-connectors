@@ -18,8 +18,9 @@ path = "src/main.rs"
 # Real bridges deliver NMEA over RS-422/RS-232, so the shipped binary reads a
 # serial port out of the box; a lean no-serial build remains one flag away
 # (--no-default-features).
-default = ["serial"]
+default = ["serial", "dds"]
 serial = ["ajar-connector-common/serial"]
+dds = ["ajar-connector-common/dds"]
 
 [dependencies]
 ajar-connector.workspace = true

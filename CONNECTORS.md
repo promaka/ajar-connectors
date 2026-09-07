@@ -34,7 +34,8 @@ CAT034 makes the radar itself part of the governed picture: its status (NOGO,
 overloads, rotation period, position) is published once per antenna rotation as
 a signed `mim:sensor` heartbeat, and jamming strobes are published as they
 happen, so a radar going quiet or being jammed is a verifiable event rather than
-a gap. Usually arrives as UDP multicast on the surveillance LAN.
+a gap. Usually arrives as UDP multicast on the surveillance LAN, or on the
+combat system's DDS bus (`kind = "dds"`).
 
 ### `ajar-adsb` (ADS-B, SBS-1 / BaseStation)
 

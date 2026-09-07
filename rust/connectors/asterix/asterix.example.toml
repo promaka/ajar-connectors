@@ -57,3 +57,17 @@ group = "232.1.1.1"
 # port = 8600        # only the feed, out of a busy capture
 # speed = 1.0        # 1.0 = as recorded; 10 = ten times faster
 # loop = true        # demo mode: replay forever
+
+# Radar output on a DDS bus (a combat system's internal bus, or a ROS 2
+# platform)? Subscribe to the topic that carries the ASTERIX blocks. The
+# type name must be exactly what the publisher registered; the doctor names
+# the right one if it differs. `payload = "octets"` hands the parser the
+# bytes of the type's sequence<octet> field, without the length prefix.
+# [transport]
+# kind = "dds"
+# domain = 0
+# topic = "RadarAsterix"
+# type_name = "Radar::AsterixBlock"
+# payload = "octets"
+# reliability = "best-effort"   # pairs with any publisher; "reliable" asks for resends
+# interface_ip = "10.0.5.12"    # dual-NIC box: the NIC on the DDS network
