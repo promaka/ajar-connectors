@@ -52,7 +52,9 @@ pub struct Declared {
     /// Governed attribute names the mapping will set.
     pub attributes: Vec<String>,
     /// Attribute values that are fixed at config time, so can be checked now.
-    pub fixed_values: BTreeMap<String, String>,
+    /// A list, not a map: one attribute may take several fixed values across a
+    /// connector's paths, and every one of them is checked.
+    pub fixed_values: Vec<(String, String)>,
 }
 
 /// A mapping fault worth refusing to start over.
@@ -229,7 +231,7 @@ mod tests {
         Declared {
             entity_types: types.iter().map(|s| s.to_string()).collect(),
             attributes: attrs.iter().map(|s| s.to_string()).collect(),
-            fixed_values: BTreeMap::new(),
+            fixed_values: Vec::new(),
         }
     }
 
@@ -276,7 +278,7 @@ mod tests {
     fn a_lowercase_hostility_is_caught_with_the_correct_value() {
         let mut decl = d(&["mim:aircraft"], &["hostility"]);
         decl.fixed_values
-            .insert("hostility".into(), "friendly".into());
+            .push(("hostility".into(), "friendly".into()));
         let f = check(&decl);
         match f.as_slice() {
             [Fault::NotInVocabulary { value, allowed, .. }] => {

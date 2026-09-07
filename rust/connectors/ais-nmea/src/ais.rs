@@ -24,6 +24,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use ajar_connector::{Event, EventBuilder};
+use ajar_connector_common::GovernedIdentity;
 use ajar_connector_common::{Enrichment, FrameParser, ParseError};
 
 /// 1 knot in metres/second. The governed `speed` attribute is m/s; AIS speed over
@@ -588,6 +589,13 @@ impl AisParser {
             .payload(p.raw.clone())
             .metadata("source_uid", p.mmsi.to_string())
             .metadata("mmsi", p.mmsi.to_string());
+        // Governed identity: the MMSI under its standard code, in its canonical
+        // nine digits so a coast station's leading zeros match what any other
+        // producer emits. An unconfigured transponder sends 0 and a corrupt
+        // frame can decode past nine digits; neither is an identity.
+        if (1..=999_999_999).contains(&p.mmsi) {
+            b = b.identity("AIS", format!("{:09}", p.mmsi));
+        }
         if let (Some(lat), Some(lon)) = (p.lat, p.lon) {
             b = b.location(lat, lon, 0.0);
         }
@@ -1020,6 +1028,19 @@ mod tests {
         assert_eq!(meta_of(&ev, "source_uid"), Some("603916439"));
         assert_eq!(meta_of(&ev, "mmsi"), Some("603916439"));
         assert!(ev.metadata.iter().any(|m| m.key == "imo"));
+        assert_eq!(attr_of(&ev, "alt_id"), Some("603916439"));
+        assert_eq!(attr_of(&ev, "alt_id_standard"), Some("AIS"));
+        // A coast station's MMSI keeps its leading zeros in the governed form,
+        // and an unconfigured transponder's MMSI 0 is not an identity at all.
+        let mut coast = pos.clone();
+        coast.mmsi = 2_320_001;
+        let ev = p.to_event_at(&coast, "2026-06-10T08:00:00Z").unwrap();
+        assert_eq!(attr_of(&ev, "alt_id"), Some("002320001"));
+        let mut blank = pos.clone();
+        blank.mmsi = 0;
+        let ev = p.to_event_at(&blank, "2026-06-10T08:00:00Z").unwrap();
+        assert_eq!(attr_of(&ev, "alt_id"), None);
+        assert_eq!(meta_of(&ev, "mmsi"), Some("0"));
     }
 
     #[test]

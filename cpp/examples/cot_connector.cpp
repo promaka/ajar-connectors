@@ -62,7 +62,8 @@ std::string cot_type_to_entity(const std::string& t) {
 
 std::string entity_to_cot(const std::string& e) {
   if (e == "mim:aircraft") return "a-f-A";
-  if (e == "mim:vessel") return "a-f-S";
+  if (e == "mim:vessel" || e == "mim:surface-vessel") return "a-f-S";
+  if (e == "mim:subsurface-vessel") return "a-f-U";
   if (e == "mim:drone") return "a-f-G-U-C-D";
   if (e.rfind("x:cot:", 0) == 0) {
     std::string slug = e.substr(6);

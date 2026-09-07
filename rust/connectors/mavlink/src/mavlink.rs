@@ -36,6 +36,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use ajar_connector::{Event, EventBuilder};
+use ajar_connector_common::GovernedIdentity;
 use ajar_connector_common::{Enrichment, FrameParser, ParseError};
 
 /// Per-vehicle cap on raw frames carried forward before the next emit, and their
@@ -107,6 +108,13 @@ pub struct VehicleState {
     pub gps_fix: Option<&'static str>,
     pub gps_sats: Option<u8>,
     pub gps_hdop: Option<f64>,
+    /// MAVLink 2 GPS_RAW_INT extensions, metres and degrees: position
+    /// uncertainty horizontal and vertical, speed uncertainty, heading
+    /// uncertainty. Absent when the vehicle sends MAVLink 1 or zeros.
+    pub gps_h_acc_m: Option<f64>,
+    pub gps_v_acc_m: Option<f64>,
+    pub gps_vel_acc_mps: Option<f64>,
+    pub gps_hdg_acc_deg: Option<f64>,
 }
 
 /// A decoded MAVLink position, plus the vehicle's cached telemetry snapshot.
@@ -194,7 +202,7 @@ fn spec(msg_id: u32) -> Option<(u8, usize)> {
     match msg_id {
         0 => Some((50, 9)),     // HEARTBEAT
         1 => Some((124, 31)),   // SYS_STATUS
-        24 => Some((24, 30)),   // GPS_RAW_INT
+        24 => Some((24, 52)),   // GPS_RAW_INT, with the MAVLink 2 extensions
         30 => Some((39, 28)),   // ATTITUDE
         33 => Some((104, 28)),  // GLOBAL_POSITION_INT
         74 => Some((20, 20)),   // VFR_HUD
@@ -372,10 +380,28 @@ impl MavParser {
         let cog = u16le(p, 26);
         let fix = gps_fix(p[28]);
         let sats = p[29];
+        // MAVLink 2 extension fields, after alt_ellipsoid at 30: h_acc (mm) at
+        // 34, v_acc (mm) at 38, vel_acc (mm/s) at 42, hdg_acc (degE5) at 46.
+        // MAVLink 2 trims trailing zero bytes, so a short payload is "not
+        // sent", and a zero is "not known"; neither becomes a number.
+        // parse_frame zero-fills a trimmed MAVLink 2 payload, and zero means
+        // not known; the all-ones sentinel some drivers use means the same.
+        let ext = |off: usize| -> Option<f64> {
+            Some(u32le(p, off))
+                .filter(|v| *v != 0 && *v != u32::MAX)
+                .map(f64::from)
+        };
+        let (h_acc, v_acc, vel_acc, hdg_acc) = (ext(34), ext(38), ext(42), ext(46));
         self.mutate(sysid, |s| {
             s.gps_fix = fix;
             s.gps_sats = (sats != u8::MAX).then_some(sats);
             s.gps_hdop = (eph != u16::MAX).then_some(eph as f64 / 100.0);
+            s.gps_h_acc_m = h_acc.map(|v| v / 1000.0);
+            s.gps_v_acc_m = v_acc.map(|v| v / 1000.0);
+            s.gps_vel_acc_mps = vel_acc.map(|v| v / 1000.0);
+            // The contract bounds angle_accuracy to 360; a larger figure is
+            // not an accuracy.
+            s.gps_hdg_acc_deg = hdg_acc.map(|v| v / 100_000.0).filter(|d| *d <= 360.0);
         });
         let (raw, truncated) = self.drain(sysid);
         MavPosition {
@@ -405,7 +431,9 @@ impl MavParser {
             .location(p.lat, p.lon, p.alt_m)
             .payload(p.raw.clone())
             .metadata("source_uid", p.sysid.to_string())
-            .metadata("mav_sysid", p.sysid.to_string());
+            .metadata("mav_sysid", p.sysid.to_string())
+            // Governed identity: the MAVLink system id under its standard code.
+            .identity("MAVLink", p.sysid.to_string());
         if p.truncated {
             b = b.metadata("payload_truncated", "true");
         }
@@ -460,6 +488,27 @@ impl MavParser {
         attr!("gps_fix", s.gps_fix);
         attr!("gps_satellites", s.gps_sats.map(|v| v.to_string()));
         attr!("gps_hdop", s.gps_hdop.map(|v| format!("{v:.2}")));
+        // Uncertainty in the contract's units, only on the event whose fix
+        // stated it: a GLOBAL_POSITION_INT is the EKF's estimate, not the
+        // receiver's, and the receiver's sigma must not ride on it.
+        if p.msg_id == 24 {
+            attr!(
+                "position_accuracy_h_m",
+                s.gps_h_acc_m.map(|v| format!("{v:.2}"))
+            );
+            attr!(
+                "position_accuracy_v_m",
+                s.gps_v_acc_m.map(|v| format!("{v:.2}"))
+            );
+            attr!(
+                "speed_accuracy",
+                s.gps_vel_acc_mps.map(|v| format!("{v:.2}"))
+            );
+            attr!(
+                "angle_accuracy",
+                s.gps_hdg_acc_deg.map(|v| format!("{v:.2}"))
+            );
+        }
 
         // Autopilot-specific mode number: an opaque identifier -> metadata.
         if let Some(cm) = s.custom_mode {
@@ -880,6 +929,52 @@ mod tests {
     }
 
     #[test]
+    fn mavlink2_accuracy_extensions_become_contract_uncertainty() {
+        let p = governed();
+        let mut payload = vec![0u8; 50];
+        put_i32(&mut payload, 8, 474_000_000);
+        put_i32(&mut payload, 12, 85_000_000);
+        put_i32(&mut payload, 16, 500_000);
+        put_u16(&mut payload, 20, 120);
+        payload[28] = 3;
+        payload[29] = 12;
+        put_u32(&mut payload, 34, 2500); // h_acc 2.5 m
+        put_u32(&mut payload, 38, 4000); // v_acc 4.0 m
+        put_u32(&mut payload, 42, 300); // vel_acc 0.3 m/s
+        put_u32(&mut payload, 46, 150_000); // hdg_acc 1.5 deg
+        let pos = p.parse_frame(&frame(24, &payload)).unwrap().unwrap();
+        let ev = p.to_event_at(&pos, "2026-06-10T08:00:00Z").unwrap();
+        assert_eq!(attr_of(&ev, "position_accuracy_h_m"), Some("2.50"));
+        assert_eq!(attr_of(&ev, "position_accuracy_v_m"), Some("4.00"));
+        assert_eq!(attr_of(&ev, "speed_accuracy"), Some("0.30"));
+        assert_eq!(attr_of(&ev, "angle_accuracy"), Some("1.50"));
+        // A zero extension means "not known", never "0 m".
+        let mut zeros = payload.clone();
+        put_u32(&mut zeros, 34, 0);
+        let pos = p.parse_frame(&frame(24, &zeros)).unwrap().unwrap();
+        let ev = p.to_event_at(&pos, "2026-06-10T08:00:00Z").unwrap();
+        assert_eq!(attr_of(&ev, "position_accuracy_h_m"), None);
+        assert_eq!(attr_of(&ev, "position_accuracy_v_m"), Some("4.00"));
+        // An out-of-range heading accuracy or an all-ones sentinel is not known.
+        let mut bad = payload.clone();
+        put_u32(&mut bad, 46, 40_000_000); // 400 degrees
+        put_u32(&mut bad, 38, u32::MAX);
+        let pos = p.parse_frame(&frame(24, &bad)).unwrap().unwrap();
+        let ev = p.to_event_at(&pos, "2026-06-10T08:00:00Z").unwrap();
+        assert_eq!(attr_of(&ev, "angle_accuracy"), None);
+        assert_eq!(attr_of(&ev, "position_accuracy_v_m"), None);
+        // The EKF's position that follows carries none of the receiver's sigma.
+        let mut gpi = vec![0u8; 28];
+        put_i32(&mut gpi, 4, 474_000_000);
+        put_i32(&mut gpi, 8, 85_000_000);
+        let pos = p.parse_frame(&frame(33, &gpi)).unwrap().unwrap();
+        let ev = p.to_event_at(&pos, "2026-06-10T08:00:00Z").unwrap();
+        assert_eq!(pos.msg_id, 33);
+        assert_eq!(attr_of(&ev, "position_accuracy_h_m"), None);
+        assert_eq!(attr_of(&ev, "speed_accuracy"), None);
+    }
+
+    #[test]
     fn gps_raw_maps_fix_quality_and_caches_it() {
         let p = governed();
         let mut payload = vec![0u8; 30];
@@ -901,6 +996,10 @@ mod tests {
         let ev = p.to_event_at(&pos, "2026-06-10T08:00:00Z").unwrap();
         assert_eq!(attr_of(&ev, "gps_fix"), Some("3d"));
         assert_eq!(attr_of(&ev, "gps_satellites"), Some("12"));
+        assert_eq!(attr_of(&ev, "alt_id"), Some("1"));
+        assert_eq!(attr_of(&ev, "alt_id_standard"), Some("MAVLink"));
+        // A MAVLink 1 sized payload states no accuracy, so none is claimed.
+        assert_eq!(attr_of(&ev, "position_accuracy_h_m"), None);
 
         // The fix quality is cached, so a later GLOBAL_POSITION_INT carries it too.
         let gpi = p.parse_frame(&bytes(GPI)).unwrap().unwrap();

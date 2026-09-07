@@ -27,7 +27,7 @@
 //! UAP against your feed's edition before operational use.
 
 use ajar_connector::{Event, EventBuilder};
-use ajar_connector_common::{Enrichment, FrameParser, ParseError};
+use ajar_connector_common::{Enrichment, FrameParser, GovernedIdentity, ParseError};
 
 const CAT010: u8 = 10;
 const CAT021: u8 = 21;
@@ -39,6 +39,8 @@ const CAT062: u8 = 62;
 const KNOTS_TO_MPS: f64 = 0.514_444;
 /// 1 nautical mile in metres.
 const NM_TO_M: f64 = 1852.0;
+/// 1 foot in metres.
+const FT_TO_M: f64 = 0.3048;
 /// LSB of an ASTERIX 16-bit binary angle: 360 / 2^16 degrees.
 const ANGLE_16: f64 = 360.0 / 65_536.0;
 
@@ -923,6 +925,26 @@ fn decode_062(items: &[(u8, &[u8])]) -> AsterixTarget {
     for &(frn, item) in items {
         match frn {
             1 => (t.sac, t.sic) = (item[0], item[1]),
+            27 => {
+                // I062/500 Estimated Accuracies. APC: sigma x, sigma y (LSB
+                // 0.5 m); ABA: barometric altitude (LSB 25 ft), the altitude
+                // these events carry (I062/136), so it is the one vertical
+                // sigma that describes what is published; ATV: sigma vx,
+                // sigma vy (LSB 0.25 m/s). AGA describes a geometric altitude
+                // this decoder does not emit, and is left alone.
+                for (sub, bytes) in walk_compound(&SUB_062_500, item) {
+                    match sub {
+                        0 => {
+                            let sx = u16::from_be_bytes([bytes[0], bytes[1]]) as f64 * 0.5;
+                            let sy = u16::from_be_bytes([bytes[2], bytes[3]]) as f64 * 0.5;
+                            t.position_sd = Some((sx, sy));
+                        }
+                        4 => t.accuracy_v_m = Some(bytes[0] as f64 * 25.0 * FT_TO_M),
+                        5 => t.velocity_sd = Some((bytes[0] as f64 * 0.25, bytes[1] as f64 * 0.25)),
+                        _ => {}
+                    }
+                }
+            }
             4 => t.time_of_day = Some(be(item, 0, 3) as f64 / 128.0),
             5 => t.set_pos(signed(item, 0, 4) * LSB_105, signed(item, 4, 4) * LSB_105),
             7 => {
@@ -1014,8 +1036,14 @@ pub struct AsterixTarget {
     pub vehicle_fleet: Option<&'static str>,
     /// I010/270 target length (m), width (m), orientation (deg).
     pub size: Option<(f64, Option<f64>, Option<f64>)>,
-    /// I010/500 standard deviation of position, x and y (m).
+    /// Standard deviation of position, x and y (m): I010/500, or the APC
+    /// subfield of I062/500.
     pub position_sd: Option<(f64, f64)>,
+    /// I062/500 ABA: standard deviation of the barometric altitude (m), the
+    /// altitude these events carry.
+    pub accuracy_v_m: Option<f64>,
+    /// I062/500 ATV: standard deviation of velocity, x and y (m/s).
+    pub velocity_sd: Option<(f64, f64)>,
     /// Altitude in feet (geometric height / flight level).
     pub alt_ft: Option<f64>,
     /// Ground speed in knots.
@@ -1059,6 +1087,8 @@ impl AsterixTarget {
             vehicle_fleet: None,
             size: None,
             position_sd: None,
+            accuracy_v_m: None,
+            velocity_sd: None,
             alt_ft: None,
             ground_speed: None,
             track_angle: None,
@@ -1336,11 +1366,21 @@ impl AsterixParser {
         t: &AsterixTarget,
         stamp: impl FnOnce(EventBuilder) -> EventBuilder,
     ) -> Result<Event, AsterixError> {
-        // Native identity: ICAO address if present, else category:SAC:SIC:track.
-        let source_uid = match (t.icao, t.track) {
-            (Some(icao), _) => format!("icao:{icao:06X}"),
-            (None, Some(track)) => format!("asterix:{}:{}:{}:{}", t.category, t.sac, t.sic, track),
-            (None, None) => format!("asterix:{}:{}:{}", t.category, t.sac, t.sic),
+        // Identity: the ICAO 24-bit address when the report carries one, else
+        // the sensor's track number scoped by category and SAC/SIC, so two
+        // radars' track 7 (or one site's CAT010 and CAT062 track 7) stay
+        // distinct. One derivation feeds both the metadata and the governed
+        // pair.
+        let (source_uid, identity) = match (t.icao, t.track) {
+            (Some(icao), _) => (
+                format!("icao:{icao:06X}"),
+                Some(("ICAO24", format!("{icao:06X}"))),
+            ),
+            (None, Some(track)) => {
+                let scoped = format!("{}:{}:{}:{}", t.category, t.sac, t.sic, track);
+                (format!("asterix:{scoped}"), Some(("ASTERIX", scoped)))
+            }
+            (None, None) => (format!("asterix:{}:{}:{}", t.category, t.sac, t.sic), None),
         };
         let entity_type = self.entity_type_for(t);
         let mut b = EventBuilder::new(self.source_id.clone(), entity_type.clone())
@@ -1348,9 +1388,40 @@ impl AsterixParser {
             .payload(t.raw.clone())
             .metadata("source_uid", source_uid)
             .metadata("asterix_category", t.category.to_string());
+        if let Some((standard, id)) = identity {
+            b = b.identity(standard, id);
+        }
+        // Uncertainty in the contract's units, only when the record stated it.
+        // A per-axis pair is published as its root sum square (DRMS) in the
+        // attribute, with the axes kept in metadata. A sigma of zero is a
+        // field the sender left blank, not a perfect measurement, and is not
+        // published as one.
+        if let Some((sx, sy)) = t.position_sd {
+            b = b
+                .metadata("position_sd_x_m", format!("{sx:.2}"))
+                .metadata("position_sd_y_m", format!("{sy:.2}"));
+            let h = sx.hypot(sy);
+            if h > 0.0 {
+                b = b.attribute("position_accuracy_h_m", format!("{h:.2}"));
+            }
+        }
+        // The vertical sigma describes the altitude the event carries; without
+        // an altitude there is nothing for it to describe.
+        if let (Some(v), Some(_)) = (t.accuracy_v_m, t.alt_ft) {
+            if v > 0.0 {
+                b = b.attribute("position_accuracy_v_m", format!("{v:.2}"));
+            }
+        }
+        if let Some((vx, vy)) = t.velocity_sd {
+            let s = vx.hypot(vy);
+            if s > 0.0 {
+                b = b.attribute("speed_accuracy", format!("{s:.2}"));
+            }
+        }
         // A surface report names its domain when the operator chose one.
         match entity_type.as_str() {
-            "mim:vessel" => b = b.attribute("environment", "SURFACE"),
+            "mim:vessel" | "mim:surface-vessel" => b = b.attribute("environment", "SURFACE"),
+            "mim:subsurface-vessel" => b = b.attribute("environment", "SUBSURFACE"),
             "mim:land-vehicle" => b = b.attribute("environment", "LAND"),
             _ => {}
         }
@@ -1364,10 +1435,6 @@ impl AsterixParser {
         } else if let Some((x, y)) = t.cartesian {
             b = b.metadata("x_m", format!("{x:.0}"));
             b = b.metadata("y_m", format!("{y:.0}"));
-        }
-        if let Some((sx, sy)) = t.position_sd {
-            b = b.metadata("position_sd_x_m", format!("{sx:.2}"));
-            b = b.metadata("position_sd_y_m", format!("{sy:.2}"));
         }
         if let Some((length, width, orientation)) = t.size {
             b = b.metadata("target_length_m", format!("{length:.0}"));
@@ -1458,7 +1525,9 @@ impl AsterixParser {
             .payload(r.raw.clone())
             .metadata("source_uid", format!("asterix:radar:{}:{}", r.sac, r.sic))
             .metadata("asterix_category", CAT034.to_string())
-            .metadata("message_type", r.message_name());
+            .metadata("message_type", r.message_name())
+            // The radar's own identity: its SAC/SIC under the ASTERIX code.
+            .identity("ASTERIX", format!("{}:{}", r.sac, r.sic));
         if let Some((lat, lon, h)) = r.position {
             b = b.location(lat, lon, h);
         } else if let Some(s) = self.sensor {
@@ -2074,6 +2143,10 @@ mod tests {
         assert_eq!(meta(&ev, "asterix_category"), Some("10"));
         assert_eq!(meta(&ev, "position_sd_x_m"), Some("2.00"));
         assert_eq!(meta(&ev, "position_sd_y_m"), Some("3.00"));
+        // sqrt(2^2 + 3^2) = 3.61: the radial sigma, in the contract's attribute.
+        assert_eq!(attr(&ev, "position_accuracy_h_m"), Some("3.61"));
+        assert_eq!(attr(&ev, "alt_id"), Some("10:25:10:77"));
+        assert_eq!(attr(&ev, "alt_id_standard"), Some("ASTERIX"));
         assert_eq!(attr(&ev, "course"), Some("90.0"));
         assert_eq!(attr(&ev, "environment"), None, "no domain without a choice");
     }
@@ -2114,6 +2187,80 @@ mod tests {
         let ev = p.to_event_at(t, "2026-06-10T08:00:00Z").unwrap();
         assert_eq!(ev.entity_type, "mim:aircraft");
         assert_eq!(meta(&ev, "source_uid"), Some("icao:4CA2D6"));
+        assert_eq!(attr(&ev, "alt_id"), Some("4CA2D6"));
+        assert_eq!(attr(&ev, "alt_id_standard"), Some("ICAO24"));
+    }
+
+    #[test]
+    fn cat062_estimated_accuracies_become_contract_uncertainty() {
+        // I062/500 with APC (sigma x 10 m, sigma y 0), ABA (50 ft) and ATV
+        // (sigma vx 1 m/s, sigma vy 0): primary octet APC|ABA|ATV = 0x8C.
+        let lat = (60.0 / LSB_105) as i32;
+        let lon = (25.0 / LSB_105) as i32;
+        let accuracies: [u8; 8] = [0x8C, 0, 20, 0, 0, 2, 4, 0];
+        let mut r = fspec(&[1, 5, 12, 27]);
+        r.extend_from_slice(&[25, 10]); // 010
+        r.extend_from_slice(&lat.to_be_bytes()); // 105
+        r.extend_from_slice(&lon.to_be_bytes());
+        r.extend_from_slice(&u16b(4095)); // 040 track number
+        r.extend_from_slice(&accuracies); // 500
+        let p = parser();
+        let t = &p.parse_block(&block(62, &r)).unwrap()[0];
+        assert_eq!(t.position_sd, Some((10.0, 0.0)));
+        assert!(
+            (t.accuracy_v_m.unwrap() - 15.24).abs() < 1e-6,
+            "{:?}",
+            t.accuracy_v_m
+        );
+        assert_eq!(t.velocity_sd, Some((1.0, 0.0)));
+        let ev = p.to_event_at(t, "2026-06-10T08:00:00Z").unwrap();
+        assert_eq!(attr(&ev, "position_accuracy_h_m"), Some("10.00"));
+        assert_eq!(meta(&ev, "position_sd_x_m"), Some("10.00"));
+        // No altitude in the record: the vertical sigma has nothing to
+        // describe and is not published.
+        assert_eq!(attr(&ev, "position_accuracy_v_m"), None);
+        assert_eq!(attr(&ev, "speed_accuracy"), Some("1.00"));
+        assert_eq!(attr(&ev, "alt_id"), Some("62:25:10:4095"));
+        assert_eq!(attr(&ev, "alt_id_standard"), Some("ASTERIX"));
+        // With the flight level present, the barometric sigma describes it.
+        let mut with_fl = fspec(&[1, 5, 12, 17, 27]);
+        with_fl.extend_from_slice(&[25, 10]);
+        with_fl.extend_from_slice(&lat.to_be_bytes());
+        with_fl.extend_from_slice(&lon.to_be_bytes());
+        with_fl.extend_from_slice(&u16b(4095));
+        with_fl.extend_from_slice(&(1400i16).to_be_bytes()); // 136: FL350
+        with_fl.extend_from_slice(&accuracies);
+        let t = &p.parse_block(&block(62, &with_fl)).unwrap()[0];
+        let ev = p.to_event_at(t, "2026-06-10T08:00:00Z").unwrap();
+        assert_eq!(attr(&ev, "position_accuracy_v_m"), Some("15.24"));
+        // A blank (all-zero) APC is not a zero-metre accuracy.
+        let mut blank = fspec(&[1, 5, 12, 27]);
+        blank.extend_from_slice(&[25, 10]);
+        blank.extend_from_slice(&lat.to_be_bytes());
+        blank.extend_from_slice(&lon.to_be_bytes());
+        blank.extend_from_slice(&u16b(4095));
+        blank.extend_from_slice(&[0x80, 0, 0, 0, 0]); // APC only, zeros
+        let t = &p.parse_block(&block(62, &blank)).unwrap()[0];
+        let ev = p.to_event_at(t, "2026-06-10T08:00:00Z").unwrap();
+        assert_eq!(attr(&ev, "position_accuracy_h_m"), None);
+        assert_eq!(meta(&ev, "position_sd_x_m"), Some("0.00"));
+    }
+
+    #[test]
+    fn the_revision_2_vessel_types_carry_their_domain() {
+        for (ty, env) in [
+            ("mim:vessel", "SURFACE"),
+            ("mim:surface-vessel", "SURFACE"),
+            ("mim:subsurface-vessel", "SUBSURFACE"),
+        ] {
+            let mut map = std::collections::HashMap::new();
+            map.insert("cat010".to_string(), ty.to_string());
+            let p = parser().with_entity_map(&map);
+            let t = &p.parse_block(&block(10, &cat010_wgs84_record())).unwrap()[0];
+            let ev = p.to_event_at(t, "2026-06-10T08:00:00Z").unwrap();
+            assert_eq!(ev.entity_type, ty);
+            assert_eq!(attr(&ev, "environment"), Some(env), "{ty}");
+        }
     }
 
     #[test]
@@ -2318,6 +2465,8 @@ mod tests {
                 "mim:aircraft",
                 "mim:object",
                 "mim:vessel",
+                "mim:surface-vessel",
+                "mim:subsurface-vessel",
                 "mim:land-vehicle",
                 "mim:sensor",
             ]
@@ -2332,14 +2481,25 @@ mod tests {
                 "squawk",
                 "callsign",
                 "environment",
+                "alt_id",
+                "alt_id_standard",
+                "position_accuracy_h_m",
+                "position_accuracy_v_m",
+                "speed_accuracy",
             ]
             .iter()
             .map(|s| s.to_string())
             .collect(),
-            fixed_values: [("environment", "SURFACE"), ("environment", "LAND")]
-                .iter()
-                .map(|(k, v)| (k.to_string(), v.to_string()))
-                .collect(),
+            fixed_values: [
+                ("environment", "SURFACE"),
+                ("environment", "SUBSURFACE"),
+                ("environment", "LAND"),
+                ("alt_id_standard", "ASTERIX"),
+                ("alt_id_standard", "ICAO24"),
+            ]
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect(),
         };
         let faults = ajar_connector_common::ontology::check(&declared);
         assert!(faults.is_empty(), "undeclared: {faults:?}");

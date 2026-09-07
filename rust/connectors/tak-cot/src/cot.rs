@@ -9,6 +9,7 @@
 use std::collections::HashMap;
 
 use ajar_connector::{Event, EventBuilder};
+use ajar_connector_common::GovernedIdentity;
 use ajar_connector_common::{Enrichment, FrameParser, ParseError};
 use quick_xml::events::Event as XmlEvent;
 use quick_xml::Reader;
@@ -152,20 +153,22 @@ impl CotParser {
         let time = time.ok_or(CotError::Missing("event/@time"))?;
 
         // Core requires the event id to be a fresh UUIDv7. The native CoT uid is
-        // ungoverned passthrough, so it goes in metadata (never the id, never a
-        // governed attribute).
+        // never the id: it goes to source_uid metadata and, governed, to alt_id
+        // under the CoT standard code.
         //
         // The tactical attributes a COP needs: hostility, callsign, confidence.
         // Affiliation and callsign are routed per the connector's attribute mode
         // (governed when the ontology declares them, else metadata — always safe);
         // Hostility is always set (defaulting to Unknown), so a track is never
-        // blank. Confidence is the event's first-class field. The native uid stays
-        // in metadata (never the id).
+        // blank. Confidence is the event's first-class field.
         let mut builder = EventBuilder::new(self.source_id.clone(), self.map_type(&cot_type))
             .new_id()
             .payload(native.to_vec())
             .timestamp(time)
-            .metadata("source_uid", uid)
+            .metadata("source_uid", uid.clone())
+            // Governed identity: the CoT uid under its standard code. An empty
+            // or oversized uid is not an identity and sets nothing.
+            .identity("CoT", uid)
             .attribute("hostility", hostility(&cot_type));
         if let Some(callsign) = callsign {
             builder = builder.attribute("callsign", callsign);
@@ -188,8 +191,9 @@ impl CotParser {
             return mapped.clone();
         }
         match cot_type.split('-').nth(2) {
-            Some("A") => "mim:aircraft".to_string(), // air
-            Some("S") => "mim:vessel".to_string(),   // sea surface
+            Some("A") => "mim:aircraft".to_string(),          // air
+            Some("S") => "mim:vessel".to_string(),            // sea surface
+            Some("U") => "mim:subsurface-vessel".to_string(), // subsurface (revision 2)
             _ => format!("x:cot:{}", cot_type.replace('-', "_")),
         }
     }
@@ -273,6 +277,14 @@ mod tests {
             .metadata
             .iter()
             .any(|m| m.key == "source_uid" && m.value == "AD-7741"));
+        assert!(ev
+            .attributes
+            .iter()
+            .any(|a| a.key == "alt_id" && a.value == "AD-7741"));
+        assert!(ev
+            .attributes
+            .iter()
+            .any(|a| a.key == "alt_id_standard" && a.value == "CoT"));
         assert_eq!(ev.entity_type, "mim:aircraft"); // battle dimension A -> air
         let loc = ev.location.as_ref().unwrap();
         assert_eq!(loc.latitude, 26.4);

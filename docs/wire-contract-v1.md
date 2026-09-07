@@ -47,7 +47,9 @@ Four rules the wire format does not express but Ajar enforces:
 | `source_id` | Must match the identity the signing key is registered against |
 
 A native identifier (ICAO address, MMSI, track number) belongs in `metadata`,
-never in `id` and never in `attributes`.
+never in `id`. From ontology revision 3 it is also governed, as the attribute
+pair `alt_id` and `alt_id_standard`, when its standard is one the contract
+names; the Ajar-shipped connectors set both.
 
 ## 2. Canonical bytes
 
@@ -136,9 +138,11 @@ Consequences:
 
 Full reference: [ATTRIBUTES.md](../rust/connectors/ATTRIBUTES.md).
 
-> The machine-readable ontology (`ontology.json`) is not yet vendored here. Until
-> it is, the authoritative list of entity types and attribute schemas comes from
-> your operator in the Connector Brief. Validate against it before going live.
+> The machine-readable ontology is vendored at
+> [`vendor/contract/ontology.json`](../vendor/contract/ontology.json) and is the
+> authoritative list of entity types, attribute schemas and vocabularies. The
+> Rust connectors and the C++ SDK validate against it; the Connector Brief from
+> your operator names which revision their Core runs.
 
 ## 6. Proving conformance
 

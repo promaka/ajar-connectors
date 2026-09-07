@@ -105,7 +105,8 @@ fn dimension(event: &Event) -> &'static str {
         Some(_) => "X",
         None => match event.entity_type.as_str() {
             "mim:aircraft" => "A",
-            "mim:vessel" => "S",
+            "mim:vessel" | "mim:surface-vessel" => "S",
+            "mim:subsurface-vessel" => "U",
             "mim:land-vehicle" => "G",
             _ => "X",
         },

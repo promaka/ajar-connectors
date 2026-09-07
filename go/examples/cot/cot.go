@@ -139,8 +139,10 @@ func entityToCot(entityType string) string {
 	switch entityType {
 	case "mim:aircraft":
 		return "a-f-A"
-	case "mim:vessel":
+	case "mim:vessel", "mim:surface-vessel":
 		return "a-f-S"
+	case "mim:subsurface-vessel":
+		return "a-f-U"
 	case "mim:drone":
 		return "a-f-G-U-C-D"
 	default:

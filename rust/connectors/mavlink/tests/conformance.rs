@@ -70,8 +70,8 @@ fn native_sysid_is_preserved_as_metadata_not_id() {
     let ev = connector_event();
     assert_eq!(ev.entity_type, "mim:aircraft");
     assert_ne!(ev.id, "mav:1");
-    // The system id is ungoverned passthrough: in metadata, never a governed
-    // attribute, never the id.
+    // The native key name stays in metadata and never becomes the id; the
+    // system id is also governed, as alt_id under the MAVLink standard code.
     assert!(
         ev.metadata
             .iter()

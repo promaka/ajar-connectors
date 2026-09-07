@@ -32,6 +32,7 @@ pub mod exec;
 pub mod file;
 pub mod health;
 pub mod http_server;
+pub mod identity;
 pub mod key;
 pub mod nats;
 pub mod ontology;
@@ -64,6 +65,7 @@ pub const MAX_FRAME_BYTES: usize = 64 * 1024;
 pub use config::{Config, Enrichment, Framing, SensorSite, SpoolSetting, Transport};
 #[cfg(feature = "dds")]
 pub use config::{DdsOptions, DdsPayload, DdsReliability};
+pub use identity::GovernedIdentity;
 
 /// The seal's signature prefix length (re-exported for the spool drain).
 pub(crate) fn seal_signature_len() -> usize {

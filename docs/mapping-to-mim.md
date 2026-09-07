@@ -150,7 +150,8 @@ The class of the thing being reported. What the shipped connectors emit:
 | `mim:sensor` | the sensor or platform itself |
 | `mim:object` | a detection whose class you do not know |
 | `mim:land-vehicle` | ground vehicles |
-| `mim:person`, `mim:unit`, `mim:facility`, `mim:weapon`, `mim:feature` | see the vendored ontology for the full 17 |
+| `mim:surface-vessel`, `mim:subsurface-vessel` | ships and submarines, when you know which (revision 2); `mim:vessel` remains valid |
+| `mim:person`, `mim:unit`, `mim:facility`, `mim:weapon`, `mim:feature` | see the vendored ontology for the full 22 |
 
 **If your source reports a domain rather than a classification, use `mim:object`**
 and put the domain in the `environment` attribute. A radar that says "something in
@@ -168,6 +169,16 @@ the type exists. `mim:banana` builds and seals fine.
 
 Governed attributes the shipped connectors emit. Names are exact and
 case-sensitive.
+
+**Identity** (revision 3): `alt_id`, the native identifier of the thing
+observed, and `alt_id_standard`, the standard that minted it. Set both or
+neither. The Ajar-shipped connectors emit ICAO addresses, MMSIs, ASTERIX track
+numbers, MAVLink system ids, STANAG 4676 track UUIDs and CoT uids this way.
+
+**Uncertainty** (revision 2): `position_accuracy_h_m`, `position_accuracy_v_m`
+(metres), `speed_accuracy` (m/s), `angle_accuracy` (degrees). Emit only what
+your source states in those units; a per-axis pair becomes its root sum square
+(DRMS). Do not convert a unitless quality figure into metres.
 
 **Kinematics** — the units are the trap:
 
@@ -200,6 +211,12 @@ are silently wrong on the map.
 Exact strings. A wrong case is discarded, so a track keeps its position and loses
 its affiliation.
 
+**`alt_id_standard`** — MIM 5.3 standard codes, verbatim: `ADEM`, `AIS`,
+`ASCA`, `Link11`, `Link16`, `Link22`, `MAVLink`, `MIP2`, `MIP31`,
+`MaritimeTrack`, `NFFI13`, `NVG`, `UDRA_ID`, `UTID`, `VMF`; plus Ajar's own for
+standards MIM does not list: `ASTERIX`, `STANAG4676`, `CoT`, `ICAO24`. A
+misspelt code is discarded silently, so copy these exactly.
+
 **`hostility`** — MIM 5.3 `HostilityCodeType`:
 
 ```
@@ -223,8 +240,9 @@ your source knows it.
 ## 5. Anything else you have
 
 Put it in `metadata`. Metadata is ungoverned and **always kept**, so nothing is
-lost by sending it. Native track numbers, vendor fields, original units, sensor
-serial numbers all belong there.
+lost by sending it. Vendor fields, original units, sensor serial numbers all
+belong there, and so does your native track number, alongside the governed
+`alt_id` pair when its standard is one the contract names.
 
 Your raw frame goes in `payload` verbatim. A future ontology can re-extract from
 it, so a field you cannot map today is not lost.
@@ -242,7 +260,7 @@ operator holds.
 
 Ask them for two things before you write the mapping:
 
-1. **`ontology-mim-5.3-conformant-1.json`** — the contract your events are
+1. **`ontology-mim-5.3-conformant-3.json`** — the contract your events are
    validated against. It is vendored here as
    [`vendor/contract/ontology.json`](../vendor/contract/ontology.json) and
    hash-pinned, so the copy you build against cannot drift. Confirm with your
