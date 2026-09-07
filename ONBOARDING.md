@@ -112,11 +112,11 @@ the library for your language, pinned to the release:
 
 ```toml
 # Rust, in Cargo.toml
-ajar-connector = "0.5.11"
+ajar-connector = "0.6.0"
 ```
 ```bash
-go get github.com/promaka/ajar-connectors/go/ajarconnector@v0.5.11
-pip install "ajar-connector[producer]==0.5.11"
+go get github.com/promaka/ajar-connectors/go/ajarconnector@v0.6.0
+pip install "ajar-connector[producer]==0.6.0"
 ```
 
 For C++ see [docs/embedding-cpp.md](docs/embedding-cpp.md).
@@ -290,7 +290,7 @@ The install commands above fetch from the internet. On a connected machine,
 at the release tag you intend to ship:
 
 ```bash
-git clone --depth 1 --branch v0.5.11 https://github.com/promaka/ajar-connectors
+git clone --depth 1 --branch v0.6.0 https://github.com/promaka/ajar-connectors
 cd ajar-connectors
 cargo vendor vendor-crates/          # Rust
 (cd go && go mod vendor)             # Go
