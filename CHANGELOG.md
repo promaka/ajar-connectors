@@ -13,6 +13,8 @@ Two version lines are tracked independently (see COMPATIBILITY.md):
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-09-09
+
 ### Added
 
 - Ontology contract revisions 2 and 3 (`mim-5.3-conformant-3`) re-vendored.
