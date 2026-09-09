@@ -35,6 +35,7 @@
 use std::collections::HashMap;
 
 use ajar_connector::{Event, EventBuilder};
+use ajar_connector_common::GovernedIdentity;
 use ajar_connector_common::{Enrichment, FrameParser, ParseError};
 use quick_xml::events::Event as XmlEvent;
 use quick_xml::Reader;
@@ -262,6 +263,8 @@ impl S4676Parser {
             }
             if let Some(uid) = &source_uid {
                 b = b.metadata("source_uid", uid.clone());
+                // Governed identity: the track UUID under its standard code.
+                b = b.identity("STANAG4676", uid.clone());
             }
             if let Some(cls) = classification {
                 b = b.policy_tag(cls.to_string());

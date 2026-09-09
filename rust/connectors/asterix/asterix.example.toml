@@ -35,7 +35,8 @@ signing_key_path = "/etc/ajar/radar-adsb-1.seed"
 
 # What a CAT010 surface report is. The wire format cannot say whether a surface
 # target is a ship or a baggage tug, so the operator does: a coastal or naval
-# radar emits vessels, an airport surface feed emits land vehicles. Unset, the
+# radar emits vessels (`mim:surface-vessel` from contract revision 2, or
+# `mim:vessel`), an airport surface feed emits land vehicles. Unset, the
 # report's own content decides (a vehicle fleet id makes a land vehicle, a Mode S
 # identity an aircraft, anything else a plain object). `cat034` chooses the type
 # the radar heartbeat publishes as (default mim:sensor).

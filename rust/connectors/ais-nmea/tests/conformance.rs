@@ -73,8 +73,8 @@ fn native_mmsi_is_preserved_as_metadata_not_id() {
     assert_eq!(ev.entity_type, "mim:vessel");
     assert_ne!(ev.id, "mmsi:227006760");
     assert_ne!(ev.id, "227006760");
-    // MMSI is ungoverned passthrough: in metadata, never a governed attribute,
-    // never the id.
+    // The native key names stay in metadata and never become the id; the
+    // MMSI is also governed, as alt_id under the AIS standard code.
     assert!(
         ev.metadata
             .iter()

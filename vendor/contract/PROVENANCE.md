@@ -10,6 +10,7 @@ them here; re-vendor from core when the contract version changes.
   - event.proto       <- core/event-schema/proto/event.proto   (metadata = 12 synced 2026-07, ADR-0030; additive, stays contract-v1)
   - vectors.json      <- core/event-schema/tests/conformance/vectors.json   (6 fixtures core-blessed; see note below)
   - corpus/*.json     <- core/event-schema/tests/conformance/corpus/   (3 namespaced + 4 edge cases)
+  - ontology.json     <- core/docs/contract/ontology.json   (mim-5.3-conformant-3, core main 98044ac, vendored 2026-09-08; revisions 2 and 3 are additive, CONTRACT_VERSION stays v1 because the wire is unchanged)
 
 Note on `edge_metadata_passthrough`: this fixture and its hashes were generated
 SDK-side with the Rust reference implementation (proven byte-identical to core

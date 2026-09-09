@@ -1,5 +1,5 @@
 {
-  "version": "mim-5.3-conformant-1",
+  "version": "mim-5.3-conformant-3",
   "types": [
     {
       "id": "mim:concept",
@@ -37,12 +37,47 @@
             "Pending",
             "Suspect",
             "Unknown"
-          ]
+          ],
+          "mim": "BattlespaceConcept/HostilityCode"
         },
         {
           "name": "callsign",
           "datatype": "text",
-          "required": false
+          "required": false,
+          "mim": "Object/NetworkAddress/CallSignIdentifier"
+        },
+        {
+          "name": "alt_id",
+          "datatype": "text",
+          "required": false,
+          "mim": "BattlespaceConcept/BattlespaceConceptAlternateIdentifier/AlternateIdentifierIdentifier"
+        },
+        {
+          "name": "alt_id_standard",
+          "datatype": "text",
+          "required": false,
+          "values": [
+            "ADEM",
+            "AIS",
+            "ASCA",
+            "Link11",
+            "Link16",
+            "Link22",
+            "MAVLink",
+            "MIP2",
+            "MIP31",
+            "MaritimeTrack",
+            "NFFI13",
+            "NVG",
+            "UDRA_ID",
+            "UTID",
+            "VMF",
+            "ASTERIX",
+            "STANAG4676",
+            "CoT",
+            "ICAO24"
+          ],
+          "mim": "BattlespaceConcept/BattlespaceConceptAlternateIdentifier/AlternateIdentifierStandardCode (MIM values verbatim; ASTERIX, STANAG4676, CoT, ICAO24 are Ajar's own and render nil)"
         },
         {
           "name": "heading",
@@ -50,7 +85,8 @@
           "unit": "deg",
           "required": false,
           "min": 0.0,
-          "max": 360.0
+          "max": 360.0,
+          "mim": "Object/Orientation/HeadingAngle/AngleMeasuredAngle (deg)"
         },
         {
           "name": "course",
@@ -58,20 +94,55 @@
           "unit": "deg",
           "required": false,
           "min": 0.0,
-          "max": 360.0
+          "max": 360.0,
+          "mim": "Object/Velocity/VelocityAbsoluteBearingAngle/AngleMeasuredAngle (deg)"
         },
         {
           "name": "speed",
           "datatype": "number",
           "unit": "m/s",
           "required": false,
-          "min": 0.0
+          "min": 0.0,
+          "mim": "Object/Velocity/VelocitySpeed/SpeedMeasuredSpeed (km/h = m/s x 3.6)"
         },
         {
           "name": "vertical_rate",
           "datatype": "number",
           "unit": "m/s",
           "required": false
+        },
+        {
+          "name": "speed_accuracy",
+          "datatype": "number",
+          "unit": "m/s",
+          "required": false,
+          "min": 0.0,
+          "mim": "Object/Velocity/VelocitySpeed/SpeedAccuracyMeasure (km/h = m/s x 3.6)"
+        },
+        {
+          "name": "angle_accuracy",
+          "datatype": "number",
+          "unit": "deg",
+          "required": false,
+          "min": 0.0,
+          "max": 360.0,
+          "mim": "Object/Velocity/VelocityAbsoluteBearingAngle/AngleAccuracyAngle (deg)"
+        },
+        {
+          "name": "position_accuracy_h_m",
+          "datatype": "number",
+          "unit": "m",
+          "required": false,
+          "min": 0.0,
+          "mim": "BattlespaceConcept/GeographicLocation/LocationHorizontalAccuracyDimension (m)"
+        },
+        {
+          "name": "position_accuracy_v_m",
+          "datatype": "number",
+          "unit": "m",
+          "required": false,
+          "min": 0.0,
+          "mim": "BattlespaceConcept/GeographicLocation/LocationVerticalAccuracyDimension (m)"
         },
         {
           "name": "environment",
@@ -113,12 +184,47 @@
             "Pending",
             "Suspect",
             "Unknown"
-          ]
+          ],
+          "mim": "BattlespaceConcept/HostilityCode"
         },
         {
           "name": "callsign",
           "datatype": "text",
-          "required": false
+          "required": false,
+          "mim": "Object/NetworkAddress/CallSignIdentifier"
+        },
+        {
+          "name": "alt_id",
+          "datatype": "text",
+          "required": false,
+          "mim": "BattlespaceConcept/BattlespaceConceptAlternateIdentifier/AlternateIdentifierIdentifier"
+        },
+        {
+          "name": "alt_id_standard",
+          "datatype": "text",
+          "required": false,
+          "values": [
+            "ADEM",
+            "AIS",
+            "ASCA",
+            "Link11",
+            "Link16",
+            "Link22",
+            "MAVLink",
+            "MIP2",
+            "MIP31",
+            "MaritimeTrack",
+            "NFFI13",
+            "NVG",
+            "UDRA_ID",
+            "UTID",
+            "VMF",
+            "ASTERIX",
+            "STANAG4676",
+            "CoT",
+            "ICAO24"
+          ],
+          "mim": "BattlespaceConcept/BattlespaceConceptAlternateIdentifier/AlternateIdentifierStandardCode (MIM values verbatim; ASTERIX, STANAG4676, CoT, ICAO24 are Ajar's own and render nil)"
         }
       ],
       "allows_metadata": true
@@ -147,12 +253,47 @@
             "Pending",
             "Suspect",
             "Unknown"
-          ]
+          ],
+          "mim": "BattlespaceConcept/HostilityCode"
         },
         {
           "name": "callsign",
           "datatype": "text",
-          "required": false
+          "required": false,
+          "mim": "Object/NetworkAddress/CallSignIdentifier"
+        },
+        {
+          "name": "alt_id",
+          "datatype": "text",
+          "required": false,
+          "mim": "BattlespaceConcept/BattlespaceConceptAlternateIdentifier/AlternateIdentifierIdentifier"
+        },
+        {
+          "name": "alt_id_standard",
+          "datatype": "text",
+          "required": false,
+          "values": [
+            "ADEM",
+            "AIS",
+            "ASCA",
+            "Link11",
+            "Link16",
+            "Link22",
+            "MAVLink",
+            "MIP2",
+            "MIP31",
+            "MaritimeTrack",
+            "NFFI13",
+            "NVG",
+            "UDRA_ID",
+            "UTID",
+            "VMF",
+            "ASTERIX",
+            "STANAG4676",
+            "CoT",
+            "ICAO24"
+          ],
+          "mim": "BattlespaceConcept/BattlespaceConceptAlternateIdentifier/AlternateIdentifierStandardCode (MIM values verbatim; ASTERIX, STANAG4676, CoT, ICAO24 are Ajar's own and render nil)"
         },
         {
           "name": "heading",
@@ -160,7 +301,8 @@
           "unit": "deg",
           "required": false,
           "min": 0.0,
-          "max": 360.0
+          "max": 360.0,
+          "mim": "Object/Orientation/HeadingAngle/AngleMeasuredAngle (deg)"
         },
         {
           "name": "course",
@@ -168,20 +310,55 @@
           "unit": "deg",
           "required": false,
           "min": 0.0,
-          "max": 360.0
+          "max": 360.0,
+          "mim": "Object/Velocity/VelocityAbsoluteBearingAngle/AngleMeasuredAngle (deg)"
         },
         {
           "name": "speed",
           "datatype": "number",
           "unit": "m/s",
           "required": false,
-          "min": 0.0
+          "min": 0.0,
+          "mim": "Object/Velocity/VelocitySpeed/SpeedMeasuredSpeed (km/h = m/s x 3.6)"
         },
         {
           "name": "vertical_rate",
           "datatype": "number",
           "unit": "m/s",
           "required": false
+        },
+        {
+          "name": "speed_accuracy",
+          "datatype": "number",
+          "unit": "m/s",
+          "required": false,
+          "min": 0.0,
+          "mim": "Object/Velocity/VelocitySpeed/SpeedAccuracyMeasure (km/h = m/s x 3.6)"
+        },
+        {
+          "name": "angle_accuracy",
+          "datatype": "number",
+          "unit": "deg",
+          "required": false,
+          "min": 0.0,
+          "max": 360.0,
+          "mim": "Object/Velocity/VelocityAbsoluteBearingAngle/AngleAccuracyAngle (deg)"
+        },
+        {
+          "name": "position_accuracy_h_m",
+          "datatype": "number",
+          "unit": "m",
+          "required": false,
+          "min": 0.0,
+          "mim": "BattlespaceConcept/GeographicLocation/LocationHorizontalAccuracyDimension (m)"
+        },
+        {
+          "name": "position_accuracy_v_m",
+          "datatype": "number",
+          "unit": "m",
+          "required": false,
+          "min": 0.0,
+          "mim": "BattlespaceConcept/GeographicLocation/LocationVerticalAccuracyDimension (m)"
         },
         {
           "name": "battery",
@@ -218,19 +395,192 @@
             "Pending",
             "Suspect",
             "Unknown"
-          ]
+          ],
+          "mim": "BattlespaceConcept/HostilityCode"
         },
         {
           "name": "callsign",
           "datatype": "text",
-          "required": false
+          "required": false,
+          "mim": "Object/NetworkAddress/CallSignIdentifier"
+        },
+        {
+          "name": "alt_id",
+          "datatype": "text",
+          "required": false,
+          "mim": "BattlespaceConcept/BattlespaceConceptAlternateIdentifier/AlternateIdentifierIdentifier"
+        },
+        {
+          "name": "alt_id_standard",
+          "datatype": "text",
+          "required": false,
+          "values": [
+            "ADEM",
+            "AIS",
+            "ASCA",
+            "Link11",
+            "Link16",
+            "Link22",
+            "MAVLink",
+            "MIP2",
+            "MIP31",
+            "MaritimeTrack",
+            "NFFI13",
+            "NVG",
+            "UDRA_ID",
+            "UTID",
+            "VMF",
+            "ASTERIX",
+            "STANAG4676",
+            "CoT",
+            "ICAO24"
+          ],
+          "mim": "BattlespaceConcept/BattlespaceConceptAlternateIdentifier/AlternateIdentifierStandardCode (MIM values verbatim; ASTERIX, STANAG4676, CoT, ICAO24 are Ajar's own and render nil)"
+        }
+      ],
+      "allows_metadata": true
+    },
+    {
+      "id": "mim:government-organisation",
+      "parent": "mim:organisation",
+      "description": "An Organisation that is part of, or acts on behalf of, a government.",
+      "requires_location": false,
+      "attributes": [
+        {
+          "name": "hostility",
+          "datatype": "text",
+          "required": false,
+          "values": [
+            "AssumedFriend",
+            "AssumedHostile",
+            "AssumedInvolved",
+            "AssumedNeutral",
+            "Faker",
+            "Friend",
+            "Hostile",
+            "Involved",
+            "Joker",
+            "Neutral",
+            "Pending",
+            "Suspect",
+            "Unknown"
+          ],
+          "mim": "BattlespaceConcept/HostilityCode"
+        },
+        {
+          "name": "callsign",
+          "datatype": "text",
+          "required": false,
+          "mim": "Object/NetworkAddress/CallSignIdentifier"
+        },
+        {
+          "name": "alt_id",
+          "datatype": "text",
+          "required": false,
+          "mim": "BattlespaceConcept/BattlespaceConceptAlternateIdentifier/AlternateIdentifierIdentifier"
+        },
+        {
+          "name": "alt_id_standard",
+          "datatype": "text",
+          "required": false,
+          "values": [
+            "ADEM",
+            "AIS",
+            "ASCA",
+            "Link11",
+            "Link16",
+            "Link22",
+            "MAVLink",
+            "MIP2",
+            "MIP31",
+            "MaritimeTrack",
+            "NFFI13",
+            "NVG",
+            "UDRA_ID",
+            "UTID",
+            "VMF",
+            "ASTERIX",
+            "STANAG4676",
+            "CoT",
+            "ICAO24"
+          ],
+          "mim": "BattlespaceConcept/BattlespaceConceptAlternateIdentifier/AlternateIdentifierStandardCode (MIM values verbatim; ASTERIX, STANAG4676, CoT, ICAO24 are Ajar's own and render nil)"
+        }
+      ],
+      "allows_metadata": true
+    },
+    {
+      "id": "mim:military-organisation",
+      "parent": "mim:government-organisation",
+      "description": "A GovernmentOrganisation that is part of the armed forces.",
+      "requires_location": false,
+      "attributes": [
+        {
+          "name": "hostility",
+          "datatype": "text",
+          "required": false,
+          "values": [
+            "AssumedFriend",
+            "AssumedHostile",
+            "AssumedInvolved",
+            "AssumedNeutral",
+            "Faker",
+            "Friend",
+            "Hostile",
+            "Involved",
+            "Joker",
+            "Neutral",
+            "Pending",
+            "Suspect",
+            "Unknown"
+          ],
+          "mim": "BattlespaceConcept/HostilityCode"
+        },
+        {
+          "name": "callsign",
+          "datatype": "text",
+          "required": false,
+          "mim": "Object/NetworkAddress/CallSignIdentifier"
+        },
+        {
+          "name": "alt_id",
+          "datatype": "text",
+          "required": false,
+          "mim": "BattlespaceConcept/BattlespaceConceptAlternateIdentifier/AlternateIdentifierIdentifier"
+        },
+        {
+          "name": "alt_id_standard",
+          "datatype": "text",
+          "required": false,
+          "values": [
+            "ADEM",
+            "AIS",
+            "ASCA",
+            "Link11",
+            "Link16",
+            "Link22",
+            "MAVLink",
+            "MIP2",
+            "MIP31",
+            "MaritimeTrack",
+            "NFFI13",
+            "NVG",
+            "UDRA_ID",
+            "UTID",
+            "VMF",
+            "ASTERIX",
+            "STANAG4676",
+            "CoT",
+            "ICAO24"
+          ],
+          "mim": "BattlespaceConcept/BattlespaceConceptAlternateIdentifier/AlternateIdentifierStandardCode (MIM values verbatim; ASTERIX, STANAG4676, CoT, ICAO24 are Ajar's own and render nil)"
         }
       ],
       "allows_metadata": true
     },
     {
       "id": "mim:unit",
-      "parent": "mim:organisation",
+      "parent": "mim:military-organisation",
       "description": "A military organisation with an assigned mission and structure.",
       "requires_location": false,
       "attributes": [
@@ -252,12 +602,47 @@
             "Pending",
             "Suspect",
             "Unknown"
-          ]
+          ],
+          "mim": "BattlespaceConcept/HostilityCode"
         },
         {
           "name": "callsign",
           "datatype": "text",
-          "required": false
+          "required": false,
+          "mim": "Object/NetworkAddress/CallSignIdentifier"
+        },
+        {
+          "name": "alt_id",
+          "datatype": "text",
+          "required": false,
+          "mim": "BattlespaceConcept/BattlespaceConceptAlternateIdentifier/AlternateIdentifierIdentifier"
+        },
+        {
+          "name": "alt_id_standard",
+          "datatype": "text",
+          "required": false,
+          "values": [
+            "ADEM",
+            "AIS",
+            "ASCA",
+            "Link11",
+            "Link16",
+            "Link22",
+            "MAVLink",
+            "MIP2",
+            "MIP31",
+            "MaritimeTrack",
+            "NFFI13",
+            "NVG",
+            "UDRA_ID",
+            "UTID",
+            "VMF",
+            "ASTERIX",
+            "STANAG4676",
+            "CoT",
+            "ICAO24"
+          ],
+          "mim": "BattlespaceConcept/BattlespaceConceptAlternateIdentifier/AlternateIdentifierStandardCode (MIM values verbatim; ASTERIX, STANAG4676, CoT, ICAO24 are Ajar's own and render nil)"
         },
         {
           "name": "heading",
@@ -265,7 +650,8 @@
           "unit": "deg",
           "required": false,
           "min": 0.0,
-          "max": 360.0
+          "max": 360.0,
+          "mim": "Object/Orientation/HeadingAngle/AngleMeasuredAngle (deg)"
         },
         {
           "name": "course",
@@ -273,20 +659,39 @@
           "unit": "deg",
           "required": false,
           "min": 0.0,
-          "max": 360.0
+          "max": 360.0,
+          "mim": "Object/Velocity/VelocityAbsoluteBearingAngle/AngleMeasuredAngle (deg)"
         },
         {
           "name": "speed",
           "datatype": "number",
           "unit": "m/s",
           "required": false,
-          "min": 0.0
+          "min": 0.0,
+          "mim": "Object/Velocity/VelocitySpeed/SpeedMeasuredSpeed (km/h = m/s x 3.6)"
         },
         {
           "name": "vertical_rate",
           "datatype": "number",
           "unit": "m/s",
           "required": false
+        },
+        {
+          "name": "speed_accuracy",
+          "datatype": "number",
+          "unit": "m/s",
+          "required": false,
+          "min": 0.0,
+          "mim": "Object/Velocity/VelocitySpeed/SpeedAccuracyMeasure (km/h = m/s x 3.6)"
+        },
+        {
+          "name": "angle_accuracy",
+          "datatype": "number",
+          "unit": "deg",
+          "required": false,
+          "min": 0.0,
+          "max": 360.0,
+          "mim": "Object/Velocity/VelocityAbsoluteBearingAngle/AngleAccuracyAngle (deg)"
         }
       ],
       "allows_metadata": true
@@ -315,12 +720,63 @@
             "Pending",
             "Suspect",
             "Unknown"
-          ]
+          ],
+          "mim": "BattlespaceConcept/HostilityCode"
         },
         {
           "name": "callsign",
           "datatype": "text",
-          "required": false
+          "required": false,
+          "mim": "Object/NetworkAddress/CallSignIdentifier"
+        },
+        {
+          "name": "alt_id",
+          "datatype": "text",
+          "required": false,
+          "mim": "BattlespaceConcept/BattlespaceConceptAlternateIdentifier/AlternateIdentifierIdentifier"
+        },
+        {
+          "name": "alt_id_standard",
+          "datatype": "text",
+          "required": false,
+          "values": [
+            "ADEM",
+            "AIS",
+            "ASCA",
+            "Link11",
+            "Link16",
+            "Link22",
+            "MAVLink",
+            "MIP2",
+            "MIP31",
+            "MaritimeTrack",
+            "NFFI13",
+            "NVG",
+            "UDRA_ID",
+            "UTID",
+            "VMF",
+            "ASTERIX",
+            "STANAG4676",
+            "CoT",
+            "ICAO24"
+          ],
+          "mim": "BattlespaceConcept/BattlespaceConceptAlternateIdentifier/AlternateIdentifierStandardCode (MIM values verbatim; ASTERIX, STANAG4676, CoT, ICAO24 are Ajar's own and render nil)"
+        },
+        {
+          "name": "position_accuracy_h_m",
+          "datatype": "number",
+          "unit": "m",
+          "required": false,
+          "min": 0.0,
+          "mim": "BattlespaceConcept/GeographicLocation/LocationHorizontalAccuracyDimension (m)"
+        },
+        {
+          "name": "position_accuracy_v_m",
+          "datatype": "number",
+          "unit": "m",
+          "required": false,
+          "min": 0.0,
+          "mim": "BattlespaceConcept/GeographicLocation/LocationVerticalAccuracyDimension (m)"
         }
       ],
       "allows_metadata": true
@@ -349,12 +805,47 @@
             "Pending",
             "Suspect",
             "Unknown"
-          ]
+          ],
+          "mim": "BattlespaceConcept/HostilityCode"
         },
         {
           "name": "callsign",
           "datatype": "text",
-          "required": false
+          "required": false,
+          "mim": "Object/NetworkAddress/CallSignIdentifier"
+        },
+        {
+          "name": "alt_id",
+          "datatype": "text",
+          "required": false,
+          "mim": "BattlespaceConcept/BattlespaceConceptAlternateIdentifier/AlternateIdentifierIdentifier"
+        },
+        {
+          "name": "alt_id_standard",
+          "datatype": "text",
+          "required": false,
+          "values": [
+            "ADEM",
+            "AIS",
+            "ASCA",
+            "Link11",
+            "Link16",
+            "Link22",
+            "MAVLink",
+            "MIP2",
+            "MIP31",
+            "MaritimeTrack",
+            "NFFI13",
+            "NVG",
+            "UDRA_ID",
+            "UTID",
+            "VMF",
+            "ASTERIX",
+            "STANAG4676",
+            "CoT",
+            "ICAO24"
+          ],
+          "mim": "BattlespaceConcept/BattlespaceConceptAlternateIdentifier/AlternateIdentifierStandardCode (MIM values verbatim; ASTERIX, STANAG4676, CoT, ICAO24 are Ajar's own and render nil)"
         }
       ],
       "allows_metadata": true
@@ -383,12 +874,47 @@
             "Pending",
             "Suspect",
             "Unknown"
-          ]
+          ],
+          "mim": "BattlespaceConcept/HostilityCode"
         },
         {
           "name": "callsign",
           "datatype": "text",
-          "required": false
+          "required": false,
+          "mim": "Object/NetworkAddress/CallSignIdentifier"
+        },
+        {
+          "name": "alt_id",
+          "datatype": "text",
+          "required": false,
+          "mim": "BattlespaceConcept/BattlespaceConceptAlternateIdentifier/AlternateIdentifierIdentifier"
+        },
+        {
+          "name": "alt_id_standard",
+          "datatype": "text",
+          "required": false,
+          "values": [
+            "ADEM",
+            "AIS",
+            "ASCA",
+            "Link11",
+            "Link16",
+            "Link22",
+            "MAVLink",
+            "MIP2",
+            "MIP31",
+            "MaritimeTrack",
+            "NFFI13",
+            "NVG",
+            "UDRA_ID",
+            "UTID",
+            "VMF",
+            "ASTERIX",
+            "STANAG4676",
+            "CoT",
+            "ICAO24"
+          ],
+          "mim": "BattlespaceConcept/BattlespaceConceptAlternateIdentifier/AlternateIdentifierStandardCode (MIM values verbatim; ASTERIX, STANAG4676, CoT, ICAO24 are Ajar's own and render nil)"
         }
       ],
       "allows_metadata": true
@@ -417,12 +943,47 @@
             "Pending",
             "Suspect",
             "Unknown"
-          ]
+          ],
+          "mim": "BattlespaceConcept/HostilityCode"
         },
         {
           "name": "callsign",
           "datatype": "text",
-          "required": false
+          "required": false,
+          "mim": "Object/NetworkAddress/CallSignIdentifier"
+        },
+        {
+          "name": "alt_id",
+          "datatype": "text",
+          "required": false,
+          "mim": "BattlespaceConcept/BattlespaceConceptAlternateIdentifier/AlternateIdentifierIdentifier"
+        },
+        {
+          "name": "alt_id_standard",
+          "datatype": "text",
+          "required": false,
+          "values": [
+            "ADEM",
+            "AIS",
+            "ASCA",
+            "Link11",
+            "Link16",
+            "Link22",
+            "MAVLink",
+            "MIP2",
+            "MIP31",
+            "MaritimeTrack",
+            "NFFI13",
+            "NVG",
+            "UDRA_ID",
+            "UTID",
+            "VMF",
+            "ASTERIX",
+            "STANAG4676",
+            "CoT",
+            "ICAO24"
+          ],
+          "mim": "BattlespaceConcept/BattlespaceConceptAlternateIdentifier/AlternateIdentifierStandardCode (MIM values verbatim; ASTERIX, STANAG4676, CoT, ICAO24 are Ajar's own and render nil)"
         },
         {
           "name": "heading",
@@ -430,7 +991,8 @@
           "unit": "deg",
           "required": false,
           "min": 0.0,
-          "max": 360.0
+          "max": 360.0,
+          "mim": "Object/Orientation/HeadingAngle/AngleMeasuredAngle (deg)"
         },
         {
           "name": "course",
@@ -438,14 +1000,16 @@
           "unit": "deg",
           "required": false,
           "min": 0.0,
-          "max": 360.0
+          "max": 360.0,
+          "mim": "Object/Velocity/VelocityAbsoluteBearingAngle/AngleMeasuredAngle (deg)"
         },
         {
           "name": "speed",
           "datatype": "number",
           "unit": "m/s",
           "required": false,
-          "min": 0.0
+          "min": 0.0,
+          "mim": "Object/Velocity/VelocitySpeed/SpeedMeasuredSpeed (km/h = m/s x 3.6)"
         },
         {
           "name": "vertical_rate",
@@ -454,18 +1018,53 @@
           "required": false
         },
         {
+          "name": "speed_accuracy",
+          "datatype": "number",
+          "unit": "m/s",
+          "required": false,
+          "min": 0.0,
+          "mim": "Object/Velocity/VelocitySpeed/SpeedAccuracyMeasure (km/h = m/s x 3.6)"
+        },
+        {
+          "name": "angle_accuracy",
+          "datatype": "number",
+          "unit": "deg",
+          "required": false,
+          "min": 0.0,
+          "max": 360.0,
+          "mim": "Object/Velocity/VelocityAbsoluteBearingAngle/AngleAccuracyAngle (deg)"
+        },
+        {
+          "name": "position_accuracy_h_m",
+          "datatype": "number",
+          "unit": "m",
+          "required": false,
+          "min": 0.0,
+          "mim": "BattlespaceConcept/GeographicLocation/LocationHorizontalAccuracyDimension (m)"
+        },
+        {
+          "name": "position_accuracy_v_m",
+          "datatype": "number",
+          "unit": "m",
+          "required": false,
+          "min": 0.0,
+          "mim": "BattlespaceConcept/GeographicLocation/LocationVerticalAccuracyDimension (m)"
+        },
+        {
           "name": "frequency_hz",
           "datatype": "number",
           "unit": "Hz",
           "required": false,
-          "min": 0.0
+          "min": 0.0,
+          "mim": "Object/NetworkAddress/NetworkAddressFrequency/NetworkFrequencyDiscreteFrequencyMeasure (kHz = Hz / 1000; best-fit)"
         },
         {
           "name": "bandwidth_hz",
           "datatype": "number",
           "unit": "Hz",
           "required": false,
-          "min": 0.0
+          "min": 0.0,
+          "mim": "Object/NetworkAddress/NetworkAddressFrequency/NetworkFrequencyBandLower+UpperFrequencyMeasure (kHz, centred on frequency_hz; best-fit)"
         },
         {
           "name": "power_dbm",
@@ -477,8 +1076,142 @@
       "allows_metadata": true
     },
     {
-      "id": "mim:aircraft",
+      "id": "mim:vehicle",
       "parent": "mim:equipment",
+      "description": "Equipment designed to carry persons or materiel.",
+      "requires_location": false,
+      "attributes": [
+        {
+          "name": "hostility",
+          "datatype": "text",
+          "required": false,
+          "values": [
+            "AssumedFriend",
+            "AssumedHostile",
+            "AssumedInvolved",
+            "AssumedNeutral",
+            "Faker",
+            "Friend",
+            "Hostile",
+            "Involved",
+            "Joker",
+            "Neutral",
+            "Pending",
+            "Suspect",
+            "Unknown"
+          ],
+          "mim": "BattlespaceConcept/HostilityCode"
+        },
+        {
+          "name": "callsign",
+          "datatype": "text",
+          "required": false,
+          "mim": "Object/NetworkAddress/CallSignIdentifier"
+        },
+        {
+          "name": "alt_id",
+          "datatype": "text",
+          "required": false,
+          "mim": "BattlespaceConcept/BattlespaceConceptAlternateIdentifier/AlternateIdentifierIdentifier"
+        },
+        {
+          "name": "alt_id_standard",
+          "datatype": "text",
+          "required": false,
+          "values": [
+            "ADEM",
+            "AIS",
+            "ASCA",
+            "Link11",
+            "Link16",
+            "Link22",
+            "MAVLink",
+            "MIP2",
+            "MIP31",
+            "MaritimeTrack",
+            "NFFI13",
+            "NVG",
+            "UDRA_ID",
+            "UTID",
+            "VMF",
+            "ASTERIX",
+            "STANAG4676",
+            "CoT",
+            "ICAO24"
+          ],
+          "mim": "BattlespaceConcept/BattlespaceConceptAlternateIdentifier/AlternateIdentifierStandardCode (MIM values verbatim; ASTERIX, STANAG4676, CoT, ICAO24 are Ajar's own and render nil)"
+        },
+        {
+          "name": "heading",
+          "datatype": "number",
+          "unit": "deg",
+          "required": false,
+          "min": 0.0,
+          "max": 360.0,
+          "mim": "Object/Orientation/HeadingAngle/AngleMeasuredAngle (deg)"
+        },
+        {
+          "name": "course",
+          "datatype": "number",
+          "unit": "deg",
+          "required": false,
+          "min": 0.0,
+          "max": 360.0,
+          "mim": "Object/Velocity/VelocityAbsoluteBearingAngle/AngleMeasuredAngle (deg)"
+        },
+        {
+          "name": "speed",
+          "datatype": "number",
+          "unit": "m/s",
+          "required": false,
+          "min": 0.0,
+          "mim": "Object/Velocity/VelocitySpeed/SpeedMeasuredSpeed (km/h = m/s x 3.6)"
+        },
+        {
+          "name": "vertical_rate",
+          "datatype": "number",
+          "unit": "m/s",
+          "required": false
+        },
+        {
+          "name": "speed_accuracy",
+          "datatype": "number",
+          "unit": "m/s",
+          "required": false,
+          "min": 0.0,
+          "mim": "Object/Velocity/VelocitySpeed/SpeedAccuracyMeasure (km/h = m/s x 3.6)"
+        },
+        {
+          "name": "angle_accuracy",
+          "datatype": "number",
+          "unit": "deg",
+          "required": false,
+          "min": 0.0,
+          "max": 360.0,
+          "mim": "Object/Velocity/VelocityAbsoluteBearingAngle/AngleAccuracyAngle (deg)"
+        },
+        {
+          "name": "position_accuracy_h_m",
+          "datatype": "number",
+          "unit": "m",
+          "required": false,
+          "min": 0.0,
+          "mim": "BattlespaceConcept/GeographicLocation/LocationHorizontalAccuracyDimension (m)"
+        },
+        {
+          "name": "position_accuracy_v_m",
+          "datatype": "number",
+          "unit": "m",
+          "required": false,
+          "min": 0.0,
+          "mim": "BattlespaceConcept/GeographicLocation/LocationVerticalAccuracyDimension (m)"
+        }
+      ],
+      "allows_metadata": true
+    },
+    {
+      "id": "mim:aircraft",
+      "parent": "mim:vehicle",
       "description": "Equipment designed for airborne operation.",
       "requires_location": true,
       "attributes": [
@@ -500,12 +1233,47 @@
             "Pending",
             "Suspect",
             "Unknown"
-          ]
+          ],
+          "mim": "BattlespaceConcept/HostilityCode"
         },
         {
           "name": "callsign",
           "datatype": "text",
-          "required": false
+          "required": false,
+          "mim": "Object/NetworkAddress/CallSignIdentifier"
+        },
+        {
+          "name": "alt_id",
+          "datatype": "text",
+          "required": false,
+          "mim": "BattlespaceConcept/BattlespaceConceptAlternateIdentifier/AlternateIdentifierIdentifier"
+        },
+        {
+          "name": "alt_id_standard",
+          "datatype": "text",
+          "required": false,
+          "values": [
+            "ADEM",
+            "AIS",
+            "ASCA",
+            "Link11",
+            "Link16",
+            "Link22",
+            "MAVLink",
+            "MIP2",
+            "MIP31",
+            "MaritimeTrack",
+            "NFFI13",
+            "NVG",
+            "UDRA_ID",
+            "UTID",
+            "VMF",
+            "ASTERIX",
+            "STANAG4676",
+            "CoT",
+            "ICAO24"
+          ],
+          "mim": "BattlespaceConcept/BattlespaceConceptAlternateIdentifier/AlternateIdentifierStandardCode (MIM values verbatim; ASTERIX, STANAG4676, CoT, ICAO24 are Ajar's own and render nil)"
         },
         {
           "name": "heading",
@@ -513,7 +1281,8 @@
           "unit": "deg",
           "required": false,
           "min": 0.0,
-          "max": 360.0
+          "max": 360.0,
+          "mim": "Object/Orientation/HeadingAngle/AngleMeasuredAngle (deg)"
         },
         {
           "name": "course",
@@ -521,20 +1290,55 @@
           "unit": "deg",
           "required": false,
           "min": 0.0,
-          "max": 360.0
+          "max": 360.0,
+          "mim": "Object/Velocity/VelocityAbsoluteBearingAngle/AngleMeasuredAngle (deg)"
         },
         {
           "name": "speed",
           "datatype": "number",
           "unit": "m/s",
           "required": false,
-          "min": 0.0
+          "min": 0.0,
+          "mim": "Object/Velocity/VelocitySpeed/SpeedMeasuredSpeed (km/h = m/s x 3.6)"
         },
         {
           "name": "vertical_rate",
           "datatype": "number",
           "unit": "m/s",
           "required": false
+        },
+        {
+          "name": "speed_accuracy",
+          "datatype": "number",
+          "unit": "m/s",
+          "required": false,
+          "min": 0.0,
+          "mim": "Object/Velocity/VelocitySpeed/SpeedAccuracyMeasure (km/h = m/s x 3.6)"
+        },
+        {
+          "name": "angle_accuracy",
+          "datatype": "number",
+          "unit": "deg",
+          "required": false,
+          "min": 0.0,
+          "max": 360.0,
+          "mim": "Object/Velocity/VelocityAbsoluteBearingAngle/AngleAccuracyAngle (deg)"
+        },
+        {
+          "name": "position_accuracy_h_m",
+          "datatype": "number",
+          "unit": "m",
+          "required": false,
+          "min": 0.0,
+          "mim": "BattlespaceConcept/GeographicLocation/LocationHorizontalAccuracyDimension (m)"
+        },
+        {
+          "name": "position_accuracy_v_m",
+          "datatype": "number",
+          "unit": "m",
+          "required": false,
+          "min": 0.0,
+          "mim": "BattlespaceConcept/GeographicLocation/LocationVerticalAccuracyDimension (m)"
         },
         {
           "name": "battery",
@@ -554,7 +1358,7 @@
     },
     {
       "id": "mim:vessel",
-      "parent": "mim:equipment",
+      "parent": "mim:vehicle",
       "description": "Equipment designed for waterborne operation.",
       "requires_location": true,
       "attributes": [
@@ -576,12 +1380,47 @@
             "Pending",
             "Suspect",
             "Unknown"
-          ]
+          ],
+          "mim": "BattlespaceConcept/HostilityCode"
         },
         {
           "name": "callsign",
           "datatype": "text",
-          "required": false
+          "required": false,
+          "mim": "Object/NetworkAddress/CallSignIdentifier"
+        },
+        {
+          "name": "alt_id",
+          "datatype": "text",
+          "required": false,
+          "mim": "BattlespaceConcept/BattlespaceConceptAlternateIdentifier/AlternateIdentifierIdentifier"
+        },
+        {
+          "name": "alt_id_standard",
+          "datatype": "text",
+          "required": false,
+          "values": [
+            "ADEM",
+            "AIS",
+            "ASCA",
+            "Link11",
+            "Link16",
+            "Link22",
+            "MAVLink",
+            "MIP2",
+            "MIP31",
+            "MaritimeTrack",
+            "NFFI13",
+            "NVG",
+            "UDRA_ID",
+            "UTID",
+            "VMF",
+            "ASTERIX",
+            "STANAG4676",
+            "CoT",
+            "ICAO24"
+          ],
+          "mim": "BattlespaceConcept/BattlespaceConceptAlternateIdentifier/AlternateIdentifierStandardCode (MIM values verbatim; ASTERIX, STANAG4676, CoT, ICAO24 are Ajar's own and render nil)"
         },
         {
           "name": "heading",
@@ -589,7 +1428,8 @@
           "unit": "deg",
           "required": false,
           "min": 0.0,
-          "max": 360.0
+          "max": 360.0,
+          "mim": "Object/Orientation/HeadingAngle/AngleMeasuredAngle (deg)"
         },
         {
           "name": "course",
@@ -597,20 +1437,55 @@
           "unit": "deg",
           "required": false,
           "min": 0.0,
-          "max": 360.0
+          "max": 360.0,
+          "mim": "Object/Velocity/VelocityAbsoluteBearingAngle/AngleMeasuredAngle (deg)"
         },
         {
           "name": "speed",
           "datatype": "number",
           "unit": "m/s",
           "required": false,
-          "min": 0.0
+          "min": 0.0,
+          "mim": "Object/Velocity/VelocitySpeed/SpeedMeasuredSpeed (km/h = m/s x 3.6)"
         },
         {
           "name": "vertical_rate",
           "datatype": "number",
           "unit": "m/s",
           "required": false
+        },
+        {
+          "name": "speed_accuracy",
+          "datatype": "number",
+          "unit": "m/s",
+          "required": false,
+          "min": 0.0,
+          "mim": "Object/Velocity/VelocitySpeed/SpeedAccuracyMeasure (km/h = m/s x 3.6)"
+        },
+        {
+          "name": "angle_accuracy",
+          "datatype": "number",
+          "unit": "deg",
+          "required": false,
+          "min": 0.0,
+          "max": 360.0,
+          "mim": "Object/Velocity/VelocityAbsoluteBearingAngle/AngleAccuracyAngle (deg)"
+        },
+        {
+          "name": "position_accuracy_h_m",
+          "datatype": "number",
+          "unit": "m",
+          "required": false,
+          "min": 0.0,
+          "mim": "BattlespaceConcept/GeographicLocation/LocationHorizontalAccuracyDimension (m)"
+        },
+        {
+          "name": "position_accuracy_v_m",
+          "datatype": "number",
+          "unit": "m",
+          "required": false,
+          "min": 0.0,
+          "mim": "BattlespaceConcept/GeographicLocation/LocationVerticalAccuracyDimension (m)"
         },
         {
           "name": "battery",
@@ -623,7 +1498,8 @@
         {
           "name": "mmsi",
           "datatype": "text",
-          "required": false
+          "required": false,
+          "mim": "BattlespaceConcept/BattlespaceConceptAlternateIdentifier{AlternateIdentifierIdentifier, AlternateIdentifierStandardCode=AIS}"
         },
         {
           "name": "nav_status",
@@ -637,14 +1513,341 @@
           "values": [
             "Surface",
             "Subsurface"
-          ]
+          ],
+          "mim": "the subclass: SurfaceVessel / SubsurfaceVessel"
+        }
+      ],
+      "allows_metadata": true
+    },
+    {
+      "id": "mim:surface-vessel",
+      "parent": "mim:vessel",
+      "description": "A Vessel designed to operate on the water surface.",
+      "requires_location": true,
+      "attributes": [
+        {
+          "name": "hostility",
+          "datatype": "text",
+          "required": false,
+          "values": [
+            "AssumedFriend",
+            "AssumedHostile",
+            "AssumedInvolved",
+            "AssumedNeutral",
+            "Faker",
+            "Friend",
+            "Hostile",
+            "Involved",
+            "Joker",
+            "Neutral",
+            "Pending",
+            "Suspect",
+            "Unknown"
+          ],
+          "mim": "BattlespaceConcept/HostilityCode"
+        },
+        {
+          "name": "callsign",
+          "datatype": "text",
+          "required": false,
+          "mim": "Object/NetworkAddress/CallSignIdentifier"
+        },
+        {
+          "name": "alt_id",
+          "datatype": "text",
+          "required": false,
+          "mim": "BattlespaceConcept/BattlespaceConceptAlternateIdentifier/AlternateIdentifierIdentifier"
+        },
+        {
+          "name": "alt_id_standard",
+          "datatype": "text",
+          "required": false,
+          "values": [
+            "ADEM",
+            "AIS",
+            "ASCA",
+            "Link11",
+            "Link16",
+            "Link22",
+            "MAVLink",
+            "MIP2",
+            "MIP31",
+            "MaritimeTrack",
+            "NFFI13",
+            "NVG",
+            "UDRA_ID",
+            "UTID",
+            "VMF",
+            "ASTERIX",
+            "STANAG4676",
+            "CoT",
+            "ICAO24"
+          ],
+          "mim": "BattlespaceConcept/BattlespaceConceptAlternateIdentifier/AlternateIdentifierStandardCode (MIM values verbatim; ASTERIX, STANAG4676, CoT, ICAO24 are Ajar's own and render nil)"
+        },
+        {
+          "name": "heading",
+          "datatype": "number",
+          "unit": "deg",
+          "required": false,
+          "min": 0.0,
+          "max": 360.0,
+          "mim": "Object/Orientation/HeadingAngle/AngleMeasuredAngle (deg)"
+        },
+        {
+          "name": "course",
+          "datatype": "number",
+          "unit": "deg",
+          "required": false,
+          "min": 0.0,
+          "max": 360.0,
+          "mim": "Object/Velocity/VelocityAbsoluteBearingAngle/AngleMeasuredAngle (deg)"
+        },
+        {
+          "name": "speed",
+          "datatype": "number",
+          "unit": "m/s",
+          "required": false,
+          "min": 0.0,
+          "mim": "Object/Velocity/VelocitySpeed/SpeedMeasuredSpeed (km/h = m/s x 3.6)"
+        },
+        {
+          "name": "vertical_rate",
+          "datatype": "number",
+          "unit": "m/s",
+          "required": false
+        },
+        {
+          "name": "speed_accuracy",
+          "datatype": "number",
+          "unit": "m/s",
+          "required": false,
+          "min": 0.0,
+          "mim": "Object/Velocity/VelocitySpeed/SpeedAccuracyMeasure (km/h = m/s x 3.6)"
+        },
+        {
+          "name": "angle_accuracy",
+          "datatype": "number",
+          "unit": "deg",
+          "required": false,
+          "min": 0.0,
+          "max": 360.0,
+          "mim": "Object/Velocity/VelocityAbsoluteBearingAngle/AngleAccuracyAngle (deg)"
+        },
+        {
+          "name": "position_accuracy_h_m",
+          "datatype": "number",
+          "unit": "m",
+          "required": false,
+          "min": 0.0,
+          "mim": "BattlespaceConcept/GeographicLocation/LocationHorizontalAccuracyDimension (m)"
+        },
+        {
+          "name": "position_accuracy_v_m",
+          "datatype": "number",
+          "unit": "m",
+          "required": false,
+          "min": 0.0,
+          "mim": "BattlespaceConcept/GeographicLocation/LocationVerticalAccuracyDimension (m)"
+        },
+        {
+          "name": "battery",
+          "datatype": "number",
+          "unit": "percent",
+          "required": false,
+          "min": 0.0,
+          "max": 100.0
+        },
+        {
+          "name": "mmsi",
+          "datatype": "text",
+          "required": false,
+          "mim": "BattlespaceConcept/BattlespaceConceptAlternateIdentifier{AlternateIdentifierIdentifier, AlternateIdentifierStandardCode=AIS}"
+        },
+        {
+          "name": "nav_status",
+          "datatype": "text",
+          "required": false
+        },
+        {
+          "name": "vessel_domain",
+          "datatype": "text",
+          "required": false,
+          "values": [
+            "Surface",
+            "Subsurface"
+          ],
+          "mim": "the subclass: SurfaceVessel / SubsurfaceVessel"
+        }
+      ],
+      "allows_metadata": true
+    },
+    {
+      "id": "mim:subsurface-vessel",
+      "parent": "mim:vessel",
+      "description": "A Vessel designed to operate under the water surface.",
+      "requires_location": true,
+      "attributes": [
+        {
+          "name": "hostility",
+          "datatype": "text",
+          "required": false,
+          "values": [
+            "AssumedFriend",
+            "AssumedHostile",
+            "AssumedInvolved",
+            "AssumedNeutral",
+            "Faker",
+            "Friend",
+            "Hostile",
+            "Involved",
+            "Joker",
+            "Neutral",
+            "Pending",
+            "Suspect",
+            "Unknown"
+          ],
+          "mim": "BattlespaceConcept/HostilityCode"
+        },
+        {
+          "name": "callsign",
+          "datatype": "text",
+          "required": false,
+          "mim": "Object/NetworkAddress/CallSignIdentifier"
+        },
+        {
+          "name": "alt_id",
+          "datatype": "text",
+          "required": false,
+          "mim": "BattlespaceConcept/BattlespaceConceptAlternateIdentifier/AlternateIdentifierIdentifier"
+        },
+        {
+          "name": "alt_id_standard",
+          "datatype": "text",
+          "required": false,
+          "values": [
+            "ADEM",
+            "AIS",
+            "ASCA",
+            "Link11",
+            "Link16",
+            "Link22",
+            "MAVLink",
+            "MIP2",
+            "MIP31",
+            "MaritimeTrack",
+            "NFFI13",
+            "NVG",
+            "UDRA_ID",
+            "UTID",
+            "VMF",
+            "ASTERIX",
+            "STANAG4676",
+            "CoT",
+            "ICAO24"
+          ],
+          "mim": "BattlespaceConcept/BattlespaceConceptAlternateIdentifier/AlternateIdentifierStandardCode (MIM values verbatim; ASTERIX, STANAG4676, CoT, ICAO24 are Ajar's own and render nil)"
+        },
+        {
+          "name": "heading",
+          "datatype": "number",
+          "unit": "deg",
+          "required": false,
+          "min": 0.0,
+          "max": 360.0,
+          "mim": "Object/Orientation/HeadingAngle/AngleMeasuredAngle (deg)"
+        },
+        {
+          "name": "course",
+          "datatype": "number",
+          "unit": "deg",
+          "required": false,
+          "min": 0.0,
+          "max": 360.0,
+          "mim": "Object/Velocity/VelocityAbsoluteBearingAngle/AngleMeasuredAngle (deg)"
+        },
+        {
+          "name": "speed",
+          "datatype": "number",
+          "unit": "m/s",
+          "required": false,
+          "min": 0.0,
+          "mim": "Object/Velocity/VelocitySpeed/SpeedMeasuredSpeed (km/h = m/s x 3.6)"
+        },
+        {
+          "name": "vertical_rate",
+          "datatype": "number",
+          "unit": "m/s",
+          "required": false
+        },
+        {
+          "name": "speed_accuracy",
+          "datatype": "number",
+          "unit": "m/s",
+          "required": false,
+          "min": 0.0,
+          "mim": "Object/Velocity/VelocitySpeed/SpeedAccuracyMeasure (km/h = m/s x 3.6)"
+        },
+        {
+          "name": "angle_accuracy",
+          "datatype": "number",
+          "unit": "deg",
+          "required": false,
+          "min": 0.0,
+          "max": 360.0,
+          "mim": "Object/Velocity/VelocityAbsoluteBearingAngle/AngleAccuracyAngle (deg)"
+        },
+        {
+          "name": "position_accuracy_h_m",
+          "datatype": "number",
+          "unit": "m",
+          "required": false,
+          "min": 0.0,
+          "mim": "BattlespaceConcept/GeographicLocation/LocationHorizontalAccuracyDimension (m)"
+        },
+        {
+          "name": "position_accuracy_v_m",
+          "datatype": "number",
+          "unit": "m",
+          "required": false,
+          "min": 0.0,
+          "mim": "BattlespaceConcept/GeographicLocation/LocationVerticalAccuracyDimension (m)"
+        },
+        {
+          "name": "battery",
+          "datatype": "number",
+          "unit": "percent",
+          "required": false,
+          "min": 0.0,
+          "max": 100.0
+        },
+        {
+          "name": "mmsi",
+          "datatype": "text",
+          "required": false,
+          "mim": "BattlespaceConcept/BattlespaceConceptAlternateIdentifier{AlternateIdentifierIdentifier, AlternateIdentifierStandardCode=AIS}"
+        },
+        {
+          "name": "nav_status",
+          "datatype": "text",
+          "required": false
+        },
+        {
+          "name": "vessel_domain",
+          "datatype": "text",
+          "required": false,
+          "values": [
+            "Surface",
+            "Subsurface"
+          ],
+          "mim": "the subclass: SurfaceVessel / SubsurfaceVessel"
         }
       ],
       "allows_metadata": true
     },
     {
       "id": "mim:land-vehicle",
-      "parent": "mim:equipment",
+      "parent": "mim:vehicle",
       "description": "Equipment designed for operation on land.",
       "requires_location": true,
       "attributes": [
@@ -666,12 +1869,47 @@
             "Pending",
             "Suspect",
             "Unknown"
-          ]
+          ],
+          "mim": "BattlespaceConcept/HostilityCode"
         },
         {
           "name": "callsign",
           "datatype": "text",
-          "required": false
+          "required": false,
+          "mim": "Object/NetworkAddress/CallSignIdentifier"
+        },
+        {
+          "name": "alt_id",
+          "datatype": "text",
+          "required": false,
+          "mim": "BattlespaceConcept/BattlespaceConceptAlternateIdentifier/AlternateIdentifierIdentifier"
+        },
+        {
+          "name": "alt_id_standard",
+          "datatype": "text",
+          "required": false,
+          "values": [
+            "ADEM",
+            "AIS",
+            "ASCA",
+            "Link11",
+            "Link16",
+            "Link22",
+            "MAVLink",
+            "MIP2",
+            "MIP31",
+            "MaritimeTrack",
+            "NFFI13",
+            "NVG",
+            "UDRA_ID",
+            "UTID",
+            "VMF",
+            "ASTERIX",
+            "STANAG4676",
+            "CoT",
+            "ICAO24"
+          ],
+          "mim": "BattlespaceConcept/BattlespaceConceptAlternateIdentifier/AlternateIdentifierStandardCode (MIM values verbatim; ASTERIX, STANAG4676, CoT, ICAO24 are Ajar's own and render nil)"
         },
         {
           "name": "heading",
@@ -679,7 +1917,8 @@
           "unit": "deg",
           "required": false,
           "min": 0.0,
-          "max": 360.0
+          "max": 360.0,
+          "mim": "Object/Orientation/HeadingAngle/AngleMeasuredAngle (deg)"
         },
         {
           "name": "course",
@@ -687,20 +1926,55 @@
           "unit": "deg",
           "required": false,
           "min": 0.0,
-          "max": 360.0
+          "max": 360.0,
+          "mim": "Object/Velocity/VelocityAbsoluteBearingAngle/AngleMeasuredAngle (deg)"
         },
         {
           "name": "speed",
           "datatype": "number",
           "unit": "m/s",
           "required": false,
-          "min": 0.0
+          "min": 0.0,
+          "mim": "Object/Velocity/VelocitySpeed/SpeedMeasuredSpeed (km/h = m/s x 3.6)"
         },
         {
           "name": "vertical_rate",
           "datatype": "number",
           "unit": "m/s",
           "required": false
+        },
+        {
+          "name": "speed_accuracy",
+          "datatype": "number",
+          "unit": "m/s",
+          "required": false,
+          "min": 0.0,
+          "mim": "Object/Velocity/VelocitySpeed/SpeedAccuracyMeasure (km/h = m/s x 3.6)"
+        },
+        {
+          "name": "angle_accuracy",
+          "datatype": "number",
+          "unit": "deg",
+          "required": false,
+          "min": 0.0,
+          "max": 360.0,
+          "mim": "Object/Velocity/VelocityAbsoluteBearingAngle/AngleAccuracyAngle (deg)"
+        },
+        {
+          "name": "position_accuracy_h_m",
+          "datatype": "number",
+          "unit": "m",
+          "required": false,
+          "min": 0.0,
+          "mim": "BattlespaceConcept/GeographicLocation/LocationHorizontalAccuracyDimension (m)"
+        },
+        {
+          "name": "position_accuracy_v_m",
+          "datatype": "number",
+          "unit": "m",
+          "required": false,
+          "min": 0.0,
+          "mim": "BattlespaceConcept/GeographicLocation/LocationVerticalAccuracyDimension (m)"
         },
         {
           "name": "battery",
@@ -737,26 +2011,79 @@
             "Pending",
             "Suspect",
             "Unknown"
-          ]
+          ],
+          "mim": "BattlespaceConcept/HostilityCode"
         },
         {
           "name": "callsign",
           "datatype": "text",
-          "required": false
+          "required": false,
+          "mim": "Object/NetworkAddress/CallSignIdentifier"
+        },
+        {
+          "name": "alt_id",
+          "datatype": "text",
+          "required": false,
+          "mim": "BattlespaceConcept/BattlespaceConceptAlternateIdentifier/AlternateIdentifierIdentifier"
+        },
+        {
+          "name": "alt_id_standard",
+          "datatype": "text",
+          "required": false,
+          "values": [
+            "ADEM",
+            "AIS",
+            "ASCA",
+            "Link11",
+            "Link16",
+            "Link22",
+            "MAVLink",
+            "MIP2",
+            "MIP31",
+            "MaritimeTrack",
+            "NFFI13",
+            "NVG",
+            "UDRA_ID",
+            "UTID",
+            "VMF",
+            "ASTERIX",
+            "STANAG4676",
+            "CoT",
+            "ICAO24"
+          ],
+          "mim": "BattlespaceConcept/BattlespaceConceptAlternateIdentifier/AlternateIdentifierStandardCode (MIM values verbatim; ASTERIX, STANAG4676, CoT, ICAO24 are Ajar's own and render nil)"
+        },
+        {
+          "name": "position_accuracy_h_m",
+          "datatype": "number",
+          "unit": "m",
+          "required": false,
+          "min": 0.0,
+          "mim": "BattlespaceConcept/GeographicLocation/LocationHorizontalAccuracyDimension (m)"
+        },
+        {
+          "name": "position_accuracy_v_m",
+          "datatype": "number",
+          "unit": "m",
+          "required": false,
+          "min": 0.0,
+          "mim": "BattlespaceConcept/GeographicLocation/LocationVerticalAccuracyDimension (m)"
         },
         {
           "name": "frequency_hz",
           "datatype": "number",
           "unit": "Hz",
           "required": false,
-          "min": 0.0
+          "min": 0.0,
+          "mim": "Object/NetworkAddress/NetworkAddressFrequency/NetworkFrequencyDiscreteFrequencyMeasure (kHz = Hz / 1000; best-fit)"
         },
         {
           "name": "bandwidth_hz",
           "datatype": "number",
           "unit": "Hz",
           "required": false,
-          "min": 0.0
+          "min": 0.0,
+          "mim": "Object/NetworkAddress/NetworkAddressFrequency/NetworkFrequencyBandLower+UpperFrequencyMeasure (kHz, centred on frequency_hz; best-fit)"
         },
         {
           "name": "power_dbm",
@@ -791,12 +2118,47 @@
             "Pending",
             "Suspect",
             "Unknown"
-          ]
+          ],
+          "mim": "BattlespaceConcept/HostilityCode"
         },
         {
           "name": "callsign",
           "datatype": "text",
-          "required": false
+          "required": false,
+          "mim": "Object/NetworkAddress/CallSignIdentifier"
+        },
+        {
+          "name": "alt_id",
+          "datatype": "text",
+          "required": false,
+          "mim": "BattlespaceConcept/BattlespaceConceptAlternateIdentifier/AlternateIdentifierIdentifier"
+        },
+        {
+          "name": "alt_id_standard",
+          "datatype": "text",
+          "required": false,
+          "values": [
+            "ADEM",
+            "AIS",
+            "ASCA",
+            "Link11",
+            "Link16",
+            "Link22",
+            "MAVLink",
+            "MIP2",
+            "MIP31",
+            "MaritimeTrack",
+            "NFFI13",
+            "NVG",
+            "UDRA_ID",
+            "UTID",
+            "VMF",
+            "ASTERIX",
+            "STANAG4676",
+            "CoT",
+            "ICAO24"
+          ],
+          "mim": "BattlespaceConcept/BattlespaceConceptAlternateIdentifier/AlternateIdentifierStandardCode (MIM values verbatim; ASTERIX, STANAG4676, CoT, ICAO24 are Ajar's own and render nil)"
         }
       ],
       "allows_metadata": true
@@ -825,12 +2187,47 @@
             "Pending",
             "Suspect",
             "Unknown"
-          ]
+          ],
+          "mim": "BattlespaceConcept/HostilityCode"
         },
         {
           "name": "callsign",
           "datatype": "text",
-          "required": false
+          "required": false,
+          "mim": "Object/NetworkAddress/CallSignIdentifier"
+        },
+        {
+          "name": "alt_id",
+          "datatype": "text",
+          "required": false,
+          "mim": "BattlespaceConcept/BattlespaceConceptAlternateIdentifier/AlternateIdentifierIdentifier"
+        },
+        {
+          "name": "alt_id_standard",
+          "datatype": "text",
+          "required": false,
+          "values": [
+            "ADEM",
+            "AIS",
+            "ASCA",
+            "Link11",
+            "Link16",
+            "Link22",
+            "MAVLink",
+            "MIP2",
+            "MIP31",
+            "MaritimeTrack",
+            "NFFI13",
+            "NVG",
+            "UDRA_ID",
+            "UTID",
+            "VMF",
+            "ASTERIX",
+            "STANAG4676",
+            "CoT",
+            "ICAO24"
+          ],
+          "mim": "BattlespaceConcept/BattlespaceConceptAlternateIdentifier/AlternateIdentifierStandardCode (MIM values verbatim; ASTERIX, STANAG4676, CoT, ICAO24 are Ajar's own and render nil)"
         }
       ],
       "allows_metadata": true

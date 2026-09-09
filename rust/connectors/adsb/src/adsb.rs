@@ -30,6 +30,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use ajar_connector::{Event, EventBuilder};
+use ajar_connector_common::GovernedIdentity;
 use ajar_connector_common::{Enrichment, FrameParser, ParseError};
 
 /// 1 foot in metres.
@@ -309,7 +310,10 @@ impl AdsbParser {
             .location(p.lat, p.lon, p.alt_m)
             .payload(p.raw.clone())
             .metadata("source_uid", p.icao.clone())
-            .metadata("icao", p.icao.clone());
+            .metadata("icao", p.icao.clone())
+            // Governed identity: the ICAO 24-bit address under its standard code,
+            // so a consumer correlates on it without knowing this connector.
+            .identity("ICAO24", p.icao.clone());
 
         // If the carry-forward buffer dropped lines, the payload is incomplete —
         // say so, so a re-parser never mistakes it for the full set of frames.
@@ -452,6 +456,8 @@ mod tests {
         let ev = parser().to_event_at(&p, "2026-06-10T08:00:00Z").unwrap();
         assert_eq!(meta_of(&ev, "source_uid"), Some("4CA2D6"));
         assert_eq!(meta_of(&ev, "icao"), Some("4CA2D6"));
+        assert_eq!(attr_of(&ev, "alt_id"), Some("4CA2D6"));
+        assert_eq!(attr_of(&ev, "alt_id_standard"), Some("ICAO24"));
     }
 
     #[test]

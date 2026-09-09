@@ -69,7 +69,7 @@ can copy: your record struct in, sealed event out, with the type mapping, the
 unit conversions and the exact vocabularies.
 
 **Validate against the ontology your operator sends you** —
-`ontology-mim-5.3-conformant-1.json`. That file is the contract your events are
+`ontology-mim-5.3-conformant-3.json`. That file is the contract your events are
 checked against: it lists the entity types and attribute names that exist, and
 anything outside it is discarded silently. If you have not got it, ask before you
 write the mapping.

@@ -99,6 +99,34 @@ the hyphen and any unrecognised token are mapped before emission. A connector th
 forwarded the wire value would have its tracks quarantined and lose their battle
 dimension without anything appearing to fail.
 
+## Identity and uncertainty are governed, from contract revision 3
+
+Two things used to live only in metadata and are now attributes the ontology
+declares on every concrete type, so a consumer can use them without knowing
+which connector produced the event:
+
+- **`alt_id` and `alt_id_standard`**: the producer's native identifier for the
+  thing observed, and the standard that minted it. `alt_id_standard` is a
+  controlled vocabulary (MIM 5.3's own codes plus `ASTERIX`, `STANAG4676`,
+  `CoT`, `ICAO24`). What each connector emits: ADS-B and ASTERIX Mode S reports
+  the ICAO 24-bit address under `ICAO24`; ASTERIX primary and system tracks the
+  track number under `ASTERIX`; AIS the MMSI
+  under `AIS`, in its canonical nine digits; MAVLink the system id under
+  `MAVLink`; STANAG 4676 the track UUID under `STANAG4676`; CoT the event uid
+  under `CoT`. ASTERIX track numbers are scoped by category and SAC/SIC
+  (`62:25:10:4095`) because a site can emit the same number in two categories. `source_uid` in
+  metadata stays as it was. STANAG 4586 vehicle ids stay in metadata until the
+  vocabulary has a code for them.
+- **`position_accuracy_h_m`, `position_accuracy_v_m`, `speed_accuracy`,
+  `angle_accuracy`**: uncertainty in metres, metres, m/s and degrees. Emitted
+  only when the wire states it in those units: ASTERIX CAT010 deviation of
+  position and CAT062 estimated accuracies, and MAVLink 2's GPS_RAW_INT
+  extensions, and only on the event whose fix stated it. A per-axis one-sigma
+  pair is published as its root sum square (DRMS), with the axes kept in
+  metadata as `position_sd_x_m` and `position_sd_y_m`; a receiver's single
+  horizontal figure is passed through as given. A unitless quality figure such
+  as NMEA HDOP is not turned into metres; it stays where it was.
+
 ## `hostility` is a controlled vocabulary, and the case is exact
 
 `hostility` carries MIM 5.3 `HostilityCodeType`, and only these values:

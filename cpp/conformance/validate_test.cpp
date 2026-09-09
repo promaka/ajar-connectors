@@ -109,7 +109,7 @@ int main() {
           "the event overload catches a vocabulary fault");
   }
 
-  check(std::string(ajar::ontology_version()) == "mim-5.3-conformant-1",
+  check(std::string(ajar::ontology_version()) == "mim-5.3-conformant-3",
         "the vendored ontology version is reported");
 
   if (failures) {

@@ -67,8 +67,8 @@ fn native_icao_is_preserved_as_source_uid_not_id() {
     let ev = connector_event();
     assert_eq!(ev.entity_type, "mim:aircraft");
     assert_ne!(ev.id, "4CA2D6");
-    // ICAO is ungoverned passthrough: source_uid + icao metadata, never the id,
-    // never a governed attribute.
+    // The native key names stay in metadata and never become the id; the
+    // ICAO address is also governed, as alt_id under the ICAO24 code.
     assert!(
         ev.metadata
             .iter()

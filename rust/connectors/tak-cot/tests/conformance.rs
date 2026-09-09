@@ -62,8 +62,8 @@ fn native_uid_is_preserved_as_metadata_not_id() {
     let ev = connector_event();
     assert_eq!(ev.entity_type, "mim:aircraft"); // battle dimension A -> air
     assert_ne!(ev.id, "ANDROID-a1b2c3d4");
-    // The CoT uid is ungoverned passthrough: in metadata, never a governed
-    // attribute, never the id.
+    // The uid stays in metadata and never becomes the id; it is also
+    // governed, as alt_id under the CoT standard code.
     assert!(
         ev.metadata
             .iter()

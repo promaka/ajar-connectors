@@ -142,7 +142,8 @@ fn cot_type_to_entity(cot_type: &str) -> String {
 fn entity_to_cot(entity_type: &str) -> String {
     match entity_type {
         "mim:aircraft" => "a-f-A".to_string(),
-        "mim:vessel" => "a-f-S".to_string(),
+        "mim:vessel" | "mim:surface-vessel" => "a-f-S".to_string(),
+        "mim:subsurface-vessel" => "a-f-U".to_string(),
         "mim:unit" => "a-f-G-U-C-D".to_string(),
         other => other
             .strip_prefix("x:cot:")

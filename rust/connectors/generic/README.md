@@ -62,6 +62,7 @@ Anything past these is a few lines in the code template, not a config change.
 ## Conformance
 
 `cargo test` proves the same contract as every connector: content-validity
-(UUIDv7 id + RFC 3339 timestamp), native id in `metadata` (not `attributes`, not
-the id), canonical ordering, the seal verifies under the published contract key,
+(UUIDv7 id + RFC 3339 timestamp), native id in `metadata` (never the id; the
+governed `alt_id` pair is for connectors that know their standard), canonical
+ordering, the seal verifies under the published contract key,
 and a fuzz pass (arbitrary and JSON/CSV-shaped input never panics).

@@ -13,6 +13,36 @@ Two version lines are tracked independently (see COMPATIBILITY.md):
 
 ## [Unreleased]
 
+### Added
+
+- Ontology contract revisions 2 and 3 (`mim-5.3-conformant-3`) re-vendored.
+  Additive over revision 1: five types (`mim:vehicle`, `mim:surface-vessel`,
+  `mim:subsurface-vessel`, `mim:government-organisation`,
+  `mim:military-organisation`), the accuracy attributes, governed identity
+  (`alt_id`, `alt_id_standard`), and a `mim` field on every attribute naming
+  its MIM 5.3 element. Nothing removed or renamed; four types gained a new
+  parent with the old one still an ancestor, so inherited attributes are
+  unchanged. Partners may emit the new types; the validators that exist (the
+  Rust connectors' and the C++ SDK's) accept the revision.
+- Governed identity from every connector that knows its standard: ADS-B and
+  ASTERIX Mode S reports carry the ICAO address as `alt_id` under `ICAO24`,
+  ASTERIX tracks the track number scoped by category and SAC/SIC under
+  `ASTERIX` (and the radar heartbeat its SAC/SIC), AIS the nine-digit MMSI
+  under `AIS`, MAVLink the system
+  id under `MAVLink`, STANAG 4676 the track UUID under `STANAG4676`, CoT the
+  uid under `CoT`. A consumer correlates on one attribute pair without knowing
+  the producer. `source_uid` metadata is unchanged.
+- Position and kinematic uncertainty in the contract's attributes wherever the
+  wire states it in metres: ASTERIX CAT010 deviation of position and CAT062
+  estimated accuracies (position horizontal and vertical, speed), and the
+  MAVLink 2 GPS_RAW_INT extensions (position horizontal and vertical, speed,
+  heading), on the event whose fix stated them. A per-axis pair becomes its
+  root sum square with the axes kept in metadata; a zero, absent or
+  out-of-range figure is not known, never zero metres. Unitless figures such
+  as NMEA HDOP are left as they were rather than dressed up as metres. The
+  connectors set the identity pair through one shared helper that refuses an
+  empty or oversized identifier.
+
 ## [0.6.0] - 2026-09-07
 
 ### Added

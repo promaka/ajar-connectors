@@ -144,7 +144,9 @@ event = (EventBuilder("acme-radar-1", "mim:aircraft")   # source_id, entity type
 ```
 
 Governed attributes are checked against the ontology. Metadata is not, and is
-always kept. Put native identifiers in metadata, never in `id`.
+always kept. A native identifier goes in metadata, never in `id`; when its
+standard is one the contract names, it also goes in the governed `alt_id` and
+`alt_id_standard` pair (see [ATTRIBUTES.md](rust/connectors/ATTRIBUTES.md)).
 
 **Step 4a. Work out what to map to.** The SDK does not do this for you, and a
 wrong entity type or attribute name is discarded by Ajar without an error.
