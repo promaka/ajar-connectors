@@ -102,16 +102,16 @@ Your process, your deployment. The SDK builds, seals and verifies. You publish.
 package registries in step 2. C++ builds from source:
 
 ```bash
-git clone --depth 1 --branch v0.6.0 https://github.com/promaka/ajar-connectors
+git clone --depth 1 --branch v0.6.1 https://github.com/promaka/ajar-connectors
 ```
 
 **Step 2. Add it to your build.**
 
 | Language | Command |
 |---|---|
-| Rust | `ajar-connector = "0.6.0"` |
-| Python | `pip install ajar-connector==0.6.0` |
-| Go | `go get github.com/promaka/ajar-connectors/go/ajarconnector@v0.6.0` |
+| Rust | `ajar-connector = "0.6.1"` |
+| Python | `pip install ajar-connector==0.6.1` |
+| Go | `go get github.com/promaka/ajar-connectors/go/ajarconnector@v0.6.1` |
 | C++ | `cmake -S cpp -B build && cmake --build build && cmake --install build --prefix /opt/ajar` |
 
 C++ then links with:
@@ -340,7 +340,7 @@ Images are private. Create a pull secret with `read:packages` for
 docker run \
   -v ./asterix.toml:/etc/ajar/connector.toml:ro \
   -v ./acme-radar-1.seed:/etc/ajar/seed:ro \
-  ghcr.io/promaka/ajar-connector-asterix:0.6.0 /etc/ajar/connector.toml
+  ghcr.io/promaka/ajar-connector-asterix:0.6.1 /etc/ajar/connector.toml
 ```
 
 ### 7c. On Kubernetes
@@ -350,7 +350,7 @@ kubectl create secret generic radar-seed --from-file=seed=acme-radar-1.seed
 
 helm install radar deploy/helm/connector \
   --set connector.name=asterix \
-  --set image.tag=0.6.0 \
+  --set image.tag=0.6.1 \
   --set signingSeed.existingSecret=radar-seed \
   --set-file connector.config=./asterix.toml
 ```
@@ -598,7 +598,7 @@ The SDK API (`EventBuilder`, `seal` and the rest) is a convenience for building
 those bytes. If it changes, only a deliberate rebuild is affected, never a
 running binary.
 
-Pin the released tag `v0.6.0`, not a branch.
+Pin the released tag `v0.6.1`, not a branch.
 
 [COMPATIBILITY.md](COMPATIBILITY.md) states exactly what will and will not change
 within `contract-v1`. Report security issues per [SECURITY.md](SECURITY.md).
