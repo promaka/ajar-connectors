@@ -47,9 +47,9 @@ Two version lines are tracked independently (see COMPATIBILITY.md):
   heard it, so the hardest association case in the scenario resolves. Every
   generator is proven against the decoder that reads it, in the same
   workspace, and the MAVLink encoder checks itself against the connector's
-  reference frame before the first packet leaves. Ships as a binary in the
-  release tarball and as an image beside the connectors, with the ESM mapping
-  as `generic/esm-synthetic.example.toml`.
+  reference frame before the first packet leaves. Ships as its own image,
+  `ajar-connector-feed-synthetic`, with the ESM mapping in the tarball's
+  configs as `esm-synthetic.example.toml`.
 - A `[marking]` block in every connector's config. Core's clearance rules read
   a classification, releasability, policy and caveats off each event's policy
   tags, and nothing on the way in set them, so every event from a stock
@@ -78,6 +78,13 @@ Two version lines are tracked independently (see COMPATIBILITY.md):
   message states none. A classification string the normaliser cannot read is
   stamped at the top level rather than left unclassified, with the raw string
   in metadata.
+
+### Changed
+
+- The release tarball is connectors only. A test source ships as its own
+  image, pulled on purpose, and is never bundled with the product: the
+  synthetic feed and the example publisher are no longer in the tarball, and
+  the collect step asserts it.
 
 ### Fixed
 
