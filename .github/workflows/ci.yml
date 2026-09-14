@@ -207,6 +207,12 @@ jobs:
       - name: Connectors — test
         working-directory: rust/connectors
         run: cargo test --workspace
+      # The synthetic feed proves its MAVLink encoder against the connector's
+      # reference frame at startup and prints one tick of every sensor: a
+      # generator that drifted from a decoder fails here, not on a partner's box.
+      - name: Connectors — synthetic feed dry-run (no infra)
+        working-directory: rust/connectors
+        run: cargo run -p ajar-feed-synthetic -- --dry-run --ticks 1
       - name: SDK — consumer feature (wire gate)
         run: cargo test -p ajar-connector --features consumer
 

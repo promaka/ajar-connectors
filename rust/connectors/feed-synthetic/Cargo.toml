@@ -1,0 +1,38 @@
+# SPDX-License-Identifier: Apache-2.0
+[package]
+name = "ajar-feed-synthetic"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+description = "One scenario, six sensors: a synthetic multi-sensor feed a fusion partner can build against, on every connector's real wire format"
+
+[[bin]]
+name = "ajar-feed-synthetic"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+serde_json.workspace = true
+socket2.workspace = true
+time = { version = "0.3", features = ["formatting"] }
+tokio = { workspace = true, features = ["sync"] }
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+# Every generator is proven against the decoder that will read it, in this
+# workspace, so the two cannot drift apart without a test failing.
+ajar-adsb = { path = "../adsb" }
+ajar-ais-nmea = { path = "../ais-nmea" }
+ajar-asterix = { path = "../asterix" }
+ajar-connector = { path = "../../ajar-connector" }
+ajar-connector-common = { path = "../common" }
+ajar-generic = { path = "../generic" }
+ajar-mavlink = { path = "../mavlink" }
+ajar-tak-cot = { path = "../tak-cot" }
+serde.workspace = true
+toml.workspace = true

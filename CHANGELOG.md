@@ -33,6 +33,21 @@ Two version lines are tracked independently (see COMPATIBILITY.md):
 - `ais-nmea` joins the container image matrix. It is the only decoder for MMSI
   and navigational status, so a maritime site can now deploy it as an image
   rather than only from the tarball.
+- `ajar-feed-synthetic`: one scenario, six sensors, on every connector's real
+  wire format. A synthetic multi-sensor feed to build against before any kit
+  arrives: a container ship seen by AIS and by a coastal radar, an airliner by
+  ADS-B and by the radar's system track, a navigation radar on the ship heard
+  by an ESM receiver, an uncrewed aircraft on MAVLink, a shore party on CoT.
+  Each sensor emits only what that sensor genuinely carries and lags by its
+  own latency, so a consumer meets the gaps and the two clocks a real
+  deployment has. The ESM intercept carries the full revision 4 emitter
+  fingerprint and names both the platform it sits on and the receiver that
+  heard it, so the hardest association case in the scenario resolves. Every
+  generator is proven against the decoder that reads it, in the same
+  workspace, and the MAVLink encoder checks itself against the connector's
+  reference frame before the first packet leaves. Ships as a binary in the
+  release tarball and as an image beside the connectors, with the ESM mapping
+  as `generic/esm-synthetic.example.toml`.
 - A `[marking]` block in every connector's config. Core's clearance rules read
   a classification, releasability, policy and caveats off each event's policy
   tags, and nothing on the way in set them, so every event from a stock

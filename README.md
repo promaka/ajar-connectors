@@ -559,6 +559,7 @@ loop, health and graceful shutdown. A new connector is therefore a format parser
 | [generic-egress](rust/connectors/generic-egress) | any JSON consumer (**egress**) | governed events OUT by field mapping, markings unmappable-away | NATS → HTTP |
 | [sink](rust/connectors/sink) | — (**development sink**) | verifies, persists and audit-chains events; runs the whole path without Core | NATS → SQLite |
 | [doctor](rust/connectors/doctor) | — (**diagnostics**) | names the broken onboarding step when nothing flows | read-only probes |
+| [feed-synthetic](rust/connectors/feed-synthetic) | — (**synthetic feed**) | one scenario on six real wire formats, to build against before any kit arrives | multicast / TCP / UDP |
 
 Each maps a standard's position reports, and where present its identity and
 tactical fields, onto Ajar tracks. Each connector's README states which message

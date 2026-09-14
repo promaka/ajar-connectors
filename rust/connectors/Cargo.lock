@@ -130,6 +130,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "ajar-feed-synthetic"
+version = "0.6.1"
+dependencies = [
+ "ajar-adsb",
+ "ajar-ais-nmea",
+ "ajar-asterix",
+ "ajar-connector",
+ "ajar-connector-common",
+ "ajar-generic",
+ "ajar-mavlink",
+ "ajar-tak-cot",
+ "anyhow",
+ "serde",
+ "serde_json",
+ "socket2",
+ "time",
+ "tokio",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "ajar-generic"
 version = "0.6.1"
 dependencies = [

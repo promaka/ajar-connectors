@@ -27,6 +27,7 @@ members = [
     "sink",
     "tak-egress",
     "generic-egress",
+    "feed-synthetic",
 ]
 
 [workspace.package]

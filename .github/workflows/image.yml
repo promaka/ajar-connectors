@@ -82,6 +82,9 @@ jobs:
           - { name: asterix, wsdir: rust/connectors, pkg: ajar-asterix }
           - { name: tak-cot, wsdir: rust/connectors, pkg: ajar-tak-cot }
           - { name: synthetic-radar, wsdir: rust/examples, pkg: synthetic-radar }
+          # One scenario, six sensors, on every connector's real wire format:
+          # what puts a second sensor on a partner's box with no hardware.
+          - { name: feed-synthetic, wsdir: rust/connectors, pkg: ajar-feed-synthetic }
     env:
       IMAGE: ghcr.io/${{ github.repository_owner }}/ajar-connector-${{ matrix.name }}
     steps:
