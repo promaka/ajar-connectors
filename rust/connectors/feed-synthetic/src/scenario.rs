@@ -1,29 +1,24 @@
 // SPDX-License-Identifier: Apache-2.0
-//! One world, seen by several sensors: the shared scenario every feed renders.
+//! The fixture every feed renders: one set of objects, seen by six sensors.
 //!
-//! Why one scenario rather than six independent feeds: a fusion partner's whole
-//! job is deciding that two reports are the same object. Independent random
-//! feeds give them nothing to decide, so a demonstration built that way proves
-//! the plumbing and none of the thing the plumbing exists for. Here the same
-//! vessel is seen by a coastal radar and by AIS, the same aircraft by ADS-B and
-//! by the radar's system track, and an emitter sits on the vessel, so there is
-//! real association work to do and a real answer to check it against.
+//! One shared world rather than six independent feeds, because a fusion
+//! consumer's task is deciding that two reports are the same object. The same
+//! vessel is seen by the coastal radar and by AIS, the same aircraft by ADS-B
+//! and by the radar's system track, and an emitter sits on the vessel, so
+//! association has work to do and a known answer.
 //!
-//! The other half of the point is honest gaps. Each sensor emits only what that
-//! sensor genuinely carries: AIS has an identity and no accuracy, radar has
-//! accuracy and no identity, CoT has an identity and no kinematics. A feed where
-//! every sensor reported every field would teach a consumer to expect something
-//! no real deployment delivers.
+//! Each sensor emits only what that sensor carries: AIS has an identity and no
+//! accuracy, radar has accuracy and no identity, CoT has an identity and no
+//! kinematics, the ESM intercept has a bearing and no position.
 //!
-//! Latency is per sensor and deliberate. The event's `timestamp` is when the
-//! source observed the thing; Core stamps its own receipt time on arrival. Those
-//! diverge in the real world, which is why both are on the wire, and a consumer
-//! correlating on arrival time rather than observation time concludes a target
-//! teleported. A scenario where everything arrived instantly would hide the
-//! mistake instead of exposing it.
+//! Latency is per sensor. The event's `timestamp` is when the source observed
+//! the object; Core stamps its own receipt time on arrival. The two diverge by
+//! the sensor's latency, as they do in the field.
 //!
-//! Everything here is a pure function of seconds since the scenario started, so
-//! a generator and a test see exactly the same world.
+//! Every object runs a racetrack, so the fixture is bounded: the objects stay
+//! inside the radar's window and the association cases hold for as long as
+//! the feed runs. Everything is a pure function of seconds since start, so a
+//! generator and a decoder test see exactly the same world.
 
 use std::time::{Duration, SystemTime};
 
@@ -96,10 +91,22 @@ impl Sensor {
     pub fn observed(self, now: SystemTime) -> SystemTime {
         now - Duration::from_secs_f64(self.latency())
     }
+
+    /// The subcommand and log name.
+    pub fn name(self) -> &'static str {
+        match self {
+            Sensor::Ais => "ais",
+            Sensor::Adsb => "adsb",
+            Sensor::Asterix => "asterix",
+            Sensor::Mavlink => "mavlink",
+            Sensor::Cot => "cot",
+            Sensor::Esm => "esm",
+        }
+    }
 }
 
-/// Advance a position along a course. Flat-earth over these distances keeps
-/// the scenario readable; the point is plausible motion, not navigation.
+/// Advance a position along a course. Flat earth, adequate over these
+/// distances.
 fn step(from: Fix, course_deg: f64, speed_mps: f64, secs: f64) -> Fix {
     let d = speed_mps * secs;
     let (s, c) = course_deg.to_radians().sin_cos();
@@ -112,6 +119,25 @@ fn step(from: Fix, course_deg: f64, speed_mps: f64, secs: f64) -> Fix {
 /// Metres per degree of latitude.
 pub const M_PER_DEG_LAT: f64 = 111_320.0;
 
+/// Unit factors, defined from the contract's base units so the encoders and
+/// the decoders' own constants agree to the last digit.
+pub const FT_PER_M: f64 = 1.0 / 0.3048;
+pub const MPS_TO_KN: f64 = 1.0 / 0.514_444;
+pub const FTMIN_PER_MPS: f64 = FT_PER_M * 60.0;
+
+/// A racetrack: out along `course` for `leg_s`, back along the reciprocal for
+/// `leg_s`, repeating. Position is continuous; the course flips each leg.
+fn racetrack(start: Fix, course_deg: f64, speed_mps: f64, leg_s: f64, secs: f64) -> (Fix, f64) {
+    let t = secs.rem_euclid(2.0 * leg_s);
+    let far = step(start, course_deg, speed_mps, leg_s);
+    if t < leg_s {
+        (step(start, course_deg, speed_mps, t), course_deg)
+    } else {
+        let back = (course_deg + 180.0) % 360.0;
+        (step(far, back, speed_mps, t - leg_s), back)
+    }
+}
+
 /// True bearing and range from one fix to another, degrees and metres, on the
 /// same flat earth the motion uses, so a bearing a sensor reports points at
 /// exactly where the scenario put the target.
@@ -122,11 +148,10 @@ pub fn bearing_range(from: Fix, to: Fix) -> (f64, f64) {
     (bearing, dn.hypot(de))
 }
 
-/// A container ship outbound through the Solent.
+/// A container ship running a 15-minute racetrack in the Solent approaches.
 ///
-/// Seen twice: by AIS, which says who she is, and by the coastal radar, which
-/// does not. That pair is the cleanest association case there is: same
-/// position, same time, one identity. It is what makes the radar plot useful.
+/// Seen twice: by AIS, which states her identity, and by the coastal radar,
+/// which does not. The pair associates on position and time alone.
 pub struct Vessel;
 
 /// Where the vessel is and how she is moving.
@@ -148,26 +173,35 @@ impl Vessel {
     pub const NAV_STATUS: u8 = 0;
     /// AIS ship type 70: cargo, all ships of this type.
     pub const SHIP_TYPE: u8 = 70;
+    /// One leg of the racetrack, seconds. 7.2 km at this speed, inside the
+    /// radar's window throughout.
+    pub const LEG_S: f64 = 900.0;
     const START: Fix = Fix {
-        lat: 50.8180,
-        lon: -1.0870,
+        lat: 50.7700,
+        lon: -1.1300,
     };
 
     pub fn at(secs: f64) -> VesselState {
+        let (fix, course_deg) = racetrack(
+            Self::START,
+            Self::COURSE_DEG,
+            Self::SPEED_MPS,
+            Self::LEG_S,
+            secs,
+        );
         VesselState {
-            fix: step(Self::START, Self::COURSE_DEG, Self::SPEED_MPS, secs),
-            course_deg: Self::COURSE_DEG,
+            fix,
+            course_deg,
             speed_mps: Self::SPEED_MPS,
         }
     }
 }
 
-/// An airliner westbound at FL350.
+/// An airliner holding at FL350 on a 4-minute racetrack.
 ///
 /// Also seen twice: by ADS-B, cooperatively, and by the radar's system track.
 /// Both carry the ICAO 24-bit address, so this pair associates on identity as
-/// well as on space and time. The easy case, included so a consumer can check
-/// their harder space-time association against a known answer.
+/// well as on position and time: the known-answer case.
 pub struct Aircraft;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -193,15 +227,24 @@ impl Aircraft {
     pub const VERTICAL_RATE_MPS: f64 = -2.54;
     /// The radar's system track number for this aircraft.
     pub const TRACK_NUMBER: u16 = 4095;
+    /// One leg of the hold, seconds: 55 km at this speed.
+    pub const LEG_S: f64 = 240.0;
     const START: Fix = Fix {
         lat: 50.9300,
-        lon: -0.8000,
+        lon: -0.5000,
     };
 
     pub fn at(secs: f64) -> AircraftState {
+        let (fix, course_deg) = racetrack(
+            Self::START,
+            Self::COURSE_DEG,
+            Self::SPEED_MPS,
+            Self::LEG_S,
+            secs,
+        );
         AircraftState {
-            fix: step(Self::START, Self::COURSE_DEG, Self::SPEED_MPS, secs),
-            course_deg: Self::COURSE_DEG,
+            fix,
+            course_deg,
             speed_mps: Self::SPEED_MPS,
             alt_m: Self::ALT_M,
             vertical_rate_mps: Self::VERTICAL_RATE_MPS,
@@ -210,9 +253,8 @@ impl Aircraft {
 }
 
 /// A small uncrewed aircraft orbiting the harbour mouth on a MAVLink link.
-///
-/// The only source here that reports its own attitude and GPS uncertainty,
-/// which is why it is the one carrying every accuracy attribute at once.
+/// The only source that reports its own GPS uncertainty, so the only one
+/// carrying every accuracy attribute.
 pub struct Uav;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -257,10 +299,8 @@ impl Uav {
     }
 }
 
-/// A friendly shore party reporting itself over CoT.
-///
-/// Carries an identity and a position and nothing else, which is exactly what
-/// a CoT self-report gives you: no course, no speed, no accuracy.
+/// A friendly shore party reporting itself over CoT: an identity and a
+/// position, no course, no speed, no accuracy.
 pub struct Unit;
 
 impl Unit {
@@ -276,12 +316,8 @@ impl Unit {
 }
 
 /// A navigation radar mounted on the vessel, intercepted by an ESM receiver
-/// ashore, co-located with the coastal radar.
-///
-/// This is the case a fusion partner cares about most and can least often
-/// resolve: an emission with parameters but no identity. Knowing which platform
-/// it sits on is most of what an emitter library would tell them, which is why
-/// the contract carries the link and this feed states it.
+/// ashore, co-located with the coastal radar: an emission with parameters and
+/// no identity of its own. The contract's platform link names the vessel.
 pub struct Emitter;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -290,8 +326,7 @@ pub struct EmitterState {
     pub fix: Fix,
     /// True bearing from the receiver to the emitter, degrees.
     pub bearing_deg: f64,
-    /// Received power, dBm, varying with range and aspect so a consumer
-    /// learns not to key on it.
+    /// Received power, dBm, varying with range and aspect.
     pub power_dbm: f64,
 }
 
@@ -304,8 +339,7 @@ impl Emitter {
     pub const ELNOT: &'static str = "G1234";
     pub const PRF_HZ: f64 = 2100.0;
     pub const PULSE_WIDTH_US: f64 = 0.08;
-    /// The receiver's own word for it; not in the contract's modulation set,
-    /// which is the point: it rides in metadata, not in the governed attribute.
+    /// The receiver's own word for the scan; `scan_type` is governed free text.
     pub const SCAN_TYPE: &'static str = "circular";
     pub const SCAN_PERIOD_S: f64 = 2.5;
     pub const BEARING_ACCURACY_DEG: f64 = 2.0;
@@ -350,12 +384,33 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_vessel_moves_along_her_course_at_her_speed() {
+    fn the_vessel_runs_her_racetrack_inside_the_radars_window() {
         let a = Vessel::at(0.0);
         let b = Vessel::at(60.0);
         let (bearing, range) = bearing_range(a.fix, b.fix);
         assert!((bearing - Vessel::COURSE_DEG).abs() < 0.5, "{bearing}");
         assert!((range - 60.0 * Vessel::SPEED_MPS).abs() < 1.0, "{range}");
+        // The far end turns back along the reciprocal and returns to the start.
+        let far = Vessel::at(Vessel::LEG_S);
+        let back = Vessel::at(Vessel::LEG_S + 60.0);
+        assert!((back.course_deg - (Vessel::COURSE_DEG + 180.0) % 360.0).abs() < 1e-9);
+        let (_, r) = bearing_range(far.fix, back.fix);
+        assert!((r - 60.0 * Vessel::SPEED_MPS).abs() < 1.0);
+        let home = Vessel::at(2.0 * Vessel::LEG_S);
+        assert!((home.fix.lat - a.fix.lat).abs() < 1e-6 && (home.fix.lon - a.fix.lon).abs() < 1e-6);
+        // Every point of the track is inside the radar's declared window, and
+        // within the range a CAT010 plot can carry, for as long as it runs.
+        let (_, r_end, a0, a1) = RADAR_WINDOW;
+        for secs in (0..(2.0 * Vessel::LEG_S) as u32).step_by(10) {
+            let (b, r) = bearing_range(RADAR, Vessel::at(secs as f64).fix);
+            assert!(r < r_end * 1852.0 && r < 65_535.0, "{secs}s: {r} m");
+            assert!(b >= a0 && b <= a1, "{secs}s: bearing {b}");
+        }
+        let (_, r_air) = bearing_range(RADAR, Aircraft::at(Aircraft::LEG_S).fix);
+        assert!(
+            r_air < 100_000.0,
+            "the hold stays within a radar's reach: {r_air} m"
+        );
     }
 
     #[test]

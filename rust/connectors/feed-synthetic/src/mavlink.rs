@@ -6,9 +6,14 @@
 //! verifies the frame CRC before trusting a single field. Correctly: a corrupt
 //! frame that parsed anyway would put a drone somewhere it is not. So this
 //! builds real frames, CRC-16/MCRF4XX over everything after the magic byte
-//! finished with the message's CRC_EXTRA. Get that wrong and nothing arrives,
-//! which is the right failure, and why [`self_check`] runs before a single
-//! packet leaves.
+//! finished with the message's CRC_EXTRA. A wrong CRC means nothing arrives,
+//! so [`self_check`] proves the encoder against the connector's reference
+//! frame before a single packet leaves.
+//!
+//! The CRC table and the frame layout are written here independently of the
+//! connector's decoder on purpose. Sharing them would make the round-trip
+//! tests circular: a wrong CRC_EXTRA on both sides would pass, and fail only
+//! against a real autopilot. The reference frame was produced outside both.
 //!
 //! Three messages, because that is what the connector maps and what a real
 //! link carries: HEARTBEAT says the vehicle exists and what state it is in,
@@ -139,9 +144,8 @@ impl Default for Link {
 /// itself against this before the feed starts.
 pub const REFERENCE_HEARTBEAT: &str = "fe0900010100000000000203800403be39";
 
-/// Verify the encoder against the reference frame. Panics on drift, which is
-/// the right failure for a generator that would otherwise emit frames the
-/// connector silently refuses.
+/// Verify the encoder against the reference frame. Panics on drift, so a
+/// generator whose frames the connector would refuse cannot start.
 pub fn self_check() {
     let got: String = Link::new()
         .heartbeat()

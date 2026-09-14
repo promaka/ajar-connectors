@@ -18,11 +18,7 @@
 
 use std::time::SystemTime;
 
-use crate::ais::MPS_TO_KN;
-use crate::scenario::{Aircraft, AircraftState};
-
-const FT_PER_M: f64 = 3.280_84;
-const FTMIN_PER_MPS: f64 = 196.850;
+use crate::scenario::{Aircraft, AircraftState, FTMIN_PER_MPS, FT_PER_M, MPS_TO_KN};
 
 /// The date and time fields as SBS-1 writes them.
 fn stamp(t: SystemTime) -> (String, String) {

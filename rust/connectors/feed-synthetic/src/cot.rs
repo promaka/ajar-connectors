@@ -8,12 +8,9 @@
 //! and takes the callsign from `<detail><contact>`. Affiliation comes from the
 //! second field of the type code, so `a-f-...` is friendly.
 //!
-//! What CoT gives a consumer here is an identity and a position and nothing
-//! else. No course, no speed, no accuracy: `ce` and `le` are the "unknown"
-//! sentinel TAK uses, and there is no `<track>` element because a shore party
-//! standing still has none to report. That is not a limitation of this
-//! generator, it is what the feed carries, and a demonstration that padded it
-//! would mislead.
+//! A self-report carries an identity and a position and nothing else. `ce`
+//! and `le` are the "unknown" sentinel TAK uses, and there is no `<track>`
+//! element because a shore party standing still has none to report.
 
 use std::time::{Duration, SystemTime};
 

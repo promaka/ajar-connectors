@@ -17,14 +17,12 @@
 //! code in the list. The bearing is true, clockwise from north, from that
 //! receiver to the emitter at the observation time.
 //!
-//! Two things ride in metadata by design. The receiver's own word for the scan
-//! (`circular`) is not in the contract's modulation set, and the convention is
-//! to send the raw spelling where nothing is lost rather than force it into a
-//! vocabulary and have Core quarantine it. And the position: an ESM receiver
-//! gives you a line, not a fix, and it takes two lines or a correlation to make
-//! a position. The truth the bearing points at rides as `truth_lat` and
-//! `truth_lon` so a consumer can check their own association against it, and
-//! the event carries no `location` because the sensor produced none.
+//! The position rides in metadata by design: an ESM receiver gives a line,
+//! not a fix, and it takes two lines or a correlation to make a position. The
+//! truth the bearing points at rides as `truth_lat` and `truth_lon` so a
+//! consumer can check their association against it, and the event carries no
+//! `location` because the sensor produced none. `scan_type` is governed free
+//! text in the contract and is emitted as such.
 
 use std::time::SystemTime;
 
@@ -119,9 +117,9 @@ mod tests {
             attr("observed_by_alt_id_standard").as_deref(),
             Some("ASTERIX")
         );
-        // The receiver's own spelling stays raw, in metadata, never governed.
+        // Free text in the contract, so the receiver's own word is governed.
+        assert_eq!(attr("scan_type").as_deref(), Some("circular"));
         assert!(attr("modulation").is_none());
-        assert_eq!(meta("scan_type").as_deref(), Some("circular"));
         // A line, not a fix.
         assert!(ev.location.is_none(), "an ESM bearing is not a position");
         assert!(meta("truth_lat").is_some());

@@ -2,12 +2,10 @@
 //! AIS: the vessel's position and static reports as `!AIVDM` sentences, what
 //! the `ais-nmea` connector reads.
 //!
-//! What AIS genuinely carries, and therefore what this emits: identity (MMSI,
-//! callsign, name), position, course, heading, speed, navigational status.
-//! What it does not carry is accuracy in metres. AIS has a one-bit "better or
-//! worse than ten metres" flag and relays the ship's own GPS; turning that into
-//! a figure in metres would invent precision the wire never stated. So there is
-//! no accuracy here, and that absence is the honest part.
+//! What AIS carries, and therefore what this emits: identity (MMSI, callsign,
+//! name), position, course, heading, speed, navigational status. It does not
+//! carry accuracy in metres: AIS has a one-bit "better or worse than ten
+//! metres" flag and relays the ship's own GPS, so no accuracy is emitted.
 //!
 //! Two message types, because that is how a real transponder splits it: type 1
 //! is the position report every few seconds, type 5 is the static and voyage
@@ -16,7 +14,7 @@
 //! multipart exactly as a receiver would relay it. A generator that emitted a
 //! single fat sentence would exercise a path no real receiver uses.
 
-use crate::scenario::{Vessel, VesselState};
+use crate::scenario::{Vessel, VesselState, MPS_TO_KN};
 
 /// The six-bit ASCII armouring every AIS payload character uses.
 fn armour(six: u8) -> u8 {
@@ -170,9 +168,6 @@ pub fn static_report(seq: u8) -> String {
     let (payload, fill) = b.armoured();
     sentences(&payload, fill, seq, 'A').concat()
 }
-
-/// Metres per second to knots.
-pub const MPS_TO_KN: f64 = 1.943_844;
 
 #[cfg(test)]
 mod tests {

@@ -26,22 +26,20 @@
 //! decoder that only read the first block would silently drop the targets
 //! behind it.
 //!
-//! One honest gap: this CAT010 record carries no time of day, so the connector
-//! stamps the plot with its own clock. The CAT062 track does carry the radar's
-//! observation time, so the aircraft demonstrates the two-clock behaviour and
-//! the vessel plot does not.
+//! This CAT010 record carries no time of day, so the connector stamps the
+//! plot with its own clock; the CAT062 track carries the radar's observation
+//! time. The two clocks therefore diverge on the aircraft and not on the plot.
 
 use std::time::SystemTime;
 
 use crate::scenario::{
-    bearing_range, seconds_since_midnight, Aircraft, AircraftState, VesselState, RADAR,
+    bearing_range, seconds_since_midnight, Aircraft, AircraftState, VesselState, FT_PER_M, RADAR,
     RADAR_ALT_M, RADAR_SAC, RADAR_SCAN_PERIOD_S, RADAR_SIC, RADAR_WINDOW,
 };
 
 const LSB_105: f64 = 180.0 / (1u64 << 25) as f64;
 const LSB_120: f64 = 180.0 / (1u64 << 23) as f64;
 const ANGLE_16: f64 = 360.0 / 65_536.0;
-const FT_PER_M: f64 = 3.280_84;
 /// CAT034 message type 1: north marker.
 const NORTH_MARKER: u8 = 1;
 
@@ -183,6 +181,7 @@ mod tests {
                 alt_m: RADAR_ALT_M,
             }))
             .with_entity_map(&map)
+            .expect("SURFACE is in the ontology's vocabulary")
     }
 
     fn attr(ev: &ajar_connector::Event, k: &str) -> Option<String> {

@@ -14,11 +14,11 @@
 # Every governed name below is declared on mim:equipment in the vendored
 # ontology (contract revision 4), so the connector starts. An emitter is
 # reported as equipment and names the platform it sits on with carried_by; a
-# platform event never carries the fingerprint. The receiver's own words for
-# things (its scan type) go to metadata, where nothing is validated and nothing
-# is lost; the governed `modulation` is set only when it maps to the contract's
-# set. An ESM receiver gives a bearing, not a position, so there is no
-# lat_field: the event carries no location because the sensor produced none.
+# platform event never carries the fingerprint. `scan_type` is governed free
+# text; `modulation` is a closed set, so a receiver's own word for it belongs
+# in metadata and the governed attribute is set only when it maps. An ESM
+# receiver gives a bearing, not a position, so there is no lat_field: the
+# event carries no location because the sensor produced none.
 
 source_id = "esm-1"
 nats_url = "nats://127.0.0.1:4222"
@@ -52,6 +52,7 @@ power_dbm = "power_dbm"
 elnot = "elnot"
 prf_hz = "prf_hz"
 pulse_width_us = "pulse_width_us"
+scan_type = "scan_type"
 scan_period_s = "scan_period_s"
 bearing_deg = "bearing_deg"
 bearing_accuracy_deg = "bearing_accuracy_deg"
@@ -63,6 +64,5 @@ observed_by_standard = "observed_by_alt_id_standard"
 # Native identifiers and the receiver's own spellings, kept verbatim.
 [mapping.metadata]
 emitter_id = "emitter_id"
-scan_type = "scan_type"
 truth_lat = "truth_lat"
 truth_lon = "truth_lon"
