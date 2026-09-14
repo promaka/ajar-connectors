@@ -99,6 +99,21 @@ the hyphen and any unrecognised token are mapped before emission. A connector th
 forwarded the wire value would have its tracks quarantined and lose their battle
 dimension without anything appearing to fail.
 
+## Attributes are governed per type, and not inherited
+
+The ontology lists every attribute a type allows, including the ones it shares
+with its parent, and Core looks each attribute up on the event's own entity
+type. So the narrowing in that list is deliberate and enforced: `mim:sensor`
+has no `speed` although its parent `mim:equipment` does, and `environment` is
+governed on `mim:object` alone, because a typed class already implies its
+domain. Set an attribute on a type that does not declare it and Core discards
+it in silence, with the event otherwise accepted.
+
+Two consequences for a connector author. Check each type you emit separately,
+not all your types against all your attributes at once. And do not set a domain
+on a typed class: emit `mim:object` with `environment` when all you have is a
+domain, and a typed class when something in the report identifies the target.
+
 ## Identity and uncertainty are governed, from contract revision 3
 
 Two things used to live only in metadata and are now attributes the ontology

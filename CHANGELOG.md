@@ -13,6 +13,52 @@ Two version lines are tracked independently (see COMPATIBILITY.md):
 
 ## [Unreleased]
 
+### Added
+
+- Ontology contract revision 4 (`mim-5.3-conformant-4`) re-vendored: sixteen
+  optional attributes for emitter parameters and a sensor's own footprint, the
+  platform and observer links, all on `mim:equipment` and `mim:sensor`. Additive
+  over revisions 1 to 3: nothing removed, renamed, narrowed or re-parented.
+- The ASTERIX radar heartbeat promotes four fields a consumer could not see
+  into their governed homes: the antenna rotation period becomes `scan_period_s`
+  and, because a heartbeat is published once per north marker, the report rate
+  `update_interval_s`; the I034/100 polar window becomes
+  `coverage_bearing_start_deg`, `coverage_bearing_end_deg` and
+  `detection_range_m` in metres. The native nautical miles stay in metadata.
+- The CoT connector reads the `<track>` element, so course and speed reach the
+  governed attributes our own guide has always said they map to. CoT states
+  both in the contract's units, so nothing is converted. A malformed value is
+  skipped without losing the track, and a course outside a circle or a negative
+  speed is not published as a number.
+- `ais-nmea` joins the container image matrix. It is the only decoder for MMSI
+  and navigational status, so a maritime site can now deploy it as an image
+  rather than only from the tarball.
+
+### Fixed
+
+- Attributes are governed per entity type and are not inherited, which is how
+  Core reads them. Both validators walked the parent chain instead, so they
+  were more permissive than the enforcer and certified mappings Core discards
+  in silence. The Rust and C++ checks now look an attribute up on the event's
+  own type, one declaration per type, and the fault names the ancestor that
+  does govern the attribute so the mistake is stated rather than guessed at.
+  The inheritance claims are out of both APIs' documentation.
+- Two connectors emitted `environment` on types that do not govern it, so the
+  domain was silently discarded at the boundary: ASTERIX on every configured
+  vessel or land-vehicle class, and STANAG 4676 on an operator's typed
+  override. The attribute now rides only on the untyped class, where the
+  ontology governs it, because a typed class already implies its domain.
+- The ASTERIX ontology gate declared every type against every attribute in one
+  bucket, which is what hid that: it is now one declaration per type, the same
+  shape Core enforces.
+- A bare CAT010 surface plot no longer claims to be a vessel. A radar return is
+  a domain, not an identification, so an unidentified plot is the untyped class
+  with the domain the operator states in `[entity_map] cat010_domain`, nothing
+  claimed if they state none, and a typed class only when the report identifies
+  the target. A domain value outside the ontology's vocabulary is refused rather
+  than passed through to be quarantined. The example config recommended the
+  wrong thing and now matches the guide.
+
 ## [0.6.1] - 2026-09-09
 
 ### Added

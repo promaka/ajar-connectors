@@ -122,15 +122,13 @@ std::vector<ValidationFault> validate(const DeclaredMapping& mapping) {
     return faults;
   }
 
-  // Attributes are inherited: walk to the root, first declaration wins.
+  // Attributes are NOT inherited: Core looks an attribute up on the event's own
+  // entity type, so the type's own list is the whole truth and the narrowing in
+  // it is deliberate (a sensor has no speed though its parent equipment does;
+  // only a bare mim:object carries environment). A validator that walked the
+  // parent chain would certify exactly the mappings Core discards in silence.
   std::map<std::string, const AttrDef*> governed;
-  for (const TypeDef* t = &it->second;;) {
-    for (const auto& a : t->attributes) governed.emplace(a.name, &a);
-    if (t->parent.empty()) break;
-    const auto up = ont.types.find(t->parent);
-    if (up == ont.types.end()) break;
-    t = &up->second;
-  }
+  for (const auto& a : it->second.attributes) governed.emplace(a.name, &a);
 
   std::vector<std::string> names;
   names.reserve(governed.size());

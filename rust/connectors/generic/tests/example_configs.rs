@@ -88,12 +88,12 @@ fn every_example_config_works_when_copied_verbatim() {
             let mapping = Mapping::load(path.to_str().unwrap())
                 .unwrap_or_else(|e| panic!("{name}: mapping does not load: {e}"));
             let declared = common::ontology::Declared {
-                entity_types: vec![mapping.entity_type.clone()],
+                entity_type: mapping.entity_type.clone(),
                 attributes: mapping.attributes.values().cloned().collect(),
                 fixed_values: cfg
                     .default_hostility
                     .clone()
-                    .map(|v| [("hostility".to_string(), v)].into_iter().collect())
+                    .map(|v| vec![("hostility".to_string(), v)])
                     .unwrap_or_default(),
             };
             let faults = common::ontology::check(&declared);

@@ -275,10 +275,17 @@ impl S4676Parser {
             if let Some(id) = &track.identity {
                 b = b.metadata("identity", id.clone());
             }
-            // Always emitted: an absent or unrecognised domain is UNKNOWN, which
-            // is a value Core governs, rather than a missing attribute.
+            // The domain rides as a governed attribute only on the untyped
+            // class, because that is the only type the ontology governs
+            // `environment` on: a typed class implies its domain, and Core reads
+            // the attribute list per type, so setting it on an operator's
+            // `mim:aircraft` override would be discarded in silence. An absent
+            // or unrecognised domain is UNKNOWN, a value Core governs, rather
+            // than a missing attribute.
             let env_code = environment_code(track.environment.as_deref());
-            b = b.attribute("environment", env_code);
+            if entity == "mim:object" {
+                b = b.attribute("environment", env_code);
+            }
             if env_code == "UNKNOWN" {
                 if let Some(raw) = &track.environment {
                     if raw != "UNKNOWN" {
@@ -841,6 +848,27 @@ mod tests {
         let ev = &parser().to_events(xml.as_bytes()).unwrap()[0];
         assert_eq!(tactical(ev, "environment"), Some("UNKNOWN"));
         assert_eq!(tactical(ev, "environment_source"), Some("LITTORAL"));
+    }
+
+    #[test]
+    fn an_operator_typed_track_does_not_claim_a_domain() {
+        // `environment` is governed on mim:object alone: on a typed class the
+        // type is the domain, and setting the attribute would be discarded by
+        // Core in silence. The raw wire token stays in metadata either way.
+        let mut ov = std::collections::HashMap::new();
+        ov.insert("AIR".to_string(), "mim:aircraft".to_string());
+        let p = S4676Parser::new("isr-1", ov, Enrichment::default());
+        let ev = &p.to_events(AIR_TRACK.as_bytes()).unwrap()[0];
+        assert_eq!(ev.entity_type, "mim:aircraft");
+        assert!(
+            !ev.attributes.iter().any(|a| a.key == "environment"),
+            "a typed class must not claim a domain: {:?}",
+            ev.attributes
+        );
+        // The untyped default still carries it, which is the only place it lands.
+        let ev = &parser().to_events(AIR_TRACK.as_bytes()).unwrap()[0];
+        assert_eq!(ev.entity_type, "mim:object");
+        assert!(ev.attributes.iter().any(|a| a.key == "environment"));
     }
 
     #[test]

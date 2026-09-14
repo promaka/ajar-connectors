@@ -260,7 +260,7 @@ operator holds.
 
 Ask them for two things before you write the mapping:
 
-1. **`ontology-mim-5.3-conformant-3.json`** — the contract your events are
+1. **`ontology-mim-5.3-conformant-4.json`** — the contract your events are
    validated against. It is vendored here as
    [`vendor/contract/ontology.json`](../vendor/contract/ontology.json) and
    hash-pinned, so the copy you build against cannot drift. Confirm with your
