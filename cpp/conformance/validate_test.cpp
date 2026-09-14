@@ -36,9 +36,28 @@ int main() {
   check(validate(mapping("mim:aircraft", {"speed", "hostility", "callsign"})).empty(),
         "a correct mapping passes");
 
-  // hostility is declared on mim:object; an aircraft may still set it.
-  check(validate(mapping("mim:aircraft", {"hostility"})).empty(),
-        "attributes are inherited from ancestors");
+  // The ontology lists every attribute a type allows, including the ones it
+  // shares with its parent, and Core reads only that list; so the deliberate
+  // narrowings are enforced: a sensor has no speed though its parent equipment
+  // does, and only a bare mim:object carries environment.
+  check(validate(mapping("mim:aircraft", {"hostility", "speed"})).empty(),
+        "an aircraft lists hostility and speed itself");
+  check(validate(mapping("mim:equipment", {"speed"})).empty(), "equipment has speed");
+  {
+    const auto f = validate(mapping("mim:sensor", {"speed"}));
+    check(f.size() == 1 && f[0].kind == ValidationFault::Kind::UnknownAttribute &&
+              f[0].governed_on == "mim:equipment",
+          "a sensor has no speed, and the fault names the parent that has it");
+    check(f[0].message().find("not inherited") != std::string::npos,
+          "the fault says attributes are not inherited");
+  }
+  check(validate(mapping("mim:object", {"environment"})).empty(),
+        "a bare object carries environment");
+  {
+    const auto f = validate(mapping("mim:vessel", {"environment"}));
+    check(f.size() == 1 && f[0].governed_on == "mim:object",
+          "a vessel has no environment; it is governed on mim:object");
+  }
 
   {
     const auto f = validate(mapping("mim:banana"));

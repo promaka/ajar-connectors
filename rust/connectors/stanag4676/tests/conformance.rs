@@ -111,6 +111,7 @@ fn native_identity_is_preserved_as_metadata_not_id() {
 
     // The message classification rides as the policy tags Core's policy engine
     // reads, normalised from the NITS label; the raw wire string is metadata.
+    // No policy identifier in this message, so the label's wording names it.
     assert_eq!(ev.policy_tags, ["class:unclassified", "policy:NATO"]);
     assert!(ev
         .metadata

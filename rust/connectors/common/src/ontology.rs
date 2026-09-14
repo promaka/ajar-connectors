@@ -14,19 +14,25 @@
 //! The ontology is vendored and hash-pinned alongside `event.proto`, so this
 //! never reaches the network and works in an air-gapped build.
 //!
-//! Attributes are NOT inherited. Core looks an attribute up on the event's own
+//! Attributes are not inherited. Core looks an attribute up on the event's own
 //! entity type, so the per-type list in the ontology is the whole truth and the
 //! narrowing in it is deliberate: `environment` is declared on `mim:object`
 //! alone, because a typed class already implies its domain, and `mim:sensor`
-//! deliberately lacks the kinematics its parent `mim:equipment` allows. A
-//! validator that walked the parent chain would be more permissive than the
-//! enforcer, which is worse than having no validator at all: it would certify
-//! exactly the mappings Core discards in silence. One `Declared` is therefore
-//! one entity type and what a connector sets on it; a connector that emits
-//! several types checks each.
+//! lacks the kinematics its parent `mim:equipment` allows. A validator that
+//! walked the parent chain would accept mappings Core does not deliver. One
+//! `Declared` is therefore one entity type and what a connector sets on it; a
+//! connector that emits several types checks each.
+//!
+//! Two runtime helpers use the same index. [`GovernedAttribute::governed`]
+//! routes a value to a governed attribute when the event's own type declares
+//! it and to metadata otherwise, so a connector never loses a field to the
+//! boundary. [`ungoverned`] lists what an already-built event carries that its
+//! type does not declare, which the shared runtime reports once per name.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::OnceLock;
 
+use ajar_connector::{Event, EventBuilder};
 use serde::Deserialize;
 
 /// The vendored ontology, compiled in so a connector validates without a file.
@@ -84,9 +90,8 @@ pub enum Fault {
     UnknownAttribute {
         name: String,
         closest: Option<String>,
-        /// The nearest ancestor that does declare it, when there is one. This is
-        /// the whole mistake in one field: the author assumed inheritance, and
-        /// naming the type that governs the attribute says so plainly.
+        /// The nearest ancestor that declares it, so the fault can say where
+        /// the attribute is governed.
         governed_on: Option<String>,
     },
     /// A value outside a controlled vocabulary, which case errors trip.
@@ -141,9 +146,8 @@ impl std::fmt::Display for Fault {
 }
 
 /// The nearest ancestor of `from` that declares `attribute`, if any. The parent
-/// chain is read for this reason alone: an attribute that exists further up is
-/// an author assuming inheritance, and the fault should say so rather than
-/// leaving them to guess.
+/// chain is read for this reason alone, so the fault can name where the
+/// attribute is governed.
 fn nearest_ancestor_governing(
     by_id: &BTreeMap<&str, &TypeDef>,
     from: &TypeDef,
@@ -164,13 +168,83 @@ fn load() -> Ontology {
     serde_json::from_str(ONTOLOGY_JSON).expect("vendored ontology is valid JSON")
 }
 
+/// The ontology parsed once, with a per-type attribute index, for the two
+/// helpers that run per event.
+struct Index {
+    version: String,
+    attrs: BTreeMap<String, BTreeSet<String>>,
+}
+
+fn index() -> &'static Index {
+    static INDEX: OnceLock<Index> = OnceLock::new();
+    INDEX.get_or_init(|| {
+        let ont = load();
+        Index {
+            version: ont.version,
+            attrs: ont
+                .types
+                .into_iter()
+                .map(|t| (t.id, t.attributes.into_iter().map(|a| a.name).collect()))
+                .collect(),
+        }
+    })
+}
+
+/// Whether the ontology declares `attribute` on `entity_type` itself. A vendor
+/// namespace (`x:`) is the operator's to govern and is always allowed.
+pub fn governs(entity_type: &str, attribute: &str) -> bool {
+    entity_type.starts_with("x:")
+        || index()
+            .attrs
+            .get(entity_type)
+            .is_some_and(|set| set.contains(attribute))
+}
+
+/// The governed attributes on a built event that its own entity type does not
+/// declare. Core does not deliver these as attributes, so the runtime reports
+/// each name once. An unknown entity type lists every attribute.
+pub fn ungoverned(event: &Event) -> Vec<String> {
+    event
+        .attributes
+        .iter()
+        .filter(|a| !governs(&event.entity_type, &a.key))
+        .map(|a| a.key.clone())
+        .collect()
+}
+
+/// Route a value to where the boundary keeps it: a governed attribute when
+/// the event's own type declares the name, metadata otherwise. This is the
+/// demotion Core applies, done on the producer's side so the field is never
+/// lost and the choice is visible in the event.
+pub trait GovernedAttribute {
+    fn governed(self, entity_type: &str, key: &str, value: impl Into<String>) -> Self;
+}
+
+impl GovernedAttribute for EventBuilder {
+    fn governed(self, entity_type: &str, key: &str, value: impl Into<String>) -> Self {
+        if governs(entity_type, key) {
+            self.attribute(key, value)
+        } else {
+            self.metadata(key, value)
+        }
+    }
+}
+
+/// The ontology revision compiled in.
+pub fn version() -> &'static str {
+    &index().version
+}
+
 /// Case-insensitive near match, which is what catches `friendly` for `Friend`
-/// and `mim:Aircraft` for `mim:aircraft` — the two mistakes that cost most.
-fn closest<'a>(needle: &str, hay: impl Iterator<Item = &'a String>) -> Option<String> {
+/// and `mim:Aircraft` for `mim:aircraft`, the two mistakes that cost most.
+fn closest<'a, S: AsRef<str> + 'a>(
+    needle: &str,
+    hay: impl Iterator<Item = &'a S>,
+) -> Option<String> {
     let lower = needle.to_ascii_lowercase();
-    hay.filter(|c| c.to_ascii_lowercase() == lower)
-        .map(|c| c.to_string())
-        .next()
+    hay.map(AsRef::as_ref)
+        .find(|c| c.to_ascii_lowercase() == lower)
+        .map(str::to_string)
 }
 
 /// Validate a declared mapping. Returns every fault, so one restart shows all of
@@ -202,13 +276,12 @@ pub fn check(declared: &Declared) -> Vec<Fault> {
         .iter()
         .map(|a| (a.name.as_str(), a))
         .collect();
-    let names: BTreeSet<&String> = def.attributes.iter().map(|a| &a.name).collect();
 
     for name in &declared.attributes {
         if !allowed.contains_key(name.as_str()) {
             faults.push(Fault::UnknownAttribute {
                 name: name.clone(),
-                closest: closest(name, names.iter().copied()),
+                closest: closest(name, allowed.keys()),
                 governed_on: nearest_ancestor_governing(&by_id, def, name),
             });
         }
@@ -349,6 +422,40 @@ mod tests {
             }
             other => panic!("expected a vocabulary fault, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn governed_routes_by_the_events_own_type_and_ungoverned_lists_the_rest() {
+        assert!(governs("mim:aircraft", "squawk"));
+        assert!(!governs("mim:object", "squawk"));
+        assert!(governs("mim:object", "environment"));
+        assert!(!governs("mim:vessel", "environment"));
+        assert!(governs("x:acme:radar-hit", "anything"));
+        assert!(!governs("mim:banana", "speed"));
+
+        let ev = EventBuilder::new("s", "mim:vessel")
+            .new_id()
+            .now()
+            .governed("mim:vessel", "speed", "8.0")
+            .governed("mim:vessel", "environment", "SURFACE")
+            .governed("mim:vessel", "squawk", "1234")
+            .build()
+            .unwrap();
+        let attrs: Vec<&str> = ev.attributes.iter().map(|a| a.key.as_str()).collect();
+        let meta: Vec<&str> = ev.metadata.iter().map(|a| a.key.as_str()).collect();
+        assert_eq!(attrs, ["speed"]);
+        assert_eq!(meta, ["environment", "squawk"]);
+        assert!(ungoverned(&ev).is_empty());
+
+        let raw = EventBuilder::new("s", "mim:sensor")
+            .new_id()
+            .now()
+            .attribute("speed", "1")
+            .attribute("hostility", "Unknown")
+            .build()
+            .unwrap();
+        assert_eq!(ungoverned(&raw), ["speed"]);
+        assert!(version().starts_with("mim-5.3-conformant-"));
     }
 
     #[test]

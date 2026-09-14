@@ -40,10 +40,27 @@ Two version lines are tracked independently (see COMPATIBILITY.md):
   a feed, stamped by the shared runtime on every event before sealing so the
   marking is inside the signature. Every field is optional and any one is
   enough; a training feed marks itself `caveats = ["EXERCISE"]` alone. The
-  block is a floor: a marking the wire carries stays beside it and Core takes
-  the higher level. A level outside the five refuses to start rather than
-  shipping unclassified events in silence, and `ajar-doctor` prints the exact
-  tags a config stamps before any event flows.
+  block is a floor: every event leaves with one `class:` tag, the higher of
+  the wire's and the operator's, and the wire's other tags stay beside it. A
+  level outside the five refuses to start rather than shipping unclassified
+  events, and `ajar-doctor` prints the exact tags a config stamps before any
+  event flows.
+
+### Added (runtime)
+
+- Every connector now reports an attribute its event's own type does not
+  govern: once per name in the log, and as `connector_ungoverned_total` on
+  the metrics endpoint. Core does not deliver such attributes, so a mapping
+  that loses a field now has a symptom on the producer's side. A shared
+  `governed` routing helper puts a value in the governed attribute when the
+  type declares it and in metadata otherwise, and the ASTERIX and STANAG 4676
+  connectors use it for the domain, the Mode 3/A code, and the 4676 fields the
+  contract does not yet declare, so nothing is lost at the boundary.
+- STANAG 4676 reads the 4774 policy identifier, which is authoritative for the
+  `policy:` tag when present; the label's own wording decides only when the
+  message states none. A classification string the normaliser cannot read is
+  stamped at the top level rather than left unclassified, with the raw string
+  in metadata.
 
 ### Fixed
 
@@ -57,8 +74,8 @@ Two version lines are tracked independently (see COMPATIBILITY.md):
 
 - Attributes are governed per entity type and are not inherited, which is how
   Core reads them. Both validators walked the parent chain instead, so they
-  were more permissive than the enforcer and certified mappings Core discards
-  in silence. The Rust and C++ checks now look an attribute up on the event's
+  were more permissive than the enforcer and accepted mappings Core does not
+  deliver. The Rust and C++ checks now look an attribute up on the event's
   own type, one declaration per type, and the fault names the ancestor that
   does govern the attribute so the mistake is stated rather than guessed at.
   The inheritance claims are out of both APIs' documentation.
@@ -70,6 +87,9 @@ Two version lines are tracked independently (see COMPATIBILITY.md):
 - The ASTERIX ontology gate declared every type against every attribute in one
   bucket, which is what hid that: it is now one declaration per type, the same
   shape Core enforces.
+- The radar heartbeat promotes the polar window into the sensor's footprint
+  on a north marker only. On a jamming strobe the same item is the extent of
+  the jammed sector, and it now stays in metadata there.
 - A bare CAT010 surface plot no longer claims to be a vessel. A radar return is
   a domain, not an identification, so an unidentified plot is the untyped class
   with the domain the operator states in `[entity_map] cat010_domain`, nothing

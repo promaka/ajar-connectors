@@ -123,8 +123,8 @@ with its parent, and Core looks each attribute up on the event's own entity
 type. So the narrowing in that list is deliberate and enforced: `mim:sensor`
 has no `speed` although its parent `mim:equipment` does, and `environment` is
 governed on `mim:object` alone, because a typed class already implies its
-domain. Set an attribute on a type that does not declare it and Core discards
-it in silence, with the event otherwise accepted.
+domain. Set an attribute on a type that does not declare it and Core does not
+deliver it as an attribute, with the event otherwise accepted.
 
 Two consequences for a connector author. Check each type you emit separately,
 not all your types against all your attributes at once. And do not set a domain

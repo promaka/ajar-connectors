@@ -308,8 +308,7 @@ mod tests {
     fn the_track_element_becomes_governed_course_and_speed() {
         // CoT states course in degrees from true north and speed in metres per
         // second, which is what the contract wants, so the values pass through
-        // unconverted. Our attributes guide named this mapping long before the
-        // decoder read the element.
+        // unconverted.
         let ev = parser().to_event(WITH_TRACK.as_bytes()).unwrap();
         assert_eq!(tactical(&ev, "course"), Some("128.4"));
         assert_eq!(tactical(&ev, "speed"), Some("221.50"));

@@ -22,14 +22,13 @@
 //! feed marks itself `caveats = ["EXERCISE"]` with no classification at all, so
 //! a training track carries the caveat inside its signature wherever it goes.
 //!
-//! The config is a floor, not a ceiling. A tag the wire carried stays, and Core
-//! takes the highest `class:` it finds, so a feed's own marking can raise the
-//! level the operator set but never lower it. That is what an operator means
-//! by "nothing from this radar is below RESTRICTED".
+//! The config is a floor, not a ceiling. Every event leaves with exactly one
+//! `class:` tag, the higher of what the wire carried and what the operator
+//! set, so a feed's own marking can raise the level but never lower it. Other
+//! tags the wire carried stay beside the operator's.
 //!
 //! Validation is at load and fails closed. Core ignores a tag it does not
-//! recognise, so a typo here would ship unclassified events in silence, which
-//! is the exact failure the block exists to end.
+//! recognise, so a misspelt level is refused rather than shipped.
 
 use ajar_connector::Event;
 use serde::Deserialize;
@@ -45,8 +44,9 @@ pub const LEVELS: [&str; 5] = [
     "top-secret",
 ];
 
-/// The most tags one `[marking]` block may produce. Generous for any real
-/// marking, and leaves room under the event's tag limit for what the wire adds.
+/// The most tags one `[marking]` block may produce. The stamp runs after the
+/// builder's own tag limit has been checked, so this keeps the total under
+/// that limit with room for what a wire format adds.
 pub const MAX_CONFIG_TAGS: usize = 16;
 
 /// The `[marking]` block as written.
@@ -120,25 +120,29 @@ pub struct Marking {
 impl Marking {
     /// Validate a block into the tags it will stamp.
     pub fn from_config(cfg: &MarkingConfig) -> Result<Marking, MarkingError> {
-        let mut tags = Vec::new();
+        let mut tags: Vec<String> = Vec::new();
+        let mut push = |tag: String| {
+            if !tags.contains(&tag) {
+                tags.push(tag);
+            }
+        };
         if let Some(level) = &cfg.classification {
             let canonical = classification_level(level)
                 .ok_or_else(|| MarkingError::UnknownLevel(level.clone()))?;
-            tags.push(format!("class:{canonical}"));
+            push(format!("class:{canonical}"));
         }
         if let Some(policy) = &cfg.policy {
-            tags.push(format!("policy:{}", token("policy", policy)?));
+            push(format!("policy:{}", token("policy", policy)?));
         }
         for party in &cfg.releasable_to {
-            tags.push(format!("rel:{}", token("releasable_to", party)?));
+            push(format!("rel:{}", token("releasable_to", party)?));
         }
         for caveat in &cfg.caveats {
-            tags.push(format!("caveat:{}", token("caveats", caveat)?));
+            push(format!("caveat:{}", token("caveats", caveat)?));
         }
         if tags.is_empty() {
             return Err(MarkingError::Empty);
         }
-        tags.dedup();
         if tags.len() > MAX_CONFIG_TAGS {
             return Err(MarkingError::TooMany(tags.len()));
         }
@@ -150,10 +154,37 @@ impl Marking {
         &self.tags
     }
 
-    /// Stamp the marking on an event. Tags the wire already placed stay, and a
-    /// tag already present is not doubled, so applying twice is harmless.
+    /// Stamp the marking on an event. The classification resolves to one
+    /// `class:` tag, the higher of the wire's and the operator's; every other
+    /// tag the wire placed stays, and a tag already present is not doubled,
+    /// so applying twice is harmless.
     pub fn apply(&self, event: &mut Event) {
-        for tag in &self.tags {
+        let floor = self
+            .tags
+            .iter()
+            .find_map(|t| t.strip_prefix("class:"))
+            .and_then(classification_level);
+        if let Some(floor) = floor {
+            let ranked = |t: &String| t.strip_prefix("class:").and_then(classification_level);
+            let highest = event
+                .policy_tags
+                .iter()
+                .filter_map(ranked)
+                .chain(std::iter::once(floor))
+                .max_by_key(|l| rank(l))
+                .expect("the floor is always present");
+            // One class tag, where the wire's was or first, so a consumer that
+            // reads the first class tag sees the resolved level.
+            let at = event
+                .policy_tags
+                .iter()
+                .position(|t| ranked(t).is_some())
+                .unwrap_or(0);
+            event.policy_tags.retain(|t| ranked(t).is_none());
+            let at = at.min(event.policy_tags.len());
+            event.policy_tags.insert(at, format!("class:{highest}"));
+        }
+        for tag in self.tags.iter().filter(|t| !t.starts_with("class:")) {
             if !event.policy_tags.contains(tag) {
                 event.policy_tags.push(tag.clone());
             }
@@ -168,43 +199,61 @@ impl std::fmt::Display for Marking {
 }
 
 /// The canonical level for a classification as an operator or a wire format
-/// spells it: case-insensitive, and the short forms Core also accepts.
+/// spells it: case-insensitive, hyphen, underscore or space between words, and
+/// the short forms Core also accepts.
 pub fn classification_level(raw: &str) -> Option<&'static str> {
-    let lower = raw.trim().to_ascii_lowercase();
-    match lower.as_str() {
-        "unclassified" | "unclass" | "u" => Some("unclassified"),
-        "restricted" | "r" => Some("restricted"),
-        "confidential" | "c" => Some("confidential"),
-        "secret" | "s" => Some("secret"),
-        "top-secret" | "top secret" | "topsecret" | "top_secret" | "ts" => Some("top-secret"),
-        _ => None,
-    }
+    let lower = raw.trim().to_ascii_lowercase().replace(['_', '-'], " ");
+    let i = match lower.as_str() {
+        "unclassified" | "unclass" | "u" => 0,
+        "restricted" | "r" => 1,
+        "confidential" | "c" => 2,
+        "secret" | "s" => 3,
+        "top secret" | "topsecret" | "ts" => 4,
+        _ => return None,
+    };
+    Some(LEVELS[i])
 }
 
-/// The tags for a NATO Information and Track Standard (STANAG 4676)
-/// confidentiality label: the level, and the policy the string names.
+/// Position of a canonical level in [`LEVELS`], lowest first.
+fn rank(level: &str) -> usize {
+    LEVELS.iter().position(|l| *l == level).unwrap_or(0)
+}
+
+/// The tags for a 4774 confidentiality label as STANAG 4676 carries it: the
+/// classification string and, when the message states it, the policy
+/// identifier.
 ///
-/// `NATO SECRET` is a level under the NATO policy, and `COSMIC TOP SECRET` is
-/// NATO's own name for its top level, so both carry `policy:NATO`. A bare level
-/// (`SECRET`) carries no policy; the message's own `PolicyIdentifier` says whose
-/// it is, and the caller passes that separately. An unrecognised string maps
-/// to nothing rather than to a guess, and the raw wire string belongs in
-/// metadata regardless, where nothing is lost.
-pub fn nits_classification(raw: &str) -> Option<Vec<String>> {
-    let trimmed = raw.trim();
-    let upper = trimmed.to_ascii_uppercase();
-    let (level, policy) = if upper == "COSMIC TOP SECRET" {
-        ("top-secret", Some("NATO"))
+/// The policy identifier is authoritative when present. When the message has
+/// none, the label's own wording decides: `NATO SECRET` is a level under the
+/// NATO policy and `COSMIC TOP SECRET` is NATO's name for its top level, so
+/// both carry `policy:NATO`; a bare `SECRET` carries no policy.
+///
+/// A non-empty label the normaliser cannot read is stamped at the top level.
+/// Under-classifying a track is the failure the marking exists to prevent;
+/// over-classifying one until the spelling is mapped is visible and safe. The
+/// raw string belongs in metadata regardless, so nothing is lost. An empty
+/// label yields nothing.
+pub fn wire_classification(raw: &str, policy_id: Option<&str>) -> Vec<String> {
+    let upper = raw.trim().to_ascii_uppercase().replace(['_', '-'], " ");
+    if upper.is_empty() {
+        return Vec::new();
+    }
+    let (level, named_policy) = if upper == "COSMIC TOP SECRET" {
+        (Some("top-secret"), Some("NATO"))
     } else if let Some(rest) = upper.strip_prefix("NATO ") {
-        (classification_level(rest)?, Some("NATO"))
+        (classification_level(rest), Some("NATO"))
     } else {
-        (classification_level(&upper)?, None)
+        (classification_level(&upper), None)
     };
+    let level = level.unwrap_or("top-secret");
     let mut tags = vec![format!("class:{level}")];
+    let policy = policy_id
+        .and_then(|p| token("policy", p).ok())
+        .or_else(|| named_policy.map(str::to_string));
     if let Some(p) = policy {
         tags.push(format!("policy:{p}"));
     }
-    Some(tags)
+    tags
 }
 
 /// A releasability, policy or caveat token: trimmed, uppercased (Core
@@ -328,8 +377,8 @@ mod tests {
 
     #[test]
     fn a_repeated_party_is_stamped_once_and_too_many_is_refused() {
-        let m = Marking::from_config(&block(r#"releasable_to = ["GBR", "GBR"]"#)).unwrap();
-        assert_eq!(m.tags(), ["rel:GBR"]);
+        let m = Marking::from_config(&block(r#"releasable_to = ["GBR", "ITA", "GBR"]"#)).unwrap();
+        assert_eq!(m.tags(), ["rel:GBR", "rel:ITA"]);
         let many: Vec<String> = (0..MAX_CONFIG_TAGS + 1)
             .map(|i| format!("\"P{i}\""))
             .collect();
@@ -344,45 +393,70 @@ mod tests {
             "classification = \"restricted\"\ncaveats = [\"EXERCISE\"]",
         ))
         .unwrap();
-        // The feed's own label survives beside the operator's, and Core takes
-        // the highest class it finds.
-        let mut ev = EventBuilder::new("s", "mim:object")
-            .new_id()
-            .now()
-            .policy_tag("class:secret")
-            .policy_tag("caveat:EXERCISE")
-            .build()
-            .unwrap();
+        let wire = |tags: &[&str]| {
+            let mut b = EventBuilder::new("s", "mim:object").new_id().now();
+            for t in tags {
+                b = b.policy_tag(*t);
+            }
+            b.build().unwrap()
+        };
+        // The wire is higher: its level stands, in its place, once.
+        let mut ev = wire(&["class:secret", "policy:NATO", "caveat:EXERCISE"]);
         m.apply(&mut ev);
         assert_eq!(
             ev.policy_tags,
-            ["class:secret", "caveat:EXERCISE", "class:restricted"]
+            ["class:secret", "policy:NATO", "caveat:EXERCISE"]
         );
+        // The wire is lower: the operator's floor replaces it.
+        let mut ev = wire(&["class:unclassified", "policy:NATO"]);
+        m.apply(&mut ev);
+        assert_eq!(
+            ev.policy_tags,
+            ["class:restricted", "policy:NATO", "caveat:EXERCISE"]
+        );
+        // No wire marking: the operator's, in order.
+        let mut ev = wire(&[]);
+        m.apply(&mut ev);
+        assert_eq!(ev.policy_tags, ["class:restricted", "caveat:EXERCISE"]);
         // Applying again changes nothing.
         m.apply(&mut ev);
-        assert_eq!(ev.policy_tags.len(), 3);
+        assert_eq!(ev.policy_tags, ["class:restricted", "caveat:EXERCISE"]);
+        // A caveat-only marking leaves the wire's level alone.
+        let only = Marking::from_config(&block(r#"caveats = ["EXERCISE"]"#)).unwrap();
+        let mut ev = wire(&["class:secret"]);
+        only.apply(&mut ev);
+        assert_eq!(ev.policy_tags, ["class:secret", "caveat:EXERCISE"]);
     }
 
     #[test]
-    fn nits_labels_normalise_to_the_pair_core_reads() {
+    fn wire_labels_normalise_to_the_tags_core_reads() {
+        let w = |raw: &str, pid: Option<&str>| wire_classification(raw, pid);
         assert_eq!(
-            nits_classification("NATO UNCLASSIFIED").unwrap(),
+            w("NATO UNCLASSIFIED", None),
             ["class:unclassified", "policy:NATO"]
         );
+        assert_eq!(w("NATO SECRET", None), ["class:secret", "policy:NATO"]);
+        assert_eq!(w("NATO_SECRET", None), ["class:secret", "policy:NATO"]);
         assert_eq!(
-            nits_classification("NATO SECRET").unwrap(),
-            ["class:secret", "policy:NATO"]
-        );
-        assert_eq!(
-            nits_classification("COSMIC TOP SECRET").unwrap(),
+            w("COSMIC TOP SECRET", None),
             ["class:top-secret", "policy:NATO"]
         );
-        assert_eq!(nits_classification("SECRET").unwrap(), ["class:secret"]);
+        assert_eq!(w("SECRET", None), ["class:secret"]);
+        assert_eq!(w("Top Secret", None), ["class:top-secret"]);
+        assert_eq!(w("TOP_SECRET", None), ["class:top-secret"]);
+        // The message's policy identifier is authoritative when present.
+        assert_eq!(w("SECRET", Some("UK")), ["class:secret", "policy:UK"]);
         assert_eq!(
-            nits_classification("Top Secret").unwrap(),
-            ["class:top-secret"]
+            w("NATO SECRET", Some("TEST")),
+            ["class:secret", "policy:TEST"]
         );
-        assert_eq!(nits_classification("PROTECTED"), None);
-        assert_eq!(nits_classification(""), None);
+        // A spelling nobody mapped is stamped at the top, never left open.
+        assert_eq!(w("PROTECTED B", None), ["class:top-secret"]);
+        assert_eq!(
+            w("SECRET//NOFORN", Some("US")),
+            ["class:top-secret", "policy:US"]
+        );
+        assert!(w("", Some("UK")).is_empty());
+        assert!(w("   ", None).is_empty());
     }
 }

@@ -196,6 +196,7 @@ struct ValidationFault {
   std::string value;                 // NotInVocabulary: the offending value
   std::string suggestion;            // same name with the correct case, if that is the mistake
   std::vector<std::string> allowed;  // NotInVocabulary: the valid values
+  std::string governed_on;           // UnknownAttribute: the nearest ancestor that declares it, if any
 
   // A sentence naming the fault and the correction, for logs and CI output.
   std::string message() const;

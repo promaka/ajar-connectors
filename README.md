@@ -425,7 +425,7 @@ Any one field is enough: a synthetic or training feed marks itself
 `caveats = ["EXERCISE"]` and nothing else. The block is a floor, not a
 ceiling: a marking the feed carries stays beside it, and Core takes the
 higher level. A level outside the five refuses to start, because Core
-would ignore the tag and the events would ship unclassified in silence.
+would ignore the tag and the events would ship unclassified.
 `ajar-doctor` prints the exact tags a config will stamp before any event
 flows.
 

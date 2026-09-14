@@ -87,9 +87,14 @@ std::string ValidationFault::message() const {
       return m;
     }
     case Kind::UnknownAttribute: {
-      std::string m = "attribute \"" + subject + "\" is not governed for this entity type";
+      std::string m = "attribute \"" + subject + "\" is not governed on this entity type";
       if (!suggestion.empty()) m += " (did you mean \"" + suggestion + "\"?)";
-      return m + "; it would be discarded, put it in metadata instead";
+      if (!governed_on.empty())
+        m += "; it is governed on \"" + governed_on +
+             "\", but attributes are not inherited, so Core would discard it here";
+      else
+        m += "; it would be discarded";
+      return m + ". Put it in metadata instead, which is always kept";
     }
     case Kind::NotInVocabulary: {
       std::string m = subject + " = \"" + value + "\" is not one of ";
@@ -116,7 +121,7 @@ std::vector<ValidationFault> validate(const DeclaredMapping& mapping) {
     ids.reserve(ont.types.size());
     for (const auto& kv : ont.types) ids.push_back(kv.first);
     faults.push_back({ValidationFault::Kind::UnknownEntityType, mapping.entity_type,
-                      {}, case_match(mapping.entity_type, ids), {}});
+                      {}, case_match(mapping.entity_type, ids), {}, {}});
     // With no recognised type there is nothing to check attributes against, and
     // reporting every attribute as unknown would bury the real fault.
     return faults;
@@ -126,7 +131,7 @@ std::vector<ValidationFault> validate(const DeclaredMapping& mapping) {
   // entity type, so the type's own list is the whole truth and the narrowing in
   // it is deliberate (a sensor has no speed though its parent equipment does;
   // only a bare mim:object carries environment). A validator that walked the
-  // parent chain would certify exactly the mappings Core discards in silence.
+  // parent chain would accept mappings Core does not deliver.
   std::map<std::string, const AttrDef*> governed;
   for (const auto& a : it->second.attributes) governed.emplace(a.name, &a);
 
@@ -134,10 +139,23 @@ std::vector<ValidationFault> validate(const DeclaredMapping& mapping) {
   names.reserve(governed.size());
   for (const auto& kv : governed) names.push_back(kv.first);
 
+  // The parent chain is read for one purpose: so the fault can name where an
+  // attribute is governed when it exists further up.
+  const auto governed_on = [&](const std::string& attr) -> std::string {
+    for (const TypeDef* t = &it->second; !t->parent.empty();) {
+      const auto up = ont.types.find(t->parent);
+      if (up == ont.types.end()) break;
+      t = &up->second;
+      for (const auto& a : t->attributes)
+        if (a.name == attr) return up->first;
+    }
+    return {};
+  };
+
   for (const auto& want : mapping.attributes) {
     if (governed.count(want)) continue;
     faults.push_back({ValidationFault::Kind::UnknownAttribute, want, {},
-                      case_match(want, names), {}});
+                      case_match(want, names), {}, governed_on(want)});
   }
 
   for (const auto& [name, value] : mapping.fixed_values) {
@@ -146,7 +164,7 @@ std::vector<ValidationFault> validate(const DeclaredMapping& mapping) {
     const auto& vocab = def->second->values;
     if (std::find(vocab.begin(), vocab.end(), value) == vocab.end())
       faults.push_back({ValidationFault::Kind::NotInVocabulary, name, value,
-                        case_match(value, vocab), vocab});
+                        case_match(value, vocab), vocab, {}});
   }
 
   return faults;

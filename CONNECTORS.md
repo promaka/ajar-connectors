@@ -28,8 +28,11 @@ secondary surveillance radars (PSR, SSR, Mode S), air-defence and coastal radars
 from Thales, Indra, Leonardo, Hensoldt, Terma and others emit it, as does NATO
 ACCS. CAT048 and CAT010 reports carry range and azimuth (or x/y offsets) relative
 to the radar, so set the radar's position in `[sensor]` to geolocate them. A
-CAT010 target is whatever the operator says it is: `[entity_map] cat010 =
-"mim:vessel"` for a coastal radar, `"mim:land-vehicle"` for an airport feed.
+bare CAT010 plot is a return, not an identification, so it is published as an
+untyped object in the domain the operator states: `[entity_map] cat010_domain =
+"SURFACE"` for a coastal radar, `"LAND"` for an airport feed. A typed class
+follows when the report identifies the target (a Mode S address, a vehicle
+fleet code), or when the operator forces one with `cat010`.
 CAT034 makes the radar itself part of the governed picture: its status (NOGO,
 overloads, rotation period, position) is published once per antenna rotation as
 a signed `mim:sensor` heartbeat, and jamming strobes are published as they

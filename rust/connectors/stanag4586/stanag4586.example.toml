@@ -17,17 +17,11 @@ signing_key_path = "/etc/ajar/uas-vsm-1.seed"
 # friendly.
 default_hostility = "Friend"
 
-# The security marking every event from this connector carries, stamped inside
-# the signature before it leaves the box. Without it Core's clearance rules see
-# the events as unclassified. Every field is optional; the levels are
-# unclassified, restricted, confidential, secret and top-secret in any case, and
-# a spelling outside that list refuses to start rather than shipping
-# unclassified events in silence. A marking the feed itself carries stays
-# beside this one, and Core takes the higher level.
+# The security marking every event carries, stamped inside its signature.
+# Every field is optional; see README section 7f.
 # [marking]
 # classification = "restricted"
 # releasable_to = ["GBR", "ITA"]
-# policy = "NATO"
 # caveats = ["EXERCISE"]
 
 # Optional: the entity type decoded vehicles map to (default: mim:aircraft).

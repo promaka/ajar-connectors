@@ -27,7 +27,9 @@
 //! UAP against your feed's edition before operational use.
 
 use ajar_connector::{Event, EventBuilder};
-use ajar_connector_common::{Enrichment, FrameParser, GovernedIdentity, ParseError};
+use ajar_connector_common::{
+    Enrichment, FrameParser, GovernedAttribute, GovernedIdentity, ParseError,
+};
 
 const CAT010: u8 = 10;
 const CAT021: u8 = 21;
@@ -1152,9 +1154,10 @@ pub struct AsterixParser {
     /// means the report's own content decides (`implied_surface_type`).
     cat010_type: Option<String>,
     /// The domain an unidentified CAT010 plot is in, from `[entity_map]
-    /// cat010_domain`. The wire cannot say whether a surface radar watches sea
-    /// or apron, so the operator does; unset, no domain is claimed.
-    surface_domain: Option<&'static str>,
+    /// cat010_domain`, checked against the ontology at construction. The wire
+    /// cannot say whether a surface radar watches sea or apron, so the operator
+    /// does; unset, no domain is claimed.
+    surface_domain: Option<String>,
     /// Entity type for CAT034 radar heartbeats, from `[entity_map] cat034`.
     cat034_type: Option<String>,
     /// Last known self-reported status per radar (SAC, SIC), merged from every
@@ -1206,21 +1209,35 @@ impl AsterixParser {
     /// `"mim:land-vehicle"` for an airport surface feed), `cat034` the type for
     /// radar heartbeats (default `mim:sensor`). Other keys are not this
     /// connector's and are ignored.
-    pub fn with_entity_map(mut self, map: &std::collections::HashMap<String, String>) -> Self {
+    ///
+    /// `cat010_domain` is the domain an unidentified surface plot is in. A
+    /// domain is not a classification: a bare surface return says something is
+    /// on the surface, not what it is, so an operator who knows the feed says
+    /// which surface and one who does not says nothing. The value is checked
+    /// against the ontology's vocabulary here, and a value outside it refuses
+    /// to start rather than shipping plots with no domain.
+    pub fn with_entity_map(
+        mut self,
+        map: &std::collections::HashMap<String, String>,
+    ) -> anyhow::Result<Self> {
         self.cat010_type = map.get("cat010").cloned();
         self.cat034_type = map.get("cat034").cloned();
-        // A domain is not a classification: a bare surface return says something
-        // is on the surface, not what it is. An operator who knows the feed can
-        // say which surface; one who does not says nothing and the plot stays an
-        // undomained object rather than a claimed vessel.
-        self.surface_domain = match map.get("cat010_domain").map(String::as_str) {
-            Some("SURFACE") => Some("SURFACE"),
-            Some("LAND") => Some("LAND"),
-            Some("SUBSURFACE") => Some("SUBSURFACE"),
-            Some("AIR") => Some("AIR"),
-            _ => None,
+        self.surface_domain = match map.get("cat010_domain") {
+            None => None,
+            Some(v) => {
+                let declared = ajar_connector_common::ontology::Declared {
+                    entity_type: "mim:object".to_string(),
+                    attributes: vec!["environment".to_string()],
+                    fixed_values: vec![("environment".to_string(), v.clone())],
+                };
+                let faults = ajar_connector_common::ontology::check(&declared);
+                if let Some(f) = faults.first() {
+                    anyhow::bail!("[entity_map] cat010_domain: {f}");
+                }
+                Some(v.clone())
+            }
         };
-        self
+        Ok(self)
     }
 
     /// Decode every track-bearing record in every data block of one datagram.
@@ -1434,14 +1451,11 @@ impl AsterixParser {
                 b = b.attribute("speed_accuracy", format!("{s:.2}"));
             }
         }
-        // The domain rides only on the untyped class, because that is the only
-        // type the ontology governs `environment` on: a typed class already
-        // implies its domain, and Core reads the attribute list per type, so
-        // setting it on `mim:vessel` would be discarded in silence.
-        if entity_type == "mim:object" {
-            if let Some(env) = self.surface_domain {
-                b = b.attribute("environment", env);
-            }
+        // The domain is governed on the untyped class alone, because a typed
+        // class implies its domain. Routed by what the event's own type
+        // declares, so a typed plot keeps the operator's domain in metadata.
+        if let Some(env) = &self.surface_domain {
+            b = b.governed(&entity_type, "environment", env.clone());
         }
         // Absolute position -> structured location (metres); else the
         // sensor-relative measurement rides as metadata so nothing is lost.
@@ -1490,8 +1504,10 @@ impl AsterixParser {
             b = b.attribute("vertical_rate", format!("{:.1}", vr * 0.3048 / 60.0)); // ft/min -> m/s
             b = b.metadata("vertical_rate_ftmin", format!("{vr:.0}"));
         }
+        // A Mode 3/A code is governed on aircraft; a surface plot that carries
+        // one keeps it in metadata.
         if let Some(sq) = &t.squawk {
-            b = b.attribute("squawk", sq.clone());
+            b = b.governed(&entity_type, "squawk", sq.clone());
         }
         if let Some(cs) = &t.callsign {
             b = b.attribute("callsign", cs.clone());
@@ -1538,7 +1554,7 @@ impl AsterixParser {
             .cat034_type
             .clone()
             .unwrap_or_else(|| "mim:sensor".to_string());
-        let mut b = EventBuilder::new(self.source_id.clone(), entity_type)
+        let mut b = EventBuilder::new(self.source_id.clone(), entity_type.clone())
             .new_id()
             .payload(r.raw.clone())
             .metadata("source_uid", format!("asterix:radar:{}:{}", r.sac, r.sic))
@@ -1559,26 +1575,41 @@ impl AsterixParser {
         }
         if let Some(p) = r.rotation_period_s {
             // I034/041 is the antenna's rotation period, which is the sensor's
-            // scan period outright. It is also this connector's report rate,
-            // because a heartbeat is published once per north marker, so a
-            // consumer knows when the next one is due. Native value kept too.
+            // scan period outright. On a north marker it is also this
+            // connector's report rate, since a heartbeat is published once per
+            // rotation; a strobe is not periodic. Native value kept too.
             b = b
-                .attribute("scan_period_s", format!("{p:.3}"))
-                .attribute("update_interval_s", format!("{p:.3}"))
+                .governed(&entity_type, "scan_period_s", format!("{p:.3}"))
                 .metadata("rotation_period_s", format!("{p:.3}"));
+            if r.message_type == NORTH_MARKER {
+                b = b.governed(&entity_type, "update_interval_s", format!("{p:.3}"));
+            }
         }
         if let Some(sec) = r.sector {
             b = b.metadata("sector", sec.to_string());
         }
         if let Some((r0, r1, a0, a1)) = r.window {
-            // I034/100's polar window is the radar's declared footprint: the
-            // azimuth pair is its coverage arc and the far range edge is how far
-            // it says it can detect. Governed in the contract's units (metres),
-            // with the native nautical miles kept in metadata.
+            // I034/100's polar window means two things. On a north marker it is
+            // the radar's declared footprint: the azimuth pair is its coverage
+            // arc and the far range edge is how far it says it can detect, and
+            // those are governed in the contract's units. On a jamming strobe
+            // it is the extent of the jammed sector, which is not coverage, so
+            // there it stays in metadata alone. Native nautical miles kept.
+            if r.message_type == NORTH_MARKER {
+                b = b
+                    .governed(
+                        &entity_type,
+                        "coverage_bearing_start_deg",
+                        format!("{a0:.3}"),
+                    )
+                    .governed(&entity_type, "coverage_bearing_end_deg", format!("{a1:.3}"))
+                    .governed(
+                        &entity_type,
+                        "detection_range_m",
+                        format!("{:.0}", r1 * NM_TO_M),
+                    );
+            }
             b = b
-                .attribute("coverage_bearing_start_deg", format!("{a0:.3}"))
-                .attribute("coverage_bearing_end_deg", format!("{a1:.3}"))
-                .attribute("detection_range_m", format!("{:.0}", r1 * NM_TO_M))
                 .metadata("window_range_start_nm", format!("{r0:.3}"))
                 .metadata("window_range_end_nm", format!("{r1:.3}"))
                 .metadata("window_azimuth_start_deg", format!("{a0:.3}"))
@@ -2189,7 +2220,7 @@ mod tests {
     fn cat010_entity_map_makes_a_coastal_radar_emit_vessels() {
         let mut map = std::collections::HashMap::new();
         map.insert("cat010".to_string(), "mim:vessel".to_string());
-        let p = parser().with_entity_map(&map);
+        let p = parser().with_entity_map(&map).unwrap();
         let t = &p.parse_block(&block(10, &cat010_wgs84_record())).unwrap()[0];
         let ev = p.to_event_at(t, "2026-06-10T08:00:00Z").unwrap();
         assert_eq!(ev.entity_type, "mim:vessel");
@@ -2285,16 +2316,18 @@ mod tests {
     fn a_typed_class_implies_its_domain_and_does_not_claim_one() {
         // `environment` is governed on `mim:object` alone, so a typed class
         // carries none: the type is the domain. Setting it anyway would be
-        // discarded by Core in silence.
+        // not delivered by Core.
         for ty in ["mim:vessel", "mim:surface-vessel", "mim:subsurface-vessel"] {
             let mut map = std::collections::HashMap::new();
             map.insert("cat010".to_string(), ty.to_string());
             map.insert("cat010_domain".to_string(), "SURFACE".to_string());
-            let p = parser().with_entity_map(&map);
+            let p = parser().with_entity_map(&map).unwrap();
             let t = &p.parse_block(&block(10, &cat010_wgs84_record())).unwrap()[0];
             let ev = p.to_event_at(t, "2026-06-10T08:00:00Z").unwrap();
             assert_eq!(ev.entity_type, ty);
             assert_eq!(attr(&ev, "environment"), None, "{ty}");
+            // The operator's domain is not lost: it rides in metadata.
+            assert_eq!(meta(&ev, "environment"), Some("SURFACE"), "{ty}");
         }
     }
 
@@ -2310,19 +2343,24 @@ mod tests {
         // The operator says which surface; the plot stays an object.
         let mut map = std::collections::HashMap::new();
         map.insert("cat010_domain".to_string(), "SURFACE".to_string());
-        let p = parser().with_entity_map(&map);
+        let p = parser().with_entity_map(&map).unwrap();
         let t = &p.parse_block(&block(10, &cat010_wgs84_record())).unwrap()[0];
         let ev = p.to_event_at(t, "2026-06-10T08:00:00Z").unwrap();
         assert_eq!(ev.entity_type, "mim:object");
         assert_eq!(attr(&ev, "environment"), Some("SURFACE"));
-        // A domain the ontology does not know is refused at config time, not
-        // passed through to be quarantined.
-        let mut bad = std::collections::HashMap::new();
-        bad.insert("cat010_domain".to_string(), "sea".to_string());
-        let p = parser().with_entity_map(&bad);
-        let t = &p.parse_block(&block(10, &cat010_wgs84_record())).unwrap()[0];
-        let ev = p.to_event_at(t, "2026-06-10T08:00:00Z").unwrap();
-        assert_eq!(attr(&ev, "environment"), None);
+        // A domain the ontology does not know is refused at construction, with
+        // the vocabulary in the message, not passed through to be quarantined.
+        for bad_value in ["sea", "surface", "Surface"] {
+            let mut bad = std::collections::HashMap::new();
+            bad.insert("cat010_domain".to_string(), bad_value.to_string());
+            let err = parser()
+                .with_entity_map(&bad)
+                .err()
+                .expect(bad_value)
+                .to_string();
+            assert!(err.contains("cat010_domain"), "{err}");
+            assert!(err.contains("SURFACE"), "{err}");
+        }
     }
 
     #[test]
@@ -2456,6 +2494,7 @@ mod tests {
         // scan, and the rate a consumer should expect heartbeats at.
         assert_eq!(attr(&ev, "scan_period_s"), Some("4.000"));
         assert_eq!(attr(&ev, "update_interval_s"), Some("4.000"));
+
         assert_eq!(meta(&ev, "nogo"), Some("true"));
         assert_eq!(meta(&ev, "rdp_overload"), Some("true"));
         assert_eq!(
@@ -2481,6 +2520,31 @@ mod tests {
     }
 
     #[test]
+    fn a_north_marker_with_a_polar_window_declares_the_radars_footprint() {
+        // I034/100 on a north marker is the coverage the radar reports for:
+        // the azimuth pair is its arc and the far range edge its detection
+        // range, 20 NM = 37040 m. (On a strobe the same item is the jammed
+        // sector, see the strobe test.)
+        let mut r = fspec(&[1, 2, 3, 5, 9]);
+        r.extend_from_slice(&[25, 10]);
+        r.push(NORTH_MARKER);
+        r.extend_from_slice(&300u32.to_be_bytes()[1..]);
+        r.extend_from_slice(&u16b(512));
+        r.extend_from_slice(&u16b(2560)); // rho start 10 NM
+        r.extend_from_slice(&u16b(5120)); // rho end 20 NM
+        r.extend_from_slice(&u16b(8192)); // theta start 45
+        r.extend_from_slice(&u16b(16384)); // theta end 90
+        let p = parser();
+        let rep = &p.parse_service_block(&block(34, &r)).unwrap()[0];
+        let ev = p.service_event_at(rep, "2026-06-10T08:00:00Z").unwrap();
+        assert_eq!(attr(&ev, "coverage_bearing_start_deg"), Some("45.000"));
+        assert_eq!(attr(&ev, "coverage_bearing_end_deg"), Some("90.000"));
+        assert_eq!(attr(&ev, "detection_range_m"), Some("37040"));
+        assert_eq!(attr(&ev, "update_interval_s"), Some("4.000"));
+        assert_eq!(meta(&ev, "window_range_end_nm"), Some("20.000"));
+    }
+
+    #[test]
     fn cat034_jamming_strobe_is_published_with_its_window() {
         let mut r = fspec(&[1, 2, 9]);
         r.extend_from_slice(&[25, 10]);
@@ -2498,11 +2562,12 @@ mod tests {
         assert_eq!(meta(&ev, "window_range_end_nm"), Some("20.000"));
         assert_eq!(meta(&ev, "window_azimuth_start_deg"), Some("45.000"));
         assert_eq!(meta(&ev, "window_azimuth_end_deg"), Some("90.000"));
-        // The radar's footprint, governed (revision 4): the coverage arc and the
-        // far range edge in metres, 20 NM = 37040 m.
-        assert_eq!(attr(&ev, "coverage_bearing_start_deg"), Some("45.000"));
-        assert_eq!(attr(&ev, "coverage_bearing_end_deg"), Some("90.000"));
-        assert_eq!(attr(&ev, "detection_range_m"), Some("37040"));
+        // On a strobe the window is the jammed sector, not the radar's
+        // footprint, so nothing about coverage or report rate is claimed.
+        assert_eq!(attr(&ev, "coverage_bearing_start_deg"), None);
+        assert_eq!(attr(&ev, "coverage_bearing_end_deg"), None);
+        assert_eq!(attr(&ev, "detection_range_m"), None);
+        assert_eq!(attr(&ev, "update_interval_s"), None);
         assert_eq!(
             p.jamming_strobes.load(std::sync::atomic::Ordering::Relaxed),
             1
