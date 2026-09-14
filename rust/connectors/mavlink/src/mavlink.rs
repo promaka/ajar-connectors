@@ -929,6 +929,33 @@ mod tests {
     }
 
     #[test]
+    fn the_reference_heartbeat_frame_decodes_byte_for_byte() {
+        // Ground truth from the synthetic feed's specification: a MAVLink 1
+        // HEARTBEAT as a generator puts it on the wire, CRC and all. Pinning it
+        // here means a generator and this decoder cannot drift apart without a
+        // test failing, which is the only way the two stay byte-compatible.
+        const REFERENCE: &str = "fe0900010100000000000203800403be39";
+        let heartbeat: Vec<u8> = (0..REFERENCE.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&REFERENCE[i..i + 2], 16).unwrap())
+            .collect();
+        let p = governed();
+        // A heartbeat carries no position, so it updates the cached state and
+        // yields no track of its own.
+        assert!(p.parse_frame(&heartbeat).unwrap().is_none());
+        // What it did say: an armed multirotor on ArduPilot, actively flying.
+        let pos = {
+            let mut payload = vec![0u8; 28];
+            put_i32(&mut payload, 4, 507_950_000);
+            put_i32(&mut payload, 8, -11_050_000);
+            p.parse_frame(&frame(33, &payload)).unwrap().unwrap()
+        };
+        assert_eq!(pos.state.vehicle_type, Some("multirotor"));
+        assert_eq!(pos.state.armed, Some(true));
+        assert_eq!(pos.state.status, Some("active"));
+    }
+
+    #[test]
     fn mavlink2_accuracy_extensions_become_contract_uncertainty() {
         let p = governed();
         let mut payload = vec![0u8; 50];

@@ -23,6 +23,19 @@ signing_key_path = "/etc/ajar/uav-flight-1.seed"
 # hostility of its own).
 default_hostility = "Friend"
 
+# The security marking every event from this connector carries, stamped inside
+# the signature before it leaves the box. Without it Core's clearance rules see
+# the events as unclassified. Every field is optional; the levels are
+# unclassified, restricted, confidential, secret and top-secret in any case, and
+# a spelling outside that list refuses to start rather than shipping
+# unclassified events in silence. A marking the feed itself carries stays
+# beside this one, and Core takes the higher level.
+# [marking]
+# classification = "restricted"
+# releasable_to = ["GBR", "ITA"]
+# policy = "NATO"
+# caveats = ["EXERCISE"]
+
 # The connector decodes full telemetry (position, attitude, airdata, power/health,
 # GPS quality, flight mode) and maps every field the drone reports; whatever it
 # omits stays absent. Each airframe is its own track (MAVLink system id -> stable

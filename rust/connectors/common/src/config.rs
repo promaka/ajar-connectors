@@ -48,6 +48,12 @@ pub struct Config {
     /// colouring on the map.
     #[serde(default)]
     pub default_hostility: Option<String>,
+    /// The security marking stamped on every event this connector publishes,
+    /// inside the signature. The operator's assertion about the feed, in the
+    /// same spirit as `default_hostility`; see [`crate::marking`]. Absent, the
+    /// events carry only what the wire format itself says.
+    #[serde(default)]
+    pub marking: Option<crate::marking::MarkingConfig>,
     /// The sensor's own site, for feeds that report positions relative to it
     /// (ASTERIX CAT048 monoradar reports are range/azimuth from the radar). A
     /// connector that needs it geolocates against this; without it, the relative
@@ -504,7 +510,8 @@ fn default_interval() -> u64 {
 impl Config {
     /// Load and validate a config file. Per-transport required fields are enforced
     /// by the config shape itself (a missing `group` on `udp-multicast` is a parse
-    /// error), so there is nothing further to check here.
+    /// error); the marking block is the one thing with rules the shape cannot
+    /// express, and it is checked here so a bad marking never starts.
     pub fn load(path: &str) -> anyhow::Result<Self> {
         let text = std::fs::read_to_string(path).map_err(|e| {
             anyhow::anyhow!(
@@ -512,13 +519,26 @@ impl Config {
                  connector (*.example.toml) shows every field; copy it and edit."
             )
         })?;
-        toml::from_str(&text).map_err(|e| {
+        let cfg: Config = toml::from_str(&text).map_err(|e| {
             let msg = e.to_string();
             match did_you_mean(&msg) {
                 Some(hint) => anyhow::anyhow!("parsing config {path}: {msg}\n{hint}"),
                 None => anyhow::anyhow!("parsing config {path}: {msg}"),
             }
-        })
+        })?;
+        cfg.marking()
+            .map_err(|e| anyhow::anyhow!("parsing config {path}: {e}"))?;
+        Ok(cfg)
+    }
+
+    /// The validated marking, if the config declares one. Core ignores a tag it
+    /// does not recognise, so a mistake here would ship unclassified events in
+    /// silence; it is an error instead.
+    pub fn marking(&self) -> Result<Option<crate::marking::Marking>, crate::marking::MarkingError> {
+        self.marking
+            .as_ref()
+            .map(crate::marking::Marking::from_config)
+            .transpose()
     }
 }
 
@@ -620,6 +640,48 @@ mod tests {
             msg.contains("did you mean the value `udp-multicast`?"),
             "{msg}"
         );
+    }
+
+    #[test]
+    fn a_marking_block_is_validated_at_load_and_a_bad_one_refuses_to_start() {
+        let base = "source_id = \"x\"\nnats_url = \"nats://h:4222\"\nsigning_key_path = \"k\"\n\
+                    [transport]\nkind = \"udp\"\nbind = \"0.0.0.0:1\"\n";
+        // The documented block loads and yields the tags in order.
+        let p = write(
+            "marking-ok",
+            &format!(
+                "{base}[marking]\nclassification = \"Restricted\"\nreleasable_to = [\"GBR\", \"ITA\"]\n\
+                 policy = \"NATO\"\ncaveats = [\"EXERCISE\"]\n"
+            ),
+        );
+        let m = Config::load(&p).unwrap().marking().unwrap().unwrap();
+        assert_eq!(
+            m.to_string(),
+            "class:restricted policy:NATO rel:GBR rel:ITA caveat:EXERCISE"
+        );
+        // A level Core would not recognise is refused at load, naming the file
+        // and the five levels, rather than shipping unclassified events.
+        let p = write(
+            "marking-bad",
+            &format!("{base}[marking]\nclassification = \"official-sensitive\"\n"),
+        );
+        let msg = Config::load(&p).unwrap_err().to_string();
+        assert!(msg.contains("parsing config"), "{msg}");
+        assert!(msg.contains("official-sensitive"), "{msg}");
+        assert!(msg.contains("top-secret"), "{msg}");
+        // A field the block does not have is a typo, answered like any other.
+        let p = write(
+            "marking-typo",
+            &format!("{base}[marking]\nclasification = \"secret\"\n"),
+        );
+        let msg = Config::load(&p).unwrap_err().to_string();
+        assert!(
+            msg.contains("did you mean the field `classification`?"),
+            "{msg}"
+        );
+        // No block: no marking, and nothing to validate.
+        let p = write("marking-none", base);
+        assert!(Config::load(&p).unwrap().marking().unwrap().is_none());
     }
 
     #[test]

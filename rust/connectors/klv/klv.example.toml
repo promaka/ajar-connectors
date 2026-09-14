@@ -22,6 +22,19 @@ signing_key_path = "/etc/ajar/uas-klv-1.seed"
 # COP (e.g. "friendly" for own-force UAS).
 default_hostility = "Friend"
 
+# The security marking every event from this connector carries, stamped inside
+# the signature before it leaves the box. Without it Core's clearance rules see
+# the events as unclassified. Every field is optional; the levels are
+# unclassified, restricted, confidential, secret and top-secret in any case, and
+# a spelling outside that list refuses to start rather than shipping
+# unclassified events in silence. A marking the feed itself carries stays
+# beside this one, and Core takes the higher level.
+# [marking]
+# classification = "restricted"
+# releasable_to = ["GBR", "ITA"]
+# policy = "NATO"
+# caveats = ["EXERCISE"]
+
 [transport]
 # A metadata extractor commonly forwards each KLV set as one UDP datagram.
 kind = "udp"

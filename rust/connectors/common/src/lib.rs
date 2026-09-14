@@ -34,6 +34,7 @@ pub mod health;
 pub mod http_server;
 pub mod identity;
 pub mod key;
+pub mod marking;
 pub mod nats;
 pub mod ontology;
 pub mod profile;

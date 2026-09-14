@@ -109,8 +109,13 @@ fn native_identity_is_preserved_as_metadata_not_id() {
     assert!((loc.latitude - 26.3).abs() < 1e-6);
     assert!((loc.longitude - 50.6).abs() < 1e-6);
 
-    // The message classification rides as a policy tag (governance provenance).
-    assert_eq!(ev.policy_tags, vec!["NATO UNCLASSIFIED".to_string()]);
+    // The message classification rides as the policy tags Core's policy engine
+    // reads, normalised from the NITS label; the raw wire string is metadata.
+    assert_eq!(ev.policy_tags, ["class:unclassified", "policy:NATO"]);
+    assert!(ev
+        .metadata
+        .iter()
+        .any(|m| m.key == "nits_classification" && m.value == "NATO UNCLASSIFIED"));
 }
 
 #[test]

@@ -33,8 +33,27 @@ Two version lines are tracked independently (see COMPATIBILITY.md):
 - `ais-nmea` joins the container image matrix. It is the only decoder for MMSI
   and navigational status, so a maritime site can now deploy it as an image
   rather than only from the tarball.
+- A `[marking]` block in every connector's config. Core's clearance rules read
+  a classification, releasability, policy and caveats off each event's policy
+  tags, and nothing on the way in set them, so every event from a stock
+  connector arrived unclassified. The block is the operator's assertion about
+  a feed, stamped by the shared runtime on every event before sealing so the
+  marking is inside the signature. Every field is optional and any one is
+  enough; a training feed marks itself `caveats = ["EXERCISE"]` alone. The
+  block is a floor: a marking the wire carries stays beside it and Core takes
+  the higher level. A level outside the five refuses to start rather than
+  shipping unclassified events in silence, and `ajar-doctor` prints the exact
+  tags a config stamps before any event flows.
 
 ### Fixed
+
+- STANAG 4676 emitted its confidentiality label as a raw policy tag (`NATO
+  UNCLASSIFIED`), which Core's policy engine does not read, so the one feed
+  that carried a classification produced no label. The label is now
+  normalised into the tags Core reads (`class:unclassified` and
+  `policy:NATO`), with the raw wire string kept in metadata, and a spelling
+  the normaliser does not know goes to metadata alone rather than becoming a
+  tag nothing reads.
 
 - Attributes are governed per entity type and are not inherited, which is how
   Core reads them. Both validators walked the parent chain instead, so they

@@ -87,6 +87,12 @@ pub async fn run(
 ) -> anyhow::Result<()> {
     let key = key::load(&cfg.signing_key_path)?;
     let subject = format!("{}.{}", cfg.subject_prefix, cfg.source_id);
+    // The operator's marking, stamped before sealing so it is inside the
+    // signature. Validated at config load; this cannot fail on a loaded config.
+    let marking = cfg.marking()?;
+    if let Some(m) = &marking {
+        tracing::info!(tags = %m, "every event carries the configured marking");
+    }
 
     tracing::info!(
         source = %cfg.source_id,
@@ -151,7 +157,10 @@ pub async fn run(
                             // Zero events (keep-alive, unmapped, buffered fragment) simply
                             // publishes nothing; a batched frame publishes each in turn.
                             Ok(events) => {
-                                for event in events {
+                                for mut event in events {
+                                    if let Some(m) = &marking {
+                                        m.apply(&mut event);
+                                    }
                                     let headers = ingest_headers(&event.id);
                                     let sealed = seal(&canonical_bytes(&event), &key);
                                     // Link known down + spool configured: spool at

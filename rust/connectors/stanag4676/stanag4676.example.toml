@@ -18,6 +18,19 @@ signing_key_path = "/etc/ajar/isr-tracker-1.seed"
 # absent or ambiguous (ASSUMED_FRIEND / SUSPECT / UNKNOWN).
 # default_hostility = "Unknown"
 
+# The security marking every event from this connector carries, stamped inside
+# the signature before it leaves the box. Without it Core's clearance rules see
+# the events as unclassified. Every field is optional; the levels are
+# unclassified, restricted, confidential, secret and top-secret in any case, and
+# a spelling outside that list refuses to start rather than shipping
+# unclassified events in silence. A marking the feed itself carries stays
+# beside this one, and Core takes the higher level.
+# [marking]
+# classification = "restricted"
+# releasable_to = ["GBR", "ITA"]
+# policy = "NATO"
+# caveats = ["EXERCISE"]
+
 # Every 4676 `environment` value is a domain, not a classification: AIR says a
 # track is in the air, not that it is an aircraft. So every track is emitted as
 # `mim:object` with the environment as an attribute, rather than asserting a type

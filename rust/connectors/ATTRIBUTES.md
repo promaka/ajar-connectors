@@ -99,6 +99,23 @@ the hyphen and any unrecognised token are mapped before emission. A connector th
 forwarded the wire value would have its tracks quarantined and lose their battle
 dimension without anything appearing to fail.
 
+## Marking rides as policy tags, and the operator sets it
+
+Classification is not an attribute. It travels in the event's policy tags, in
+the form Core's policy engine reads: `class:<level>` with the level one of
+`unclassified`, `restricted`, `confidential`, `secret` or `top-secret`;
+`rel:<PARTY>` per releasability; `policy:<ID>` for whose scheme the level is
+in; `caveat:<X>` per handling caveat. Anything else in the tags is ignored,
+which is why a raw wire string such as `NATO SECRET` produced no label.
+
+Two sources set them. The `[marking]` block in every connector's config is the
+operator's assertion about the feed, stamped by the shared runtime on every
+event before sealing, the same way `default_hostility` asserts friend or foe
+for feeds that carry none. And a wire format that carries its own label is
+normalised: STANAG 4676's `NATO SECRET` becomes `class:secret` and
+`policy:NATO`, with the raw string kept in metadata. The two combine as a
+floor: the wire can raise the level the operator set, never lower it.
+
 ## Attributes are governed per type, and not inherited
 
 The ontology lists every attribute a type allows, including the ones it shares

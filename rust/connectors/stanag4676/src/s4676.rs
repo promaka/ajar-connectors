@@ -266,8 +266,20 @@ impl S4676Parser {
                 // Governed identity: the track UUID under its standard code.
                 b = b.identity("STANAG4676", uid.clone());
             }
+            // The NITS confidentiality label, normalised into the tags Core's
+            // policy engine reads: `NATO SECRET` becomes `class:secret` and
+            // `policy:NATO`. The raw wire string was a tag until 0.6.2, and
+            // Core ignored it, so a classified feed produced no label at all.
+            // The raw string stays in metadata, where nothing is lost, and a
+            // spelling the normaliser does not know goes there alone rather
+            // than becoming a tag nothing reads.
             if let Some(cls) = classification {
-                b = b.policy_tag(cls.to_string());
+                b = b.metadata("nits_classification", cls.to_string());
+                if let Some(tags) = ajar_connector_common::marking::nits_classification(cls) {
+                    for t in tags {
+                        b = b.policy_tag(t);
+                    }
+                }
             }
             if let Some(v) = nits_version {
                 b = b.metadata("nits_version", v.to_string());
@@ -752,9 +764,27 @@ mod tests {
     }
 
     #[test]
-    fn classification_becomes_policy_tag() {
+    fn classification_becomes_the_tags_core_reads_and_the_wire_string_is_kept() {
         let ev = &parser().to_events(AIR_TRACK.as_bytes()).unwrap()[0];
-        assert_eq!(ev.policy_tags, vec!["NATO UNCLASSIFIED".to_string()]);
+        assert_eq!(ev.policy_tags, ["class:unclassified", "policy:NATO"]);
+        assert_eq!(
+            ev.metadata
+                .iter()
+                .find(|m| m.key == "nits_classification")
+                .map(|m| m.value.as_str()),
+            Some("NATO UNCLASSIFIED")
+        );
+    }
+
+    #[test]
+    fn an_unknown_classification_string_is_kept_but_never_becomes_a_tag() {
+        let xml = AIR_TRACK.replace("NATO UNCLASSIFIED", "PROTECTED B");
+        let ev = &parser().to_events(xml.as_bytes()).unwrap()[0];
+        assert!(ev.policy_tags.is_empty(), "{:?}", ev.policy_tags);
+        assert!(ev
+            .metadata
+            .iter()
+            .any(|m| m.key == "nits_classification" && m.value == "PROTECTED B"));
     }
 
     #[test]
