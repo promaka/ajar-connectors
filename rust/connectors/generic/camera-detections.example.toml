@@ -25,6 +25,13 @@ signing_key_path = "/etc/ajar/camera-north-gate.seed"
 # Camera detections carry no hostility; stamp one for the COP.
 default_hostility = "Unknown"
 
+# The security marking every event carries, stamped inside its signature.
+# Every field is optional; see README section 7f.
+# [marking]
+# classification = "restricted"
+# releasable_to = ["GBR", "ITA"]
+# caveats = ["EXERCISE"]
+
 [transport]
 # The detector pushes newline-delimited JSON; listen for it (or dial it with
 # tcp-client, or watch a drop directory of detection files with dir).

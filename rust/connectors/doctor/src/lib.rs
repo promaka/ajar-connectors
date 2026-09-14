@@ -43,6 +43,9 @@ struct Inputs {
     subject_prefix: String,
     spool: Option<common::spool::SpoolConfig>,
     transport: Option<common::Transport>,
+    /// The validated marking, when the config declares one. A config with a
+    /// bad marking does not load at all, so this is never an error here.
+    marking: Option<common::marking::Marking>,
 }
 
 /// Run every check and return the findings in onboarding order.
@@ -55,6 +58,7 @@ pub async fn run(opts: &Options) -> Vec<Finding> {
         Some(path) => match common::Config::load(path) {
             Ok(cfg) => Ok(Inputs {
                 spool: cfg.spool_config(),
+                marking: cfg.marking().ok().flatten(),
                 transport: Some(cfg.transport.clone()),
                 source_id: cfg.source_id,
                 nats_url: cfg.nats_url,
@@ -89,6 +93,7 @@ pub async fn run(opts: &Options) -> Vec<Finding> {
             for step in [
                 "signing key",
                 "spool",
+                "marking",
                 "registration",
                 "endpoint",
                 "tls policy",
@@ -107,6 +112,10 @@ pub async fn run(opts: &Options) -> Vec<Finding> {
 
     // Step 2a: the spool, when configured; a one-line hint when not.
     check_spool(&mut out, &cfg);
+
+    // Step 2a': the marking every event will carry, shown before any event
+    // flows, because an unmarked feed is the failure a site notices last.
+    check_marking(&mut out, &cfg);
 
     // Step 2b: the native-feed transport, where a naval first hour actually
     // fails (a serial adapter that is not there, a multicast group joined on
@@ -210,6 +219,7 @@ fn inputs_from_env() -> Result<Inputs, Finding> {
         signing_key_path: get("AJAR_SIGNING_SEED").expect("checked"),
         subject_prefix: "ajar.ingest".to_string(),
         spool: None,
+        marking: None,
         transport: None,
     })
 }
@@ -281,6 +291,22 @@ fn check_signing_key(out: &mut Vec<Finding>, cfg: &Inputs) -> Option<String> {
         format!("loads and derives public key {derived}"),
     ));
     Some(derived)
+}
+
+fn check_marking(out: &mut Vec<Finding>, cfg: &Inputs) {
+    match &cfg.marking {
+        Some(m) => out.push(Finding::ok(
+            "marking",
+            format!("every event is stamped {m} inside its signature"),
+        )),
+        None => out.push(Finding::skip(
+            "marking",
+            "not configured (optional). Events carry only the marking their wire \
+             format states, which for most feeds is none, so Core's clearance rules \
+             see them as unclassified. A [marking] block with classification, \
+             releasable_to, policy or caveats stamps every event before sealing.",
+        )),
+    }
 }
 
 fn check_spool(out: &mut Vec<Finding>, cfg: &Inputs) {

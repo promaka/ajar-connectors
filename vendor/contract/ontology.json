@@ -1,5 +1,5 @@
 {
-  "version": "mim-5.3-conformant-3",
+  "version": "mim-5.3-conformant-4",
   "types": [
     {
       "id": "mim:concept",
@@ -1071,6 +1071,133 @@
           "datatype": "number",
           "unit": "dBm",
           "required": false
+        },
+        {
+          "name": "modulation",
+          "datatype": "text",
+          "required": false,
+          "values": [
+            "AmplitudeModulation",
+            "DoubleSideBand",
+            "FrequencyModulation",
+            "FrequencyShiftKeying",
+            "LowerSideBand",
+            "PhaseShiftKeying",
+            "UpperSideBand"
+          ],
+          "mim": "Object/NetworkAddress/NetworkAddressFrequency/NetworkFrequencyModulationCode (best-fit family)"
+        },
+        {
+          "name": "elnot",
+          "datatype": "text",
+          "required": false,
+          "mim": "Equipment/EquipmentElectronicEmission/ElectronicEmissionElintNotationIdentifier"
+        },
+        {
+          "name": "prf_hz",
+          "datatype": "number",
+          "unit": "Hz",
+          "required": false,
+          "min": 0.0
+        },
+        {
+          "name": "pulse_width_us",
+          "datatype": "number",
+          "unit": "us",
+          "required": false,
+          "min": 0.0
+        },
+        {
+          "name": "scan_type",
+          "datatype": "text",
+          "required": false
+        },
+        {
+          "name": "scan_period_s",
+          "datatype": "number",
+          "unit": "s",
+          "required": false,
+          "min": 0.0
+        },
+        {
+          "name": "bearing_deg",
+          "datatype": "number",
+          "unit": "deg",
+          "required": false,
+          "min": 0.0,
+          "max": 360.0
+        },
+        {
+          "name": "bearing_accuracy_deg",
+          "datatype": "number",
+          "unit": "deg",
+          "required": false,
+          "min": 0.0,
+          "max": 360.0
+        },
+        {
+          "name": "observed_by_alt_id",
+          "datatype": "text",
+          "required": false
+        },
+        {
+          "name": "observed_by_alt_id_standard",
+          "datatype": "text",
+          "required": false,
+          "values": [
+            "ADEM",
+            "AIS",
+            "ASCA",
+            "Link11",
+            "Link16",
+            "Link22",
+            "MAVLink",
+            "MIP2",
+            "MIP31",
+            "MaritimeTrack",
+            "NFFI13",
+            "NVG",
+            "UDRA_ID",
+            "UTID",
+            "VMF",
+            "ASTERIX",
+            "STANAG4676",
+            "CoT",
+            "ICAO24"
+          ]
+        },
+        {
+          "name": "carried_by_alt_id",
+          "datatype": "text",
+          "required": false,
+          "mim": "Materiel/MaterielCarryingMateriel/BattlespaceConceptAlternateIdentifier/AlternateIdentifierIdentifier"
+        },
+        {
+          "name": "carried_by_alt_id_standard",
+          "datatype": "text",
+          "required": false,
+          "values": [
+            "ADEM",
+            "AIS",
+            "ASCA",
+            "Link11",
+            "Link16",
+            "Link22",
+            "MAVLink",
+            "MIP2",
+            "MIP31",
+            "MaritimeTrack",
+            "NFFI13",
+            "NVG",
+            "UDRA_ID",
+            "UTID",
+            "VMF",
+            "ASTERIX",
+            "STANAG4676",
+            "CoT",
+            "ICAO24"
+          ],
+          "mim": "Materiel/MaterielCarryingMateriel/BattlespaceConceptAlternateIdentifier/AlternateIdentifierStandardCode"
         }
       ],
       "allows_metadata": true
@@ -2090,6 +2217,163 @@
           "datatype": "number",
           "unit": "dBm",
           "required": false
+        },
+        {
+          "name": "modulation",
+          "datatype": "text",
+          "required": false,
+          "values": [
+            "AmplitudeModulation",
+            "DoubleSideBand",
+            "FrequencyModulation",
+            "FrequencyShiftKeying",
+            "LowerSideBand",
+            "PhaseShiftKeying",
+            "UpperSideBand"
+          ],
+          "mim": "Object/NetworkAddress/NetworkAddressFrequency/NetworkFrequencyModulationCode (best-fit family)"
+        },
+        {
+          "name": "elnot",
+          "datatype": "text",
+          "required": false,
+          "mim": "Equipment/EquipmentElectronicEmission/ElectronicEmissionElintNotationIdentifier"
+        },
+        {
+          "name": "prf_hz",
+          "datatype": "number",
+          "unit": "Hz",
+          "required": false,
+          "min": 0.0
+        },
+        {
+          "name": "pulse_width_us",
+          "datatype": "number",
+          "unit": "us",
+          "required": false,
+          "min": 0.0
+        },
+        {
+          "name": "scan_type",
+          "datatype": "text",
+          "required": false
+        },
+        {
+          "name": "scan_period_s",
+          "datatype": "number",
+          "unit": "s",
+          "required": false,
+          "min": 0.0
+        },
+        {
+          "name": "bearing_deg",
+          "datatype": "number",
+          "unit": "deg",
+          "required": false,
+          "min": 0.0,
+          "max": 360.0
+        },
+        {
+          "name": "bearing_accuracy_deg",
+          "datatype": "number",
+          "unit": "deg",
+          "required": false,
+          "min": 0.0,
+          "max": 360.0
+        },
+        {
+          "name": "observed_by_alt_id",
+          "datatype": "text",
+          "required": false
+        },
+        {
+          "name": "observed_by_alt_id_standard",
+          "datatype": "text",
+          "required": false,
+          "values": [
+            "ADEM",
+            "AIS",
+            "ASCA",
+            "Link11",
+            "Link16",
+            "Link22",
+            "MAVLink",
+            "MIP2",
+            "MIP31",
+            "MaritimeTrack",
+            "NFFI13",
+            "NVG",
+            "UDRA_ID",
+            "UTID",
+            "VMF",
+            "ASTERIX",
+            "STANAG4676",
+            "CoT",
+            "ICAO24"
+          ]
+        },
+        {
+          "name": "coverage_bearing_start_deg",
+          "datatype": "number",
+          "unit": "deg",
+          "required": false,
+          "min": 0.0,
+          "max": 360.0
+        },
+        {
+          "name": "coverage_bearing_end_deg",
+          "datatype": "number",
+          "unit": "deg",
+          "required": false,
+          "min": 0.0,
+          "max": 360.0
+        },
+        {
+          "name": "detection_range_m",
+          "datatype": "number",
+          "unit": "m",
+          "required": false,
+          "min": 0.0
+        },
+        {
+          "name": "update_interval_s",
+          "datatype": "number",
+          "unit": "s",
+          "required": false,
+          "min": 0.0
+        },
+        {
+          "name": "carried_by_alt_id",
+          "datatype": "text",
+          "required": false,
+          "mim": "Materiel/MaterielCarryingMateriel/BattlespaceConceptAlternateIdentifier/AlternateIdentifierIdentifier"
+        },
+        {
+          "name": "carried_by_alt_id_standard",
+          "datatype": "text",
+          "required": false,
+          "values": [
+            "ADEM",
+            "AIS",
+            "ASCA",
+            "Link11",
+            "Link16",
+            "Link22",
+            "MAVLink",
+            "MIP2",
+            "MIP31",
+            "MaritimeTrack",
+            "NFFI13",
+            "NVG",
+            "UDRA_ID",
+            "UTID",
+            "VMF",
+            "ASTERIX",
+            "STANAG4676",
+            "CoT",
+            "ICAO24"
+          ],
+          "mim": "Materiel/MaterielCarryingMateriel/BattlespaceConceptAlternateIdentifier/AlternateIdentifierStandardCode"
         }
       ],
       "allows_metadata": true

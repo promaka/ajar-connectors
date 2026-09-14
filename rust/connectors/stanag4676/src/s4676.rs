@@ -35,8 +35,8 @@
 use std::collections::HashMap;
 
 use ajar_connector::{Event, EventBuilder};
-use ajar_connector_common::GovernedIdentity;
 use ajar_connector_common::{Enrichment, FrameParser, ParseError};
+use ajar_connector_common::{GovernedAttribute, GovernedIdentity};
 use quick_xml::events::Event as XmlEvent;
 use quick_xml::Reader;
 use time::format_description::well_known::Rfc3339;
@@ -133,6 +133,7 @@ impl S4676Parser {
         let mut rel_increment: Option<f64> = None;
         let mut nits_version: Option<String> = None;
         let mut classification: Option<String> = None;
+        let mut policy_id: Option<String> = None;
 
         // Rolling context.
         let mut track = TrackCtx::default();
@@ -189,6 +190,7 @@ impl S4676Parser {
                                 rel_increment,
                                 nits_version.as_deref(),
                                 classification.as_deref(),
+                                policy_id.as_deref(),
                                 &mut events,
                             )?;
                             in_track = false;
@@ -218,6 +220,7 @@ impl S4676Parser {
                             &mut rel_increment,
                             &mut nits_version,
                             &mut classification,
+                            &mut policy_id,
                             &mut seg_status,
                             &mut track,
                             &mut tp,
@@ -245,6 +248,7 @@ impl S4676Parser {
         rel_increment: Option<f64>,
         nits_version: Option<&str>,
         classification: Option<&str>,
+        policy_id: Option<&str>,
         out: &mut Vec<Event>,
     ) -> Result<(), S4676Error> {
         let source_uid = track.uid.clone();
@@ -266,8 +270,19 @@ impl S4676Parser {
                 // Governed identity: the track UUID under its standard code.
                 b = b.identity("STANAG4676", uid.clone());
             }
+            // The 4774 confidentiality label, normalised into the tags Core's
+            // policy engine reads: `NATO SECRET` under policy `NATO` becomes
+            // `class:secret` and `policy:NATO`. The raw strings stay in
+            // metadata. A spelling the normaliser does not know is stamped at
+            // the top level rather than left unclassified.
+            if let Some(pid) = policy_id {
+                b = b.metadata("nits_policy_identifier", pid.to_string());
+            }
             if let Some(cls) = classification {
-                b = b.policy_tag(cls.to_string());
+                b = b.metadata("nits_classification", cls.to_string());
+                for t in ajar_connector_common::marking::wire_classification(cls, policy_id) {
+                    b = b.policy_tag(t);
+                }
             }
             if let Some(v) = nits_version {
                 b = b.metadata("nits_version", v.to_string());
@@ -275,10 +290,13 @@ impl S4676Parser {
             if let Some(id) = &track.identity {
                 b = b.metadata("identity", id.clone());
             }
-            // Always emitted: an absent or unrecognised domain is UNKNOWN, which
-            // is a value Core governs, rather than a missing attribute.
+            // The domain is governed on the untyped class alone, because a
+            // typed class implies its domain. On an operator's typed override
+            // it rides in metadata instead, so the wire's token is never lost.
+            // An absent or unrecognised domain is UNKNOWN, a value Core
+            // governs, rather than a missing attribute.
             let env_code = environment_code(track.environment.as_deref());
-            b = b.attribute("environment", env_code);
+            b = b.governed(&entity, "environment", env_code);
             if env_code == "UNKNOWN" {
                 if let Some(raw) = &track.environment {
                     if raw != "UNKNOWN" {
@@ -288,11 +306,13 @@ impl S4676Parser {
                     }
                 }
             }
+            // Neither name is governed on any type in the contract yet, so both
+            // route to metadata until it declares them; nothing is lost either way.
             if let Some(oc) = &track.object_class {
-                b = b.attribute("object_class", oc.clone());
+                b = b.governed(&entity, "object_class", oc.clone());
             }
             if let Some(st) = &p.status {
-                b = b.attribute("track_status", normalize_status(st));
+                b = b.governed(&entity, "track_status", normalize_status(st));
                 b = b.metadata("s4676_status", st.clone());
             }
             if let Some(rt) = p.rel_time {
@@ -401,6 +421,7 @@ fn route_text(
     rel_increment: &mut Option<f64>,
     nits_version: &mut Option<String>,
     classification: &mut Option<String>,
+    policy_id: &mut Option<String>,
     seg_status: &mut Option<String>,
     track: &mut TrackCtx,
     tp: &mut PointCtx,
@@ -412,6 +433,7 @@ fn route_text(
         ("ConfidentialityInformation", "Classification") => {
             *classification = Some(text.to_string())
         }
+        ("ConfidentialityInformation", "PolicyIdentifier") => *policy_id = Some(text.to_string()),
         ("track", "uid") if in_track => {
             track.uid = decode_uid(text);
         }
@@ -745,9 +767,34 @@ mod tests {
     }
 
     #[test]
-    fn classification_becomes_policy_tag() {
+    fn the_confidentiality_label_becomes_the_tags_core_reads_and_the_wire_strings_are_kept() {
+        // The message states its policy identifier, which is authoritative
+        // over the wording of the label.
         let ev = &parser().to_events(AIR_TRACK.as_bytes()).unwrap()[0];
-        assert_eq!(ev.policy_tags, vec!["NATO UNCLASSIFIED".to_string()]);
+        assert_eq!(ev.policy_tags, ["class:unclassified", "policy:TEST"]);
+        let meta = |k: &str| {
+            ev.metadata
+                .iter()
+                .find(|m| m.key == k)
+                .map(|m| m.value.as_str())
+        };
+        assert_eq!(meta("nits_classification"), Some("NATO UNCLASSIFIED"));
+        assert_eq!(meta("nits_policy_identifier"), Some("TEST"));
+        // Without a policy identifier the label's own wording decides.
+        let xml = AIR_TRACK.replace("<PolicyIdentifier>TEST</PolicyIdentifier>", "");
+        let ev = &parser().to_events(xml.as_bytes()).unwrap()[0];
+        assert_eq!(ev.policy_tags, ["class:unclassified", "policy:NATO"]);
+    }
+
+    #[test]
+    fn an_unknown_classification_string_is_stamped_at_the_top_not_left_open() {
+        let xml = AIR_TRACK.replace("NATO UNCLASSIFIED", "PROTECTED B");
+        let ev = &parser().to_events(xml.as_bytes()).unwrap()[0];
+        assert_eq!(ev.policy_tags, ["class:top-secret", "policy:TEST"]);
+        assert!(ev
+            .metadata
+            .iter()
+            .any(|m| m.key == "nits_classification" && m.value == "PROTECTED B"));
     }
 
     #[test]
@@ -841,6 +888,32 @@ mod tests {
         let ev = &parser().to_events(xml.as_bytes()).unwrap()[0];
         assert_eq!(tactical(ev, "environment"), Some("UNKNOWN"));
         assert_eq!(tactical(ev, "environment_source"), Some("LITTORAL"));
+    }
+
+    #[test]
+    fn an_operator_typed_track_does_not_claim_a_domain() {
+        // `environment` is governed on mim:object alone: on a typed class the
+        // type is the domain, and setting the attribute would be discarded by
+        // not delivered by Core. The wire's domain rides in metadata instead.
+        let mut ov = std::collections::HashMap::new();
+        ov.insert("AIR".to_string(), "mim:aircraft".to_string());
+        let p = S4676Parser::new("isr-1", ov, Enrichment::default());
+        let ev = &p.to_events(AIR_TRACK.as_bytes()).unwrap()[0];
+        assert_eq!(ev.entity_type, "mim:aircraft");
+        assert!(
+            !ev.attributes.iter().any(|a| a.key == "environment"),
+            "a typed class must not claim a domain: {:?}",
+            ev.attributes
+        );
+        // The wire's domain is not lost: it rides in metadata instead.
+        assert!(ev
+            .metadata
+            .iter()
+            .any(|m| m.key == "environment" && m.value == "AIR"));
+        // The untyped default still carries it, which is the only place it lands.
+        let ev = &parser().to_events(AIR_TRACK.as_bytes()).unwrap()[0];
+        assert_eq!(ev.entity_type, "mim:object");
+        assert!(ev.attributes.iter().any(|a| a.key == "environment"));
     }
 
     #[test]

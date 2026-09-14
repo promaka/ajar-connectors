@@ -19,6 +19,13 @@ signing_key_path = "/etc/ajar/adsb-tower-1.seed"
 # Stamp one for the COP (usually "neutral"; "civil" if your ontology declares it).
 default_hostility = "Neutral"
 
+# The security marking every event carries, stamped inside its signature.
+# Every field is optional; see README section 7f.
+# [marking]
+# classification = "restricted"
+# releasable_to = ["GBR", "ITA"]
+# caveats = ["EXERCISE"]
+
 [transport]
 # Point at the receiver's SBS-1 output (dump1090 / readsb default port 30003).
 kind = "tcp-client"

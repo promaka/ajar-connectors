@@ -21,6 +21,13 @@ subject_prefix = "ajar.ingest"
 # Secret — never commit it, never share it.
 signing_key_path = "/etc/ajar/tak-field-1.seed"
 
+# The security marking every event carries, stamped inside its signature.
+# Every field is optional; see README section 7f.
+# [marking]
+# classification = "restricted"
+# releasable_to = ["GBR", "ITA"]
+# caveats = ["EXERCISE"]
+
 [transport]
 # udp-multicast (the CoT SA default) or udp (unicast).
 kind = "udp-multicast"

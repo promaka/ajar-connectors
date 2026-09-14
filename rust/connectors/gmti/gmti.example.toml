@@ -26,6 +26,13 @@ signing_key_path = "/etc/ajar/gmti-radar-1.seed"
 # detections are often "unknown" or "suspect" pending correlation).
 default_hostility = "Unknown"
 
+# The security marking every event carries, stamped inside its signature.
+# Every field is optional; see README section 7f.
+# [marking]
+# classification = "restricted"
+# releasable_to = ["GBR", "ITA"]
+# caveats = ["EXERCISE"]
+
 # NOTE: the emitted entity type is `mim:object`. If your Core ontology names
 # ground moving-target detections differently, change the one `entity_type`
 # constant in src/gmti.rs to match.

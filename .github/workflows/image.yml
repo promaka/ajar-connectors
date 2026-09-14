@@ -76,6 +76,9 @@ jobs:
           - { name: generic, wsdir: rust/connectors, pkg: ajar-generic }
           - { name: tak-egress, wsdir: rust/connectors, pkg: ajar-tak-egress }
           - { name: adsb, wsdir: rust/connectors, pkg: ajar-adsb }
+          # AIS is the only decoder for MMSI and navigational status, so a
+          # maritime site needs it as an image, not only in the tarball.
+          - { name: ais-nmea, wsdir: rust/connectors, pkg: ajar-ais-nmea }
           - { name: asterix, wsdir: rust/connectors, pkg: ajar-asterix }
           - { name: tak-cot, wsdir: rust/connectors, pkg: ajar-tak-cot }
           - { name: synthetic-radar, wsdir: rust/examples, pkg: synthetic-radar }

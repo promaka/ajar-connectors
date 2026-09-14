@@ -99,6 +99,38 @@ the hyphen and any unrecognised token are mapped before emission. A connector th
 forwarded the wire value would have its tracks quarantined and lose their battle
 dimension without anything appearing to fail.
 
+## Marking rides as policy tags, and the operator sets it
+
+Classification is not an attribute. It travels in the event's policy tags, in
+the form Core's policy engine reads: `class:<level>` with the level one of
+`unclassified`, `restricted`, `confidential`, `secret` or `top-secret`;
+`rel:<PARTY>` per releasability; `policy:<ID>` for whose scheme the level is
+in; `caveat:<X>` per handling caveat. Anything else in the tags is ignored,
+which is why a raw wire string such as `NATO SECRET` produced no label.
+
+Two sources set them. The `[marking]` block in every connector's config is the
+operator's assertion about the feed, stamped by the shared runtime on every
+event before sealing, the same way `default_hostility` asserts friend or foe
+for feeds that carry none. And a wire format that carries its own label is
+normalised: STANAG 4676's `NATO SECRET` becomes `class:secret` and
+`policy:NATO`, with the raw string kept in metadata. The two combine as a
+floor: the wire can raise the level the operator set, never lower it.
+
+## Attributes are governed per type, and not inherited
+
+The ontology lists every attribute a type allows, including the ones it shares
+with its parent, and Core looks each attribute up on the event's own entity
+type. So the narrowing in that list is deliberate and enforced: `mim:sensor`
+has no `speed` although its parent `mim:equipment` does, and `environment` is
+governed on `mim:object` alone, because a typed class already implies its
+domain. Set an attribute on a type that does not declare it and Core does not
+deliver it as an attribute, with the event otherwise accepted.
+
+Two consequences for a connector author. Check each type you emit separately,
+not all your types against all your attributes at once. And do not set a domain
+on a typed class: emit `mim:object` with `environment` when all you have is a
+domain, and a typed class when something in the report identifies the target.
+
 ## Identity and uncertainty are governed, from contract revision 3
 
 Two things used to live only in metadata and are now attributes the ontology

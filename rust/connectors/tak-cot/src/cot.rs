@@ -72,6 +72,8 @@ impl CotParser {
         let mut lon: Option<f64> = None;
         let mut hae: f64 = 0.0;
         let mut callsign: Option<String> = None;
+        let mut course: Option<f64> = None;
+        let mut speed: Option<f64> = None;
         let mut confidence: Option<f64> = None;
         let mut in_confidence = false;
         let mut saw_event = false;
@@ -115,6 +117,22 @@ impl CotParser {
                         for a in e.attributes().flatten() {
                             if a.key.as_ref() == "callsign" {
                                 callsign = Some(a.value.into_owned());
+                            }
+                        }
+                    }
+                    // <detail><track course="128.4" speed="12.3"/></detail>:
+                    // CoT states course in degrees clockwise from true north and
+                    // speed in metres per second, which is exactly what the
+                    // governed `course` and `speed` attributes want, so there is
+                    // no conversion and no unit trap. A value that is not a
+                    // number is dropped rather than failing the whole track: a
+                    // stationary or unknown-heading contact is still a contact.
+                    "track" => {
+                        for a in e.attributes().flatten() {
+                            match a.key.as_ref() {
+                                "course" => course = parse_finite(&a.value),
+                                "speed" => speed = parse_finite(&a.value),
+                                _ => {}
                             }
                         }
                     }
@@ -173,6 +191,15 @@ impl CotParser {
         if let Some(callsign) = callsign {
             builder = builder.attribute("callsign", callsign);
         }
+        // A negative speed is not a slower speed, and a course outside a circle
+        // is not a direction: both are a malformed track, and a governed value
+        // outside the ontology's bounds would be discarded downstream anyway.
+        if let Some(course) = course.filter(|c| (0.0..=360.0).contains(c)) {
+            builder = builder.attribute("course", format!("{course:.1}"));
+        }
+        if let Some(speed) = speed.filter(|s| *s >= 0.0) {
+            builder = builder.attribute("speed", format!("{speed:.2}"));
+        }
         if let Some(confidence) = confidence {
             builder = builder.confidence(confidence);
         }
@@ -197,6 +224,13 @@ impl CotParser {
             _ => format!("x:cot:{}", cot_type.replace('-', "_")),
         }
     }
+}
+
+/// A finite number from an attribute value, or `None`. CoT is a field format:
+/// an empty attribute, a `NaN`, or a word where a number belongs is a producer's
+/// mistake to skip, not a reason to drop the whole track.
+fn parse_finite(raw: &str) -> Option<f64> {
+    raw.trim().parse::<f64>().ok().filter(|v| v.is_finite())
 }
 
 /// Hostility from the CoT type's second field (`a-f-…` → `Friend`).
@@ -248,6 +282,9 @@ mod tests {
 
     const SAMPLE: &str = r#"<event version="2.0" uid="AD-7741" type="a-f-A-M-F-Q" time="2026-06-10T08:00:00Z" start="2026-06-10T08:00:00Z" stale="2026-06-10T08:00:30Z"><point lat="26.4" lon="50.9" hae="1200.0" ce="10" le="10"/></event>"#;
 
+    /// A track carrying the kinematics a COP needs, as ATAK sends them.
+    const WITH_TRACK: &str = r#"<event version="2.0" uid="EAGLE-1" type="a-f-A" time="2026-06-10T08:00:00Z"><point lat="51.5" lon="-0.12" hae="9100.0"/><detail><contact callsign="EAGLE01"/><track course="128.4" speed="221.5"/></detail></event>"#;
+
     /// Default parser: safe metadata mode.
     fn parser() -> CotParser {
         CotParser::new("tak-field-1", HashMap::new(), Enrichment::default())
@@ -265,6 +302,59 @@ mod tests {
             .chain(ev.metadata.iter())
             .find(|a| a.key == key)
             .map(|a| a.value.as_str())
+    }
+
+    #[test]
+    fn the_track_element_becomes_governed_course_and_speed() {
+        // CoT states course in degrees from true north and speed in metres per
+        // second, which is what the contract wants, so the values pass through
+        // unconverted.
+        let ev = parser().to_event(WITH_TRACK.as_bytes()).unwrap();
+        assert_eq!(tactical(&ev, "course"), Some("128.4"));
+        assert_eq!(tactical(&ev, "speed"), Some("221.50"));
+        assert_eq!(tactical(&ev, "callsign"), Some("EAGLE01"));
+    }
+
+    #[test]
+    fn a_track_without_kinematics_is_still_a_track() {
+        // Most CoT has no track element at all; absence sets nothing rather
+        // than claiming a stationary contact.
+        let ev = parser().to_event(SAMPLE.as_bytes()).unwrap();
+        assert_eq!(tactical(&ev, "course"), None);
+        assert_eq!(tactical(&ev, "speed"), None);
+    }
+
+    #[test]
+    fn malformed_kinematics_are_skipped_not_published_as_numbers() {
+        // A field format sends junk: an empty attribute, a word, a negative
+        // speed, a course outside a circle. None of it is a number a consumer
+        // should gate on, and none of it should lose the rest of the track.
+        for (course, speed) in [
+            ("", "12.0"),
+            ("north", "12.0"),
+            ("nan", "12.0"),
+            ("400.0", "12.0"),
+            ("-1.0", "12.0"),
+            ("128.4", "-3.0"),
+        ] {
+            let xml = format!(
+                r#"<event uid="U" type="a-f-A" time="2026-06-10T08:00:00Z"><point lat="51.5" lon="-0.12" hae="0"/><detail><track course="{course}" speed="{speed}"/></detail></event>"#
+            );
+            let ev = parser().to_event(xml.as_bytes()).unwrap_or_else(|e| {
+                panic!("course {course:?} speed {speed:?} lost the track: {e}")
+            });
+            let bad_course = course
+                .parse::<f64>()
+                .ok()
+                .is_none_or(|c| !(0.0..=360.0).contains(&c));
+            if bad_course {
+                assert_eq!(tactical(&ev, "course"), None, "course {course:?}");
+            }
+            if speed.starts_with('-') {
+                assert_eq!(tactical(&ev, "speed"), None, "speed {speed:?}");
+            }
+            assert!(ev.location.is_some(), "the position survives regardless");
+        }
     }
 
     #[test]

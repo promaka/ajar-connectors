@@ -20,6 +20,13 @@ signing_key_path = "/etc/ajar/ais-coast-1.seed"
 # Coastal AIS is overwhelmingly civil traffic.
 default_hostility = "Neutral"
 
+# The security marking every event carries, stamped inside its signature.
+# Every field is optional; see README section 7f.
+# [marking]
+# classification = "restricted"
+# releasable_to = ["GBR", "ITA"]
+# caveats = ["EXERCISE"]
+
 [transport]
 # AIS aggregators and ship-network NMEA servers usually expose a TCP port that
 # streams one sentence per line — connect out to it:

@@ -70,7 +70,6 @@ ajar::Event to_event(const Track& t) {
       .attribute("speed",       fmt(t.speed_kn * 0.514444))  // knots -> m/s
       .attribute("course",      fmt(t.course_deg, 1))
       .attribute("hostility",   hostility_for(t))
-      .attribute("environment", "AIR")
       .metadata("native_id",    t.track_id)           // never the event id
       .metadata("speed_kn",     fmt(t.speed_kn, 1))   // keep the original
       .metadata("altitude_ft",  fmt(t.alt_ft, 0))
@@ -91,9 +90,8 @@ publish("ajar.ingest.acme-1", sealed);   // your NATS client
 Input `Track{3, "MS-4471", 25.2707, 51.5240, 34000 ft, 450 kn, 271.5, iff=1}`:
 
 ```
-entity_type mim:aircraft  attrs 4  meta 3  sealed 331 bytes
+entity_type mim:aircraft  attrs 3  meta 3  sealed 314 bytes
   attr course = 271.5
-  attr environment = AIR
   attr hostility = Friend
   attr speed = 231.50
 ```
@@ -125,7 +123,6 @@ def to_event(t):
             .attribute("speed", f"{t['speed_kn'] * 0.514444:.2f}")   # knots -> m/s
             .attribute("course", f"{t['course_deg']:.1f}")
             .attribute("hostility", HOSTILITY.get(t["iff"], "Unknown"))
-            .attribute("environment", "AIR")
             .metadata("native_id", t["track_id"])                    # never the id
             .metadata("speed_kn", f"{t['speed_kn']:.1f}")            # keep native
             .payload(t["raw_frame"])
@@ -232,8 +229,10 @@ Not `friendly`, not `FRIEND`, not `hostile`.
 AIR  LAND  SURFACE  SUBSURFACE  SPACE  UNKNOWN
 ```
 
-This drives the battle dimension a C2 renders, so it is worth setting whenever
-your source knows it.
+This drives the battle dimension a C2 renders. It is governed on `mim:object`
+alone: a typed class (an aircraft, a vessel) already implies its domain, so set
+it when all you have is a domain and the event is a bare object, and never on
+a typed class, where Core does not deliver it.
 
 ---
 
@@ -260,7 +259,7 @@ operator holds.
 
 Ask them for two things before you write the mapping:
 
-1. **`ontology-mim-5.3-conformant-3.json`** — the contract your events are
+1. **`ontology-mim-5.3-conformant-4.json`** — the contract your events are
    validated against. It is vendored here as
    [`vendor/contract/ontology.json`](../vendor/contract/ontology.json) and
    hash-pinned, so the copy you build against cannot drift. Confirm with your

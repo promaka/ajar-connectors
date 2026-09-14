@@ -23,6 +23,13 @@ signing_key_path = "/etc/ajar/radar-adsb-1.seed"
 # The air picture carries no hostility of its own; assign one for the COP.
 # default_hostility = "Unknown"
 
+# The security marking every event carries, stamped inside its signature.
+# Every field is optional; see README section 7f.
+# [marking]
+# classification = "restricted"
+# releasable_to = ["GBR", "ITA"]
+# caveats = ["EXERCISE"]
+
 # CAT048 and CAT010: monoradar reports are range/azimuth (or x/y offsets)
 # RELATIVE to the radar, so the connector needs the radar's site to geolocate them
 # onto the map. Set it to this radar's position. Without it, the reports still
@@ -33,14 +40,23 @@ signing_key_path = "/etc/ajar/radar-adsb-1.seed"
 # lon = 24.97
 # alt_m = 55.0
 
-# What a CAT010 surface report is. The wire format cannot say whether a surface
-# target is a ship or a baggage tug, so the operator does: a coastal or naval
-# radar emits vessels (`mim:surface-vessel` from contract revision 2, or
-# `mim:vessel`), an airport surface feed emits land vehicles. Unset, the
-# report's own content decides (a vehicle fleet id makes a land vehicle, a Mode S
-# identity an aircraft, anything else a plain object). `cat034` chooses the type
-# the radar heartbeat publishes as (default mim:sensor).
+# What a CAT010 surface report is, and which surface it is on.
+#
+# A bare radar plot is a domain, not an identification: it says something is on
+# the surface, not what that something is. The default is therefore the untyped
+# class with a domain, and a typed class only once the report identifies the
+# target (a Mode S address makes it an aircraft, a vehicle fleet id a land
+# vehicle). The wire cannot say whether this radar watches sea or apron, so the
+# operator says which with `cat010_domain` (SURFACE, LAND, SUBSURFACE or AIR).
+# Unset, no domain is claimed.
+#
+# `cat010` forces a type for every unidentified plot instead, for an operator who
+# knows the feed is all shipping. A typed class carries no
+# `environment`: the type is the domain, and the ontology governs `environment`
+# on the untyped class alone. `cat034` chooses the type the radar heartbeat
+# publishes as (default mim:sensor).
 # [entity_map]
+# cat010_domain = "SURFACE"
 # cat010 = "mim:vessel"
 
 [transport]

@@ -18,6 +18,13 @@ signing_key_path = "/etc/ajar/isr-tracker-1.seed"
 # absent or ambiguous (ASSUMED_FRIEND / SUSPECT / UNKNOWN).
 # default_hostility = "Unknown"
 
+# The security marking every event carries, stamped inside its signature.
+# Every field is optional; see README section 7f.
+# [marking]
+# classification = "restricted"
+# releasable_to = ["GBR", "ITA"]
+# caveats = ["EXERCISE"]
+
 # Every 4676 `environment` value is a domain, not a classification: AIR says a
 # track is in the air, not that it is an aircraft. So every track is emitted as
 # `mim:object` with the environment as an attribute, rather than asserting a type

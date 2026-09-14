@@ -188,7 +188,7 @@ class EventBuilder {
 struct ValidationFault {
   enum class Kind {
     UnknownEntityType,  // the ontology does not declare this type
-    UnknownAttribute,   // no ancestor of the declared type governs this name
+    UnknownAttribute,   // the declared type does not govern this name
     NotInVocabulary,    // a fixed value outside a controlled, case-sensitive set
   };
   Kind kind;
@@ -196,6 +196,7 @@ struct ValidationFault {
   std::string value;                 // NotInVocabulary: the offending value
   std::string suggestion;            // same name with the correct case, if that is the mistake
   std::vector<std::string> allowed;  // NotInVocabulary: the valid values
+  std::string governed_on;           // UnknownAttribute: the nearest ancestor that declares it, if any
 
   // A sentence naming the fault and the correction, for logs and CI output.
   std::string message() const;
@@ -210,8 +211,9 @@ struct DeclaredMapping {
 };
 
 // Every fault in the mapping, empty when it is clean. An x:vendor:type is the
-// operator's to register and produces no faults. Attribute inheritance is
-// followed, so an aircraft may set anything mim:object declares.
+// operator's to register and produces no faults. Attributes are NOT inherited:
+// Core looks each one up on the event's own entity type, and the narrowing in
+// the ontology is deliberate, so check each type a connector emits.
 std::vector<ValidationFault> validate(const DeclaredMapping& mapping);
 
 // The same check against a built event: its entity type, attribute names and

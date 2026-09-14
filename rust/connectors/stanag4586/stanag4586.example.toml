@@ -17,6 +17,13 @@ signing_key_path = "/etc/ajar/uas-vsm-1.seed"
 # friendly.
 default_hostility = "Friend"
 
+# The security marking every event carries, stamped inside its signature.
+# Every field is optional; see README section 7f.
+# [marking]
+# classification = "restricted"
+# releasable_to = ["GBR", "ITA"]
+# caveats = ["EXERCISE"]
+
 # Optional: the entity type decoded vehicles map to (default: mim:aircraft).
 # [entity_map]
 # default = "mim:aircraft"

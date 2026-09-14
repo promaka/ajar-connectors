@@ -34,6 +34,7 @@ pub mod health;
 pub mod http_server;
 pub mod identity;
 pub mod key;
+pub mod marking;
 pub mod nats;
 pub mod ontology;
 pub mod profile;
@@ -66,6 +67,7 @@ pub use config::{Config, Enrichment, Framing, SensorSite, SpoolSetting, Transpor
 #[cfg(feature = "dds")]
 pub use config::{DdsOptions, DdsPayload, DdsReliability};
 pub use identity::GovernedIdentity;
+pub use ontology::GovernedAttribute;
 
 /// The seal's signature prefix length (re-exported for the spool drain).
 pub(crate) fn seal_signature_len() -> usize {

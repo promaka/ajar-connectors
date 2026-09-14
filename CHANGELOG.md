@@ -13,6 +13,91 @@ Two version lines are tracked independently (see COMPATIBILITY.md):
 
 ## [Unreleased]
 
+### Added
+
+- Ontology contract revision 4 (`mim-5.3-conformant-4`) re-vendored: sixteen
+  optional attributes for emitter parameters and a sensor's own footprint, the
+  platform and observer links, all on `mim:equipment` and `mim:sensor`. Additive
+  over revisions 1 to 3: nothing removed, renamed, narrowed or re-parented.
+- The ASTERIX radar heartbeat promotes four fields a consumer could not see
+  into their governed homes: the antenna rotation period becomes `scan_period_s`
+  and, because a heartbeat is published once per north marker, the report rate
+  `update_interval_s`; the I034/100 polar window becomes
+  `coverage_bearing_start_deg`, `coverage_bearing_end_deg` and
+  `detection_range_m` in metres. The native nautical miles stay in metadata.
+- The CoT connector reads the `<track>` element, so course and speed reach the
+  governed attributes our own guide has always said they map to. CoT states
+  both in the contract's units, so nothing is converted. A malformed value is
+  skipped without losing the track, and a course outside a circle or a negative
+  speed is not published as a number.
+- `ais-nmea` joins the container image matrix. It is the only decoder for MMSI
+  and navigational status, so a maritime site can now deploy it as an image
+  rather than only from the tarball.
+- A `[marking]` block in every connector's config. Core's clearance rules read
+  a classification, releasability, policy and caveats off each event's policy
+  tags, and nothing on the way in set them, so every event from a stock
+  connector arrived unclassified. The block is the operator's assertion about
+  a feed, stamped by the shared runtime on every event before sealing so the
+  marking is inside the signature. Every field is optional and any one is
+  enough; a training feed marks itself `caveats = ["EXERCISE"]` alone. The
+  block is a floor: every event leaves with one `class:` tag, the higher of
+  the wire's and the operator's, and the wire's other tags stay beside it. A
+  level outside the five refuses to start rather than shipping unclassified
+  events, and `ajar-doctor` prints the exact tags a config stamps before any
+  event flows.
+
+### Added (runtime)
+
+- Every connector now reports an attribute its event's own type does not
+  govern: once per name in the log, and as `connector_ungoverned_total` on
+  the metrics endpoint. Core does not deliver such attributes, so a mapping
+  that loses a field now has a symptom on the producer's side. A shared
+  `governed` routing helper puts a value in the governed attribute when the
+  type declares it and in metadata otherwise, and the ASTERIX and STANAG 4676
+  connectors use it for the domain, the Mode 3/A code, and the 4676 fields the
+  contract does not yet declare, so nothing is lost at the boundary.
+- STANAG 4676 reads the 4774 policy identifier, which is authoritative for the
+  `policy:` tag when present; the label's own wording decides only when the
+  message states none. A classification string the normaliser cannot read is
+  stamped at the top level rather than left unclassified, with the raw string
+  in metadata.
+
+### Fixed
+
+- STANAG 4676 emitted its confidentiality label as a raw policy tag (`NATO
+  UNCLASSIFIED`), which Core's policy engine does not read, so the one feed
+  that carried a classification produced no label. The label is now
+  normalised into the tags Core reads (`class:unclassified` and
+  `policy:NATO`), with the raw wire string kept in metadata, and a spelling
+  the normaliser does not know goes to metadata alone rather than becoming a
+  tag nothing reads.
+
+- Attributes are governed per entity type and are not inherited, which is how
+  Core reads them. Both validators walked the parent chain instead, so they
+  were more permissive than the enforcer and accepted mappings Core does not
+  deliver. The Rust and C++ checks now look an attribute up on the event's
+  own type, one declaration per type, and the fault names the ancestor that
+  does govern the attribute so the mistake is stated rather than guessed at.
+  The inheritance claims are out of both APIs' documentation.
+- Two connectors emitted `environment` on types that do not govern it, so the
+  domain was silently discarded at the boundary: ASTERIX on every configured
+  vessel or land-vehicle class, and STANAG 4676 on an operator's typed
+  override. The attribute now rides only on the untyped class, where the
+  ontology governs it, because a typed class already implies its domain.
+- The ASTERIX ontology gate declared every type against every attribute in one
+  bucket, which is what hid that: it is now one declaration per type, the same
+  shape Core enforces.
+- The radar heartbeat promotes the polar window into the sensor's footprint
+  on a north marker only. On a jamming strobe the same item is the extent of
+  the jammed sector, and it now stays in metadata there.
+- A bare CAT010 surface plot no longer claims to be a vessel. A radar return is
+  a domain, not an identification, so an unidentified plot is the untyped class
+  with the domain the operator states in `[entity_map] cat010_domain`, nothing
+  claimed if they state none, and a typed class only when the report identifies
+  the target. A domain value outside the ontology's vocabulary is refused rather
+  than passed through to be quarantined. The example config recommended the
+  wrong thing and now matches the guide.
+
 ## [0.6.1] - 2026-09-09
 
 ### Added

@@ -46,7 +46,8 @@ async fn main() -> anyhow::Result<()> {
     });
     let parser = AsterixParser::new(cfg.source_id.clone(), cfg.enrichment())
         .with_sensor(sensor)
-        .with_entity_map(&cfg.entity_map);
+        .with_entity_map(&cfg.entity_map)
+        .context("validating [entity_map]")?;
     let source = open_source(&cfg.transport)
         .await
         .context("opening transport")?;

@@ -70,6 +70,10 @@ pub(crate) struct Metrics {
     /// Spool appends that FAILED (disk full, permissions): the event is lost
     /// and this says so, instead of a phantom increment of `spooled`.
     pub spool_failed: Arc<AtomicU64>,
+    /// Events published carrying an attribute their own entity type does not
+    /// govern. Core does not deliver those as attributes; each name is also
+    /// logged once, so a mapping that loses a field has a symptom.
+    pub ungoverned: Arc<AtomicU64>,
 }
 
 /// How long one publish may stall before the event is shed. Load-shedding keeps
@@ -87,6 +91,16 @@ pub async fn run(
 ) -> anyhow::Result<()> {
     let key = key::load(&cfg.signing_key_path)?;
     let subject = format!("{}.{}", cfg.subject_prefix, cfg.source_id);
+    // The operator's marking, stamped before sealing so it is inside the
+    // signature. Validated at config load; this cannot fail on a loaded config.
+    let marking = cfg.marking()?;
+    if let Some(m) = &marking {
+        tracing::info!(tags = %m, "every event carries the configured marking");
+    }
+    // Attribute names already reported as ungoverned, per entity type, so a
+    // mapping fault is one line in the log rather than one per event.
+    let mut reported: std::collections::BTreeSet<(String, String)> =
+        std::collections::BTreeSet::new();
 
     tracing::info!(
         source = %cfg.source_id,
@@ -151,7 +165,24 @@ pub async fn run(
                             // Zero events (keep-alive, unmapped, buffered fragment) simply
                             // publishes nothing; a batched frame publishes each in turn.
                             Ok(events) => {
-                                for event in events {
+                                for mut event in events {
+                                    if let Some(m) = &marking {
+                                        m.apply(&mut event);
+                                    }
+                                    let lost = crate::ontology::ungoverned(&event);
+                                    if !lost.is_empty() {
+                                        metrics.ungoverned.fetch_add(1, Ordering::Relaxed);
+                                        for name in lost {
+                                            if reported.insert((event.entity_type.clone(), name.clone())) {
+                                                tracing::warn!(
+                                                    entity_type = %event.entity_type,
+                                                    attribute = %name,
+                                                    ontology = crate::ontology::version(),
+                                                    "attribute is not governed on this entity type; Core will not deliver it as an attribute, put it in metadata"
+                                                );
+                                            }
+                                        }
+                                    }
                                     let headers = ingest_headers(&event.id);
                                     let sealed = seal(&canonical_bytes(&event), &key);
                                     // Link known down + spool configured: spool at

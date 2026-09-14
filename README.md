@@ -403,10 +403,36 @@ failed appends, and segments dropped at the bound (the bound is enforced
 per segment, so reconcile loss against
 `connector_spool_dropped_segments_total`, not an event count).
 
-### 7f. When nothing flows
+### 7f. Mark what you publish
+
+Core's clearance rules read a marking off each event: a classification, who
+it is releasable to, whose policy the level belongs to, and handling caveats.
+The wire formats themselves rarely carry one (STANAG 4676 does, and the
+connector normalises it), so without this block every event from a stock
+connector reaches Core unclassified. Four optional lines stamp every event
+before it is sealed, so the marking is inside the signature and travels with
+the provenance:
+
+```toml
+[marking]
+classification = "restricted"   # unclassified | restricted | confidential | secret | top-secret
+releasable_to = ["GBR", "ITA"]
+policy = "NATO"
+caveats = ["EXERCISE"]
+```
+
+Any one field is enough: a synthetic or training feed marks itself
+`caveats = ["EXERCISE"]` and nothing else. The block is a floor, not a
+ceiling: a marking the feed carries stays beside it, and Core takes the
+higher level. A level outside the five refuses to start, because Core
+would ignore the tag and the events would ship unclassified.
+`ajar-doctor` prints the exact tags a config will stamp before any event
+flows.
+
+### 7g. When nothing flows
 
 `ajar-doctor connector.toml` checks the setup step by step (config, signing
-key, registration, endpoint, TLS, clock) and says which onboarding step is
+key, marking, registration, endpoint, TLS, clock) and says which onboarding step is
 broken and what to do, reading the same config and `AJAR_TLS_*` environment
 the connector uses. With no config file it reads `NATS_URL`, `AJAR_SOURCE_ID`
 and `AJAR_SIGNING_SEED` instead, so a connector embedded in your own code
