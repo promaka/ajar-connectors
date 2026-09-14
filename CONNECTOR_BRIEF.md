@@ -31,11 +31,11 @@ added to any public repository.
 | **NATS endpoint** to publish to | `<e.g. tls://nats.ourgrid.example:443>` |
 | **mTLS materials** (we issue these) | `<CA PEM + your client cert (CN=source_id) + key>` |
 | **contact** for questions / your public key | `<e.g. connectors@our-org.example>` |
-| **SDK version to pin** | `v0.6.1` |
+| **SDK version to pin** | `v0.6.2` |
 
 ## What you do — 5 steps
 
-1. **Copy a starting point** for your language and pin the SDK to `v0.6.1`:
+1. **Copy a starting point** for your language and pin the SDK to `v0.6.2`:
    - **Rust** — copy [rust/examples/connector-template](rust/examples/connector-template/)
    - **Python** — copy [python/examples/connector_template.py](python/examples/connector_template.py)
    - **Go** — copy [go/examples/connector-template](go/examples/connector-template/)
