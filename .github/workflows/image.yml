@@ -82,6 +82,9 @@ jobs:
           - { name: asterix, wsdir: rust/connectors, pkg: ajar-asterix }
           - { name: tak-cot, wsdir: rust/connectors, pkg: ajar-tak-cot }
           - { name: synthetic-radar, wsdir: rust/examples, pkg: synthetic-radar }
+          # One fixture, six sensors, on every connector's real wire format: a
+          # conformance and commissioning source, released beside the connectors.
+          - { name: feed-synthetic, wsdir: rust/connectors, pkg: ajar-feed-synthetic }
     env:
       IMAGE: ghcr.io/${{ github.repository_owner }}/ajar-connector-${{ matrix.name }}
     steps:
@@ -194,19 +197,19 @@ jobs:
           set -euo pipefail
           cargo build --release --target ${{ matrix.target }} \
             --manifest-path rust/connectors/Cargo.toml --bins
-          # The demo publisher, so an air-gapped evaluator can run the whole
-          # loop — publisher, sink, audit — from the artefacts alone.
-          cargo build --release --target ${{ matrix.target }} \
-            --manifest-path rust/examples/Cargo.toml -p synthetic-radar
       - name: Collect into one archive
         run: |
           set -euo pipefail
           ver="${GITHUB_REF_NAME#v}"
           out="ajar-connectors-$ver-${{ matrix.target }}"
           mkdir -p "$out"
+          # Connectors only. A test source (the synthetic feed, the example
+          # publisher) ships as its own image, pulled on purpose, and is never
+          # bundled with the product. Asserted below.
           find rust/connectors/target/${{ matrix.target }}/release -maxdepth 1 -type f \
-            -name 'ajar-*' ! -name '*.d' -exec cp {} "$out/" \;
-          cp rust/examples/target/${{ matrix.target }}/release/synthetic-radar "$out/"
+            -name 'ajar-*' ! -name '*.d' ! -name 'ajar-feed-synthetic' -exec cp {} "$out/" \;
+          test ! -e "$out/ajar-feed-synthetic"
+          test ! -e "$out/synthetic-radar"
           # Configs and docs ride along: the tarball is an evaluator's whole
           # starting point, not a bag of binaries. Asserted, so a workflow
           # merge can never silently strip them again.

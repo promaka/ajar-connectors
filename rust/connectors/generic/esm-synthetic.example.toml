@@ -1,0 +1,68 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# ESM intercepts as JSON lines, from an electronic support receiver or from the
+# synthetic feed (`ajar-feed-synthetic esm`). One record per line, shaped:
+#
+#   {"time":"2026-06-10T08:00:00Z","emitter_id":"EM-NAV-1",
+#    "frequency_hz":9410000000,"bandwidth_hz":20000000,"power_dbm":-49.1,
+#    "elnot":"G1234","prf_hz":2100.0,"pulse_width_us":0.08,
+#    "scan_type":"circular","scan_period_s":2.5,
+#    "bearing_deg":123.4,"bearing_accuracy_deg":2.0,
+#    "carried_by":"235009870","carried_by_standard":"AIS",
+#    "observed_by":"25:10","observed_by_standard":"ASTERIX"}
+#
+# Every governed name below is declared on mim:equipment in the vendored
+# ontology (contract revision 4), so the connector starts. An emitter is
+# reported as equipment and names the platform it sits on with carried_by; a
+# platform event never carries the fingerprint. `scan_type` is governed free
+# text; `modulation` is a closed set, so a receiver's own word for it belongs
+# in metadata and the governed attribute is set only when it maps. An ESM
+# receiver gives a bearing, not a position, so there is no lat_field: the
+# event carries no location because the sensor produced none.
+
+source_id = "esm-1"
+nats_url = "nats://127.0.0.1:4222"
+subject_prefix = "ajar.ingest"
+signing_key_path = "/etc/ajar/esm-1.seed"
+
+# An intercept is a measurement, not an identification.
+default_hostility = "Unknown"
+
+# A synthetic or training feed marks itself so every track it produces carries
+# the caveat inside its signature wherever it goes.
+# [marking]
+# caveats = ["EXERCISE"]
+
+[transport]
+kind = "tcp-client"
+connect = "127.0.0.1:30155"
+framing = "line"
+
+[mapping]
+format = "json"
+entity_type = "mim:equipment"
+timestamp_field = "time"
+timestamp_format = "rfc3339"
+
+# The emitter fingerprint, contract revision 4.
+[mapping.attributes]
+frequency_hz = "frequency_hz"
+bandwidth_hz = "bandwidth_hz"
+power_dbm = "power_dbm"
+elnot = "elnot"
+prf_hz = "prf_hz"
+pulse_width_us = "pulse_width_us"
+scan_type = "scan_type"
+scan_period_s = "scan_period_s"
+bearing_deg = "bearing_deg"
+bearing_accuracy_deg = "bearing_accuracy_deg"
+carried_by = "carried_by_alt_id"
+carried_by_standard = "carried_by_alt_id_standard"
+observed_by = "observed_by_alt_id"
+observed_by_standard = "observed_by_alt_id_standard"
+
+# Native identifiers and the receiver's own spellings, kept verbatim.
+[mapping.metadata]
+emitter_id = "emitter_id"
+truth_lat = "truth_lat"
+truth_lon = "truth_lon"

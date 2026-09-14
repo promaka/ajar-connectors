@@ -116,6 +116,56 @@ The reverse direction. Relays governed, provenance-checked tracks back out to a 
 Server so ATAK users see the fused picture. This is an egress relay rather than an
 ingest connector, and it connects over TLS to the server's streaming input.
 
+## Conformance and commissioning
+
+### `ajar-feed-synthetic` (one fixture, six sensors)
+
+A synthetic multi-sensor source for conformance and commissioning: a fusion
+consumer builds against it before any equipment arrives, and a site
+commissions its connectors against it before real feeds are switched in.
+Every sensor is read by a real connector on its real wire format; only the
+thing plugged into each connector's input is synthesised, so replacing a
+generator with actual equipment changes nothing else. The six render one
+fixture in the Solent approaches: a container ship seen by AIS and by the
+coastal radar, an airliner seen by ADS-B and by the radar's system track, a
+navigation radar on the ship intercepted by an ESM receiver, an uncrewed
+aircraft on MAVLink and a shore party on CoT. The same object seen twice gives
+a fusion consumer association work with a known answer.
+
+Each sensor emits only what that sensor carries: AIS has an identity and no
+accuracy, the radar plot has accuracy and no identity, CoT has an identity and
+no kinematics, the ESM intercept has a bearing and no position. Every
+generator lags by its own sensor's latency, so observation time and arrival
+time diverge as they do in the field. Cadences are the protocols' own: the AIS
+static report every six minutes per ITU-R M.1371 (shorten it for a
+commissioning run with `--ais-static-every`), the radar heartbeat once per
+rotation. The ESM intercept carries the full contract revision 4 emitter
+fingerprint and names both the platform it sits on and the receiver that heard
+it. Every object runs a racetrack, so the fixture is bounded and holds for as
+long as the feed runs.
+
+Each generator is proven against the decoder that reads it, in the same
+workspace, so the two cannot drift apart without a test failing. `--dry-run`
+prints one tick of every sensor and opens nothing.
+
+```
+ajar-feed-synthetic all --bind 192.0.2.10     # every sensor on one interface
+ajar-feed-synthetic asterix ais               # a subset
+```
+
+| sensor | wire | read by |
+|---|---|---|
+| radar | ASTERIX CAT034 + CAT010 + CAT062 on multicast 232.1.1.1:8600 | `ajar-asterix` |
+| AIS | `!AIVDM` type 1 and 5 on TCP 30160 | `ais-nmea` |
+| ADS-B | SBS-1 on TCP 30003 | `ajar-adsb` |
+| MAVLink | v1 frames to UDP 14550 | `ajar-mavlink` |
+| CoT | XML on multicast 239.2.3.1:6969 | `ajar-tak-cot` |
+| ESM | JSON lines on TCP 30155 | `ajar-generic` with `esm-synthetic.example.toml` |
+
+Every connector reading this feed carries `[marking] caveats = ["EXERCISE"]`,
+so each track says what it is inside its signature wherever it goes; the
+operator's profile gating decides whether it is ever started.
+
 ## Anything else
 
 ### `ajar-generic` (config-driven JSON, CSV and NMEA-like)
