@@ -13,6 +13,13 @@ Two version lines are tracked independently (see COMPATIBILITY.md):
 
 ## [Unreleased]
 
+### Added
+
+- Images for every ingress and egress connector: `gmti`, `klv`,
+  `stanag4676`, `stanag4586` and `generic-egress` join the matrix, and
+  `doctor` with them so a cluster runs diagnostics from the same registry.
+  The out-of-the-box sidecar set is now the whole suite.
+
 ### Documentation
 
 - Every guide, the SDK headers and the validator messages now state what Core
