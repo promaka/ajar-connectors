@@ -13,6 +13,8 @@ Two version lines are tracked independently (see COMPATIBILITY.md):
 
 ## [Unreleased]
 
+## [0.6.3] - 2026-09-20
+
 ### Security
 
 - rustls 0.23.43 to 0.23.45 in every workspace, for RUSTSEC-2026-0285:
