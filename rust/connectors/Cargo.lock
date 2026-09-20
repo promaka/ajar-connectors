@@ -13,7 +13,7 @@ dependencies = [
 
 [[package]]
 name = "ajar-adsb"
-version = "0.6.2"
+version = "0.6.3"
 dependencies = [
  "ajar-connector",
  "ajar-connector-common",
@@ -30,7 +30,7 @@ dependencies = [
 
 [[package]]
 name = "ajar-ais-nmea"
-version = "0.6.2"
+version = "0.6.3"
 dependencies = [
  "ajar-connector",
  "ajar-connector-common",
@@ -48,7 +48,7 @@ dependencies = [
 
 [[package]]
 name = "ajar-asterix"
-version = "0.6.2"
+version = "0.6.3"
 dependencies = [
  "ajar-connector",
  "ajar-connector-common",
@@ -66,7 +66,7 @@ dependencies = [
 
 [[package]]
 name = "ajar-connector"
-version = "0.6.2"
+version = "0.6.3"
 dependencies = [
  "ed25519-dalek",
  "hex",
@@ -83,7 +83,7 @@ dependencies = [
 
 [[package]]
 name = "ajar-connector-common"
-version = "0.6.2"
+version = "0.6.3"
 dependencies = [
  "ajar-connector",
  "anyhow",
@@ -113,7 +113,7 @@ dependencies = [
 
 [[package]]
 name = "ajar-doctor"
-version = "0.6.2"
+version = "0.6.3"
 dependencies = [
  "ajar-connector-common",
  "anyhow",
@@ -131,7 +131,7 @@ dependencies = [
 
 [[package]]
 name = "ajar-feed-synthetic"
-version = "0.6.2"
+version = "0.6.3"
 dependencies = [
  "ajar-adsb",
  "ajar-ais-nmea",
@@ -154,7 +154,7 @@ dependencies = [
 
 [[package]]
 name = "ajar-generic"
-version = "0.6.2"
+version = "0.6.3"
 dependencies = [
  "ajar-connector",
  "ajar-connector-common",
@@ -175,7 +175,7 @@ dependencies = [
 
 [[package]]
 name = "ajar-generic-egress"
-version = "0.6.2"
+version = "0.6.3"
 dependencies = [
  "ajar-connector",
  "ajar-connector-common",
@@ -197,7 +197,7 @@ dependencies = [
 
 [[package]]
 name = "ajar-gmti"
-version = "0.6.2"
+version = "0.6.3"
 dependencies = [
  "ajar-connector",
  "ajar-connector-common",
@@ -214,7 +214,7 @@ dependencies = [
 
 [[package]]
 name = "ajar-klv"
-version = "0.6.2"
+version = "0.6.3"
 dependencies = [
  "ajar-connector",
  "ajar-connector-common",
@@ -232,7 +232,7 @@ dependencies = [
 
 [[package]]
 name = "ajar-mavlink"
-version = "0.6.2"
+version = "0.6.3"
 dependencies = [
  "ajar-connector",
  "ajar-connector-common",
@@ -250,7 +250,7 @@ dependencies = [
 
 [[package]]
 name = "ajar-sink"
-version = "0.6.2"
+version = "0.6.3"
 dependencies = [
  "ajar-connector",
  "ajar-connector-common",
@@ -272,7 +272,7 @@ dependencies = [
 
 [[package]]
 name = "ajar-stanag4586"
-version = "0.6.2"
+version = "0.6.3"
 dependencies = [
  "ajar-connector",
  "ajar-connector-common",
@@ -291,7 +291,7 @@ dependencies = [
 
 [[package]]
 name = "ajar-stanag4676"
-version = "0.6.2"
+version = "0.6.3"
 dependencies = [
  "ajar-connector",
  "ajar-connector-common",
@@ -311,7 +311,7 @@ dependencies = [
 
 [[package]]
 name = "ajar-tak-cot"
-version = "0.6.2"
+version = "0.6.3"
 dependencies = [
  "ajar-connector",
  "ajar-connector-common",
@@ -330,7 +330,7 @@ dependencies = [
 
 [[package]]
 name = "ajar-tak-egress"
-version = "0.6.2"
+version = "0.6.3"
 dependencies = [
  "ajar-connector-common",
  "anyhow",
@@ -349,7 +349,7 @@ dependencies = [
 
 [[package]]
 name = "ajar-up"
-version = "0.6.2"
+version = "0.6.3"
 dependencies = [
  "ajar-connector",
  "ajar-connector-common",
@@ -440,7 +440,7 @@ dependencies = [
  "ring",
  "rustls-native-certs",
  "rustls-pki-types",
- "rustls-webpki 0.103.13",
+ "rustls-webpki 0.103.15",
  "serde",
  "serde_json",
  "serde_nanos",
@@ -2514,15 +2514,15 @@ dependencies = [
 
 [[package]]
 name = "rustls"
-version = "0.23.43"
+version = "0.23.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0283386ce02abc0151e1761d08802dfe86c173b0b494af5cbc086574e453da06"
+checksum = "0d41d731c7d2f962d1ccc364cec258de3c0e93b38c2fb3ba97ac74513048d634"
 dependencies = [
  "log",
  "once_cell",
  "ring",
  "rustls-pki-types",
- "rustls-webpki 0.103.13",
+ "rustls-webpki 0.103.15",
  "subtle",
  "zeroize",
 ]
@@ -2570,9 +2570,9 @@ dependencies = [
 
 [[package]]
 name = "rustls-webpki"
-version = "0.103.13"
+version = "0.103.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "61c429a8649f110dddef65e2a5ad240f747e85f7758a6bccc7e5777bd33f756e"
+checksum = "f3c3cf1d8b1e7d4927e2d154c3fcb02979afb9939629c62cd9048d4f07b60ac2"
 dependencies = [
  "ring",
  "rustls-pki-types",

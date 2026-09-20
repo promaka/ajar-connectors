@@ -13,6 +13,15 @@ Two version lines are tracked independently (see COMPATIBILITY.md):
 
 ## [Unreleased]
 
+## [0.6.3] - 2026-09-20
+
+### Security
+
+- rustls 0.23.43 to 0.23.45 in every workspace, for RUSTSEC-2026-0285:
+  TLS 1.3 handshake messages were accepted across encryption level
+  boundaries. rustls is the TLS under every connector's mTLS link to the
+  bus and under the egress relays, so this ships as a patch release.
+
 ## [0.6.2] - 2026-09-14
 
 ### Added

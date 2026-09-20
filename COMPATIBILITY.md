@@ -85,13 +85,13 @@ migration into your own review cycle instead of discovering it in ours.
 ## What you should do to rely on this
 
 1. **Pin a released version, not a branch.** Depend on an exact release
-   (`0.6.2`, or the tag `v0.6.2` where the install goes through git), never
+   (`0.6.3`, or the tag `v0.6.3` where the install goes through git), never
    `branch = "main"` — `main` moves. With a pinned release, even your *next
    rebuild* is reproducible.
-   - Rust: `ajar-connector = "0.6.2"` (crates.io)
-   - Go: `go get github.com/promaka/ajar-connectors/go/ajarconnector@v0.6.2`
-   - Python: `pip install ajar-connector==0.6.2` (PyPI)
-   - C++: check out the `v0.6.2` tag (or vendor it) and build per [cpp/README.md](cpp/README.md).
+   - Rust: `ajar-connector = "0.6.3"` (crates.io)
+   - Go: `go get github.com/promaka/ajar-connectors/go/ajarconnector@v0.6.3`
+   - Python: `pip install ajar-connector==0.6.3` (PyPI)
+   - C++: check out the `v0.6.3` tag (or vendor it) and build per [cpp/README.md](cpp/README.md).
 
    On an air-gapped or accredited network none of these will resolve. Vendor the
    full dependency closure at the tag on a connected machine and carry it across —
