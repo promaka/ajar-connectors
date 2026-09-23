@@ -71,8 +71,8 @@ pub(crate) struct Metrics {
     /// and this says so, instead of a phantom increment of `spooled`.
     pub spool_failed: Arc<AtomicU64>,
     /// Events published carrying an attribute their own entity type does not
-    /// govern. Core does not deliver those as attributes; each name is also
-    /// logged once, so a mapping that loses a field has a symptom.
+    /// govern. Core quarantines those, or rejects the event on a strict site;
+    /// each name is also logged once, so either outcome has a symptom here.
     pub ungoverned: Arc<AtomicU64>,
 }
 
@@ -178,7 +178,7 @@ pub async fn run(
                                                     entity_type = %event.entity_type,
                                                     attribute = %name,
                                                     ontology = crate::ontology::version(),
-                                                    "attribute is not governed on this entity type; Core will not deliver it as an attribute, put it in metadata"
+                                                    "attribute is not governed on this entity type; Core will quarantine it or, on a strict site, reject the event: put it in metadata"
                                                 );
                                             }
                                         }

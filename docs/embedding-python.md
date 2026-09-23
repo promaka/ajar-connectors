@@ -54,16 +54,19 @@ The SDK builds and signs; deciding that your record is a `mim:aircraft` and that
 your speed must be metres per second is yours. The entity types, governed
 attribute names, units and controlled vocabularies are in
 **[docs/mapping-to-mim.md](mapping-to-mim.md)**. Read it before you write the
-mapping: a wrong type or a misspelled attribute compiles, seals and publishes,
-and is then discarded without an error.
+mapping: a wrong type or a misspelled attribute compiles, seals and publishes
+with no error at your end, and Ajar then rejects the event or keeps the attribute
+only as ungoverned metadata.
 
 ## Governed versus ungoverned
 
 `attribute()` is validated against Ajar's ontology. `metadata()` is not, and is
 always accepted.
 
-**Ajar discards an unrecognised attribute name or value without an error.** Your
-service keeps running, events keep publishing, and the data does not arrive. So:
+**Ajar does not govern an unrecognised attribute name or value, and says nothing
+to you about it.** On a default site the value is moved to metadata: kept, but
+invisible to policy and to the typed picture. On a strict site the whole event
+is rejected. Either way your service keeps running and publishing. So:
 agree the entity type and attribute names with your operator before you build,
 and treat controlled vocabularies as case-sensitive — `hostility` takes `Friend`,
 not `friendly`. Native identifiers go in `metadata`, never in `id`.

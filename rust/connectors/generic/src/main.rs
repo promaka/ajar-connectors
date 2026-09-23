@@ -31,9 +31,9 @@ async fn main() -> anyhow::Result<()> {
 
     let mapping = Mapping::load(&path).with_context(|| format!("loading mapping from {path}"))?;
 
-    // A mapping that names something the ontology does not declare would be
-    // accepted by the bus and discarded by Core, so it stops the connector here
-    // instead of running healthily and delivering nothing.
+    // A mapping that names something the ontology does not declare would have
+    // its events rejected or its fields quarantined by Core, so it stops the
+    // connector here instead of running healthily with nothing governed.
     ajar_connector_common::ontology::enforce(&ajar_connector_common::ontology::Declared {
         entity_type: mapping.entity_type.clone(),
         // The AJAR names (the mapping's values) are what the ontology governs;

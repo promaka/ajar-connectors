@@ -107,7 +107,7 @@ int main(int argc, char** argv) {
   // --check validates what EDIT 2 actually builds against the vendored
   // ontology, then exits — no key, no feed, no network. Run it in CI so a
   // mapping mistake fails the build instead of publishing events Ajar
-  // silently discards.
+  // rejects or cannot govern.
   if (check_only) {
     const ajar::Event probe = to_event("check", MyRecord{});
     const auto faults = ajar::validate(probe);

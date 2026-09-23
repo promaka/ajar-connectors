@@ -883,7 +883,7 @@ mod tests {
     fn an_unrecognised_environment_is_unknown_and_the_token_is_kept() {
         // 4676's enums are extensible, so a producer may send something outside
         // STANAG 1241. Emitting it verbatim would be quarantined by Core and the
-        // track would lose its battle dimension without anyone noticing.
+        // track would lose its battle dimension on the picture.
         let xml = AIR_TRACK.replace("<ns2:environment>AIR", "<ns2:environment>LITTORAL");
         let ev = &parser().to_events(xml.as_bytes()).unwrap()[0];
         assert_eq!(tactical(ev, "environment"), Some("UNKNOWN"));
@@ -893,8 +893,8 @@ mod tests {
     #[test]
     fn an_operator_typed_track_does_not_claim_a_domain() {
         // `environment` is governed on mim:object alone: on a typed class the
-        // type is the domain, and setting the attribute would be discarded by
-        // not delivered by Core. The wire's domain rides in metadata instead.
+        // type is the domain, and setting the attribute would be quarantined by
+        // Core. The wire's domain rides in metadata instead.
         let mut ov = std::collections::HashMap::new();
         ov.insert("AIR".to_string(), "mim:aircraft".to_string());
         let p = S4676Parser::new("isr-1", ov, Enrichment::default());

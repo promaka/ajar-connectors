@@ -50,7 +50,7 @@ timestamp_format = "rfc3339"
 lat_field = "lat"
 lon_field = "lon"
 # The detector's score lands in the event's first-class confidence field
-# (mapping it as an attribute would silently lose it: not governed, quarantined).
+# (mapping it as an attribute would leave it ungoverned: quarantined into metadata).
 confidence_field = "confidence"
 
 # Governed: ontology-validated tactical facts.

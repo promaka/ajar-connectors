@@ -173,9 +173,10 @@ class EventBuilder {
 
 // Checking a mapping against the vendored ontology, before events are built.
 //
-// Ajar's ingest is graceful: an entity type or attribute name the ontology does
-// not declare is discarded rather than rejected, so a typo has no symptom — the
-// connector runs, seals and publishes while its tracks never appear. Validation
+// Nothing fails at the connector: Ajar rejects an entity type the ontology
+// does not declare, and moves an attribute it does not declare out of the
+// governed fields (or rejects the event on a strict site), so a typo has no
+// symptom where it was made. Validation
 // answers that at startup instead. It is advisory: nothing here throws or
 // refuses per event; refusing to start on faults is the embedder's decision at
 // their own initialisation.

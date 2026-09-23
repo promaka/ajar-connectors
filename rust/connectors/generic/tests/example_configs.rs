@@ -9,7 +9,8 @@
 //!  - signing_key_path must not point at a .key PEM (the loader takes the
 //!    32-byte .seed; the PEM is the mTLS key, a different key entirely);
 //!  - generic mappings must pass the same ontology gate the connector
-//!    enforces at boot, so a copied config cannot ship events Core discards.
+//!    enforces at boot, so a copied config cannot ship events Core rejects
+//!    or quarantines.
 
 use ajar_connector_common as common;
 use ajar_generic::Mapping;

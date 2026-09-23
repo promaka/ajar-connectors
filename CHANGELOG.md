@@ -13,6 +13,17 @@ Two version lines are tracked independently (see COMPATIBILITY.md):
 
 ## [Unreleased]
 
+### Documentation
+
+- Every guide, the SDK headers and the validator messages now state what Core
+  does with a name it does not govern, as Core confirms it: an unknown entity
+  type is rejected; an undeclared attribute, or a value outside its
+  vocabulary, unit or range, is quarantined into metadata on a graceful site,
+  where it is kept and signed but invisible to policy and the typed picture,
+  and rejects the event on a strict site. Earlier notes in this changelog, and
+  the guides, described such fields as discarded or not delivered; on a
+  graceful site they were kept, as metadata.
+
 ## [0.6.3] - 2026-09-20
 
 ### Security

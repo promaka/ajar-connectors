@@ -2316,7 +2316,7 @@ mod tests {
     fn a_typed_class_implies_its_domain_and_does_not_claim_one() {
         // `environment` is governed on `mim:object` alone, so a typed class
         // carries none: the type is the domain. Setting it anyway would be
-        // not delivered by Core.
+        // quarantined by Core, or reject the event on a strict site.
         for ty in ["mim:vessel", "mim:surface-vessel", "mim:subsurface-vessel"] {
             let mut map = std::collections::HashMap::new();
             map.insert("cat010".to_string(), ty.to_string());

@@ -91,9 +91,9 @@ std::string ValidationFault::message() const {
       if (!suggestion.empty()) m += " (did you mean \"" + suggestion + "\"?)";
       if (!governed_on.empty())
         m += "; it is governed on \"" + governed_on +
-             "\", but attributes are not inherited, so Core would discard it here";
+             "\", but attributes are not inherited, so Core would not govern it here";
       else
-        m += "; it would be discarded";
+        m += "; Core would not govern it";
       return m + ". Put it in metadata instead, which is always kept";
     }
     case Kind::NotInVocabulary: {
@@ -131,7 +131,7 @@ std::vector<ValidationFault> validate(const DeclaredMapping& mapping) {
   // entity type, so the type's own list is the whole truth and the narrowing in
   // it is deliberate (a sensor has no speed though its parent equipment does;
   // only a bare mim:object carries environment). A validator that walked the
-  // parent chain would accept mappings Core does not deliver.
+  // parent chain would accept mappings Core does not govern.
   std::map<std::string, const AttrDef*> governed;
   for (const auto& a : it->second.attributes) governed.emplace(a.name, &a);
 

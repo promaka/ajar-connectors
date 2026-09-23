@@ -62,7 +62,8 @@ alongside it.
 **The SDK does not do this for you.** It builds, signs and enforces structure. It
 does not know that your `TrackType=3` is an aircraft, or that your speed is in
 knots and must be metres per second. A wrong entity type or attribute name
-compiles, seals and publishes, and Ajar discards it without an error.
+compiles, seals and publishes with no error at your end; Ajar then rejects the
+event, or keeps the attribute only as ungoverned metadata.
 
 Read **[docs/mapping-to-mim.md](mapping-to-mim.md)**. It has a complete file you
 can copy: your record struct in, sealed event out, with the type mapping, the
@@ -70,9 +71,10 @@ unit conversions and the exact vocabularies.
 
 **Validate against the ontology your operator sends you** —
 `ontology-mim-5.3-conformant-4.json`. That file is the contract your events are
-checked against: it lists the entity types and attribute names that exist, and
-anything outside it is discarded silently. If you have not got it, ask before you
-write the mapping.
+checked against: it lists the entity types and attribute names that exist. An
+entity type outside it is rejected; an attribute outside it is moved to
+metadata, where policy cannot see it, or rejects the event on a strict site. If
+you have not got it, ask before you write the mapping.
 
 Four decisions, per record:
 
@@ -103,7 +105,7 @@ the contract:
 
 Validation is advisory: it refuses nothing per event. Refusing to start on
 faults is your call at your own initialisation, and the right one for a service
-that would otherwise publish events Ajar discards silently.
+that would otherwise publish events Ajar rejects or cannot govern.
 
 ---
 

@@ -1,15 +1,17 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Check a connector's declared mapping against the vendored ontology, at boot.
 //!
-//! Core runs a graceful ingest: an entity type or attribute name it does not
-//! recognise is discarded rather than rejected. That keeps a feed alive through
-//! an ontology change, but it means a typo has no symptom. The connector runs,
-//! seals, publishes, reports healthy — and the tracks never appear. Operators
-//! lose days to it, and the failure looks like a network problem.
+//! Nothing fails at the connector when a mapping is wrong. Core rejects an
+//! entity type it does not recognise. An attribute the event's type does not
+//! declare, or a value outside its vocabulary, unit or range, is quarantined on
+//! a graceful site, the default: moved into metadata, kept and signed, but
+//! invisible to policy and to the typed picture. On a strict site the whole
+//! event is rejected. Either way the connector runs, seals, publishes and
+//! reports healthy, and the symptom appears somewhere else.
 //!
 //! So the check happens here instead, before the first frame: a mapping that
 //! names something the ontology does not declare stops the connector with a
-//! message naming the offender, rather than being discarded silently downstream.
+//! message naming the offender.
 //!
 //! The ontology is vendored and hash-pinned alongside `event.proto`, so this
 //! never reaches the network and works in an air-gapped build.
@@ -19,7 +21,7 @@
 //! narrowing in it is deliberate: `environment` is declared on `mim:object`
 //! alone, because a typed class already implies its domain, and `mim:sensor`
 //! lacks the kinematics its parent `mim:equipment` allows. A validator that
-//! walked the parent chain would accept mappings Core does not deliver. One
+//! walked the parent chain would accept mappings Core does not govern. One
 //! `Declared` is therefore one entity type and what a connector sets on it; a
 //! connector that emits several types checks each.
 //!
@@ -125,10 +127,10 @@ impl std::fmt::Display for Fault {
                     write!(
                         f,
                         "; it is governed on {anc:?}, but attributes are not inherited, so Core \
-                         would discard it here"
+                         would not govern it here"
                     )?;
                 } else {
-                    write!(f, "; it would be discarded")?;
+                    write!(f, "; Core would not govern it")?;
                 }
                 write!(f, ". Put it in metadata instead, which is always kept")
             }
@@ -201,8 +203,9 @@ pub fn governs(entity_type: &str, attribute: &str) -> bool {
 }
 
 /// The governed attributes on a built event that its own entity type does not
-/// declare. Core does not deliver these as attributes, so the runtime reports
-/// each name once. An unknown entity type lists every attribute.
+/// declare. Core quarantines these into metadata on a graceful site and
+/// rejects the event on a strict one, so the runtime reports each name once.
+/// An unknown entity type lists every attribute.
 pub fn ungoverned(event: &Event) -> Vec<String> {
     event
         .attributes
@@ -315,8 +318,8 @@ pub fn enforce(declared: &Declared) -> anyhow::Result<()> {
         tracing::error!("{f}");
     }
     anyhow::bail!(
-        "{} mapping fault(s) against ontology {}: the events would be accepted by the \
-         bus and discarded by Core, so the connector is refusing to start",
+        "{} mapping fault(s) against ontology {}: Core would reject these events or \
+         quarantine the fields, so the connector is refusing to start",
         faults.len(),
         load().version
     )
@@ -378,7 +381,7 @@ mod tests {
         // A name nobody governs says so without inventing an ancestor.
         let msg = check(&d("mim:aircraft", &["not_a_thing"]))[0].to_string();
         assert!(!msg.contains("it is governed on"), "{msg}");
-        assert!(msg.contains("would be discarded"), "{msg}");
+        assert!(msg.contains("Core would not govern it"), "{msg}");
     }
 
     #[test]

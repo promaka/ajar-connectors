@@ -64,8 +64,10 @@ database and `audit` names the exact record that is missing.
 1. **A `source_id`.** Your connector's identity, agreed with your Ajar operator.
    Example: `acme-radar-1`.
 2. **An entity type and attribute names**, agreed with the same operator. Ajar
-   discards an entity type or attribute name it does not recognise, without
-   raising an error, so settle these before you write any mapping.
+   rejects an entity type it does not recognise, and moves an attribute it does
+   not govern out of the governed fields, or rejects the event on a strict
+   site. Neither shows up at your end, so settle these before you write any
+   mapping.
 3. **A signing key.** Generate it yourself:
 
    ```bash
@@ -148,8 +150,10 @@ always kept. A native identifier goes in metadata, never in `id`; when its
 standard is one the contract names, it also goes in the governed `alt_id` and
 `alt_id_standard` pair (see [ATTRIBUTES.md](rust/connectors/ATTRIBUTES.md)).
 
-**Step 4a. Work out what to map to.** The SDK does not do this for you, and a
-wrong entity type or attribute name is discarded by Ajar without an error.
+**Step 4a. Work out what to map to.** The SDK does not do this for you. A
+wrong entity type is rejected by Ajar. A wrong attribute name is taken out of
+the governed fields on a default site, and rejects the event on a strict one.
+Neither raises an error at your end.
 [docs/mapping-to-mim.md](docs/mapping-to-mim.md) lists the entity types, the
 governed attribute names, the units, and the controlled vocabularies.
 
