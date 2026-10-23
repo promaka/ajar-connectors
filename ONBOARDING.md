@@ -275,8 +275,10 @@ openssl pkey -in connector.key -outform DER | tail -c 32 > connector.seed       
 openssl pkey -in connector.key -pubout -outform DER | tail -c 32 | xxd -p -c 64        # the public half, for the operator
 ```
 
-Then run `ajar-up <packet> --signing-key connector.seed`. The file must be
-the 32-byte seed, or its 64 hex characters, not the PEM. Everything else is
+The operator registers that public half with `--pubkey` in place of
+`--mint`, and the packet then carries no signing key. Run
+`ajar-up <packet> --signing-key connector.seed`. The file must be the
+32-byte seed, or its 64 hex characters, not the PEM. Everything else is
 identical. Keep the private half in a secrets manager or a file with
 locked-down permissions, never in source control.
 

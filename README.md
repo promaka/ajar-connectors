@@ -406,7 +406,10 @@ The example config reads newline-delimited frames pushed over TCP; change
 `[transport]` to whatever your equipment does, as in section 4, step 3.
 
 **Step 4.** Go to [section 7](#7-deploy-it). For a container, section 7b
-builds your crate by name.
+builds your crate by name. To have `ajar-up` start it from a packet, the
+Core operator names it with `--protocol acme-legacy` when registering it,
+as [section 9](#9-register-with-core) shows; the binary only has to sit
+beside `ajar-up` or on `PATH`.
 
 ### 6b. A standalone program
 
@@ -634,18 +637,34 @@ Ajar accepts events only from a registered identity. Registration is done by
 whoever runs the Core you are connecting to. Nobody else is involved, and
 nothing in this repository phones home.
 
-**If you run Core yourself,** skip the exchange below. On the Core host, one
-command registers the connector, mints its credentials and writes a packet:
+**If you run Core yourself,** skip the exchange below. On the Core host, in
+its material directory, one command registers the connector, mints its
+credentials and writes a packet:
 
 ```bash
-ajar onboard acme-radar-1 --mint --types mim: --sign material/sovereign.key \
-  --nats tls://<your bus endpoint>:443
+ajar onboard acme-radar-1 --mint --types mim: --protocol asterix \
+  --nats tls://<core-host>:4222 --sign sovereign.key --policy policy.rego \
+  --activate-policy --policy-version v<N> --material-dir . \
+  --control-url http://127.0.0.1:9092 --idp-key idp.key --sub <operator>
 ```
 
-Carry `acme-radar-1.packet.tar` to the connector host and run
-`./ajar-up acme-radar-1.packet.tar`, as in [section 4](#4-set-up-run-a-prebuilt-connector).
-`ajar onboard --help` on your Core lists the flags; Core's connector
-onboarding guide covers renewal, fleets and revocation.
+It mints the signing key and the mTLS client certificate, registers the
+public key with Core without a restart, writes and activates the policy
+line, and produces `acme-radar-1.packet.tar`. Carry that file to the
+connector host and run `./ajar-up acme-radar-1.packet.tar`, as in
+[section 4](#4-set-up-run-a-prebuilt-connector).
+
+`--protocol` names the connector `ajar-up` starts: it runs `ajar-<protocol>`
+from beside itself or from `PATH`. A connector you built in
+[section 6a](#6a-a-parser-on-the-shared-runtime) is therefore
+`--protocol acme-legacy`, with no change on Core. A key you generated
+yourself goes in as `--pubkey <64 hex characters>` instead of `--mint`, and
+the packet then omits the signing key. A consumer is `ajar onboard <id>
+--consumer`.
+
+The command's own help lists every flag, and the Core bundle's runbook,
+`deploy/site/RUNBOOK.md` section 4, has the connector commands; a fuller
+connector onboarding guide joins the bundle's `docs/` from Core 0.1.28.
 
 **If someone else runs Core,** one exchange, no account:
 
