@@ -26,8 +26,11 @@ canonical `Event`s. That is the whole contract.
    payload for a later ontology to extract. *A connector must not decide what is
    valuable.*
 2. **Emit every decoded field as an attribute.** Use `.attribute(key, value)`.
-   Core's ingest demotes undeclared keys to quarantine metadata — you do **not**
-   gate on any ontology. Absent stays absent: never invent a default (including
+   On a graceful site, the default, Core's ingest moves undeclared keys into
+   quarantine metadata, where they are kept; on a strict site it rejects the
+   whole event. Put a field you know the ontology does not govern in metadata,
+   and otherwise do **not** gate on any ontology. Absent stays absent: never
+   invent a default (including
    hostility — emit it only if the operator configured one).
 3. **Canonical names + units.** Governed attributes have declared units. Normalise
    to them (speed → m/s, vertical_rate → m/s, altitude → metres, angles → degrees)

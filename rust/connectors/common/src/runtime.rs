@@ -169,9 +169,22 @@ pub async fn run(
                                     if let Some(m) = &marking {
                                         m.apply(&mut event);
                                     }
-                                    let lost = crate::ontology::ungoverned(&event);
-                                    if !lost.is_empty() {
+                                    // Report once per type or name what Core will not
+                                    // govern, since nothing fails at this end.
+                                    if !crate::ontology::knows_type(&event.entity_type) {
                                         metrics.ungoverned.fetch_add(1, Ordering::Relaxed);
+                                        if reported.insert((event.entity_type.clone(), String::new())) {
+                                            tracing::warn!(
+                                                entity_type = %event.entity_type,
+                                                ontology = crate::ontology::version(),
+                                                "entity type is not in the ontology; Core will reject these events on every site"
+                                            );
+                                        }
+                                    } else {
+                                        let lost = crate::ontology::ungoverned(&event);
+                                        if !lost.is_empty() {
+                                            metrics.ungoverned.fetch_add(1, Ordering::Relaxed);
+                                        }
                                         for name in lost {
                                             if reported.insert((event.entity_type.clone(), name.clone())) {
                                                 tracing::warn!(

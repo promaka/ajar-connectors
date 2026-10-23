@@ -175,8 +175,9 @@ Pending  Unknown  Faker  Joker
 
 Not `friendly`, not `FRIEND`. This is the attribute where a mistake is hardest to
 notice: Core runs graceful mode by default, so an unrecognised name or value is
-not rejected. The event is accepted, the field is dropped, and the deployment
-looks healthy while the map loses its friend-or-foe colouring. After changing
+not rejected. The event is accepted, the field is quarantined into metadata,
+and the deployment looks healthy while the map loses its friend-or-foe
+colouring. On a strict site the whole event is rejected instead. After changing
 anything here, check `ajar_attributes_quarantined_total{attribute="hostility"}`
 reads zero. That metric holds at most 32 distinct attribute names and overflows
 the rest into `other`, so if the `hostility` series is absent rather than zero,

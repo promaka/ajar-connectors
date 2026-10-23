@@ -104,7 +104,7 @@ jobs:
             exit 1
           fi
           # Install instructions that pin an older release send vendors to an SDK
-          # from an earlier ontology, whose events Core discards silently.
+          # from an earlier ontology, whose events Core rejects or quarantines.
           bash scripts/check-doc-pins.sh "$tag"
           bash scripts/check-versions.sh "$tag"
           echo "release-guard OK: tag, crate version, changelog and doc pins agree ($ver)"

@@ -7,7 +7,7 @@
 //! a graceful site, the default: moved into metadata, kept and signed, but
 //! invisible to policy and to the typed picture. On a strict site the whole
 //! event is rejected. Either way the connector runs, seals, publishes and
-//! reports healthy, and the symptom appears somewhere else.
+//! reports healthy; the shared runtime logs what it can see, but nothing fails.
 //!
 //! So the check happens here instead, before the first frame: a mapping that
 //! names something the ontology does not declare stops the connector with a
@@ -202,10 +202,17 @@ pub fn governs(entity_type: &str, attribute: &str) -> bool {
             .is_some_and(|set| set.contains(attribute))
 }
 
+/// Whether the ontology declares `entity_type`. A vendor namespace (`x:`) is
+/// the operator's to register and counts as known.
+pub fn knows_type(entity_type: &str) -> bool {
+    entity_type.starts_with("x:") || index().attrs.contains_key(entity_type)
+}
+
 /// The governed attributes on a built event that its own entity type does not
 /// declare. Core quarantines these into metadata on a graceful site and
 /// rejects the event on a strict one, so the runtime reports each name once.
-/// An unknown entity type lists every attribute.
+/// An unknown entity type lists every attribute; Core rejects such an event
+/// on every site, which [`knows_type`] tells apart.
 pub fn ungoverned(event: &Event) -> Vec<String> {
     event
         .attributes

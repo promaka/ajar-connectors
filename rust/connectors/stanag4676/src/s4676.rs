@@ -387,8 +387,9 @@ impl S4676Parser {
 ///
 /// Core drives the CoT battle dimension from this attribute, so an AIR contact of
 /// unknown type renders in the air dimension rather than as a bare unknown. That
-/// only works while the value is inside the set: anything else is quarantined and
-/// the track silently loses its dimension on the map.
+/// only works while the value is inside the set: anything else is quarantined,
+/// and the track loses its dimension on the map, or on a strict site the event
+/// is rejected.
 ///
 /// Two reasons not to pass the wire value through. STANAG 1241 hyphenates
 /// `SUB-SURFACE` where Core does not, and its enums are extensible, so a producer
@@ -862,7 +863,8 @@ mod tests {
             ("SURFACE", "SURFACE"),
             ("LAND", "LAND"),
             // STANAG 1241 hyphenates this; Core's closed set does not. Passing the
-            // wire value through would quarantine it and lose the CoT dimension.
+            // wire value through would have Core quarantine it and lose the CoT
+            // dimension, or reject the event on a strict site.
             ("SUB-SURFACE", "SUBSURFACE"),
             ("SPACE", "SPACE"),
             ("UNKNOWN", "UNKNOWN"),
@@ -882,8 +884,8 @@ mod tests {
     #[test]
     fn an_unrecognised_environment_is_unknown_and_the_token_is_kept() {
         // 4676's enums are extensible, so a producer may send something outside
-        // STANAG 1241. Emitting it verbatim would be quarantined by Core and the
-        // track would lose its battle dimension on the picture.
+        // STANAG 1241. Emitting it verbatim would be quarantined by Core, and the
+        // track would lose its battle dimension, or be rejected on a strict site.
         let xml = AIR_TRACK.replace("<ns2:environment>AIR", "<ns2:environment>LITTORAL");
         let ev = &parser().to_events(xml.as_bytes()).unwrap()[0];
         assert_eq!(tactical(ev, "environment"), Some("UNKNOWN"));
@@ -894,7 +896,8 @@ mod tests {
     fn an_operator_typed_track_does_not_claim_a_domain() {
         // `environment` is governed on mim:object alone: on a typed class the
         // type is the domain, and setting the attribute would be quarantined by
-        // Core. The wire's domain rides in metadata instead.
+        // Core, or reject the event on a strict site. The wire's domain rides in
+        // metadata instead.
         let mut ov = std::collections::HashMap::new();
         ov.insert("AIR".to_string(), "mim:aircraft".to_string());
         let p = S4676Parser::new("isr-1", ov, Enrichment::default());

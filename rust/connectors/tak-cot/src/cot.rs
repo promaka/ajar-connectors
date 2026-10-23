@@ -193,7 +193,8 @@ impl CotParser {
         }
         // A negative speed is not a slower speed, and a course outside a circle
         // is not a direction: both are a malformed track, and a governed value
-        // outside the ontology's bounds would be quarantined downstream anyway.
+        // outside the ontology's bounds would be quarantined downstream, or reject
+        // the event on a strict site.
         if let Some(course) = course.filter(|c| (0.0..=360.0).contains(c)) {
             builder = builder.attribute("course", format!("{course:.1}"));
         }

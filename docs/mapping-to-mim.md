@@ -251,7 +251,8 @@ it, so a field you cannot map today is not lost.
 
 Rule of thumb: **if in doubt, metadata.** A governed attribute you get wrong is
 moved to metadata anyway on a default site, and rejects the event on a strict
-one; the same value sent as metadata arrives intact everywhere.
+one; the same value sent as metadata is kept on every site. (Anonymised
+cross-coalition egress strips metadata entirely, whatever put it there.)
 
 ---
 
