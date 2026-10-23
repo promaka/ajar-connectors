@@ -27,7 +27,9 @@ Whichever box you are in, the first thing you need is a packet.
 ## 1. You were given a packet
 
 Your operator (whoever runs Ajar for you) ran one command on their side and
-sent you a single file, `<your-id>.packet.tar`. It contains everything you
+sent you a single file, `<your-id>.packet.tar`. If you run Core yourself, you
+are the operator: the command is `ajar onboard <your-id> --mint …` on the Core
+host, and the packet it writes is this file. It contains everything you
 need, and nothing you have to create yourself:
 
 | File | What it is |

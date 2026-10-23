@@ -25,7 +25,7 @@ your data ──▶ build Event ──▶ canonical bytes ──▶ seal (Ed2551
 | 6 | [Set up: write a new connector](#6-set-up-write-a-new-connector) | you picked option D |
 | 7 | [Deploy it](#7-deploy-it) | options B, C, D |
 | 8 | [Prove your bytes are correct](#8-prove-your-bytes-are-correct) | everyone |
-| 9 | [Register with the operator](#9-register-with-the-operator) | everyone |
+| 9 | [Register with Core](#9-register-with-core) | everyone |
 | 10 | [Reference](#language-support) | as needed |
 
 Read 1 and 2, then jump to your one setup section, then 7 to 9.
@@ -75,11 +75,17 @@ database and `audit` names the exact record that is missing.
    ```
 
    This writes `acme-radar-1.seed` (keep secret) and prints the public key.
-4. **The NATS endpoint and credentials**, which the operator sends you after you
-   register in [section 9](#9-register-with-the-operator).
+4. **The NATS endpoint and credentials**, which come from whoever runs Core
+   when you register in [section 9](#9-register-with-core). If that is you,
+   one command on the Core host produces all four items as a packet.
 
 You can build and test everything without items 1 and 4. You only need them to
 send real events.
+
+**To build from source** you need a current stable Rust toolchain from
+[rustup.rs](https://rustup.rs) and, for containers, Docker. The release
+tarball and the images need neither. Footprint, ports and timings:
+[section 10](#footprint-ports-and-timings).
 
 ---
 
@@ -608,9 +614,26 @@ Exit 0 means your bytes match. Exit 1 names the vector that diverged.
 
 ---
 
-## 9. Register with the operator
+## 9. Register with Core
 
-Ajar accepts events only from a registered identity. One exchange, no account.
+Ajar accepts events only from a registered identity. Registration is done by
+whoever runs the Core you are connecting to. Nobody else is involved, and
+nothing in this repository phones home.
+
+**If you run Core yourself,** skip the exchange below. On the Core host, one
+command registers the connector, mints its credentials and writes a packet:
+
+```bash
+ajar onboard acme-radar-1 --mint --types mim: --sign material/sovereign.key \
+  --nats tls://<your bus endpoint>:443
+```
+
+Carry `acme-radar-1.packet.tar` to the connector host and run
+`./ajar-up acme-radar-1.packet.tar`, as in [section 4](#4-set-up-run-a-prebuilt-connector).
+`ajar onboard --help` on your Core lists the flags; Core's connector
+onboarding guide covers renewal, fleets and revocation.
+
+**If someone else runs Core,** one exchange, no account:
 
 **Step 1. Produce your profile.** Any connector here derives it from your config:
 
@@ -730,6 +753,56 @@ independently of the SDK workspace):
 cd rust/connectors
 cargo build && cargo test
 ```
+
+## Footprint, ports and timings
+
+What a connector needs and costs, measured on this release, so a deployment
+can be sized without asking anyone.
+
+**Size**
+
+| Artefact | Size |
+|---|---|
+| One connector binary, release build | about 10 MB |
+| One connector image, distroless, non-root | about 65 MB |
+| Release tarball, every connector plus the doctor and example configs | about 60 MB, Linux x86_64 and aarch64 |
+
+**Resources** (one connector, a 300,000-frame feed signed and published to
+a local bus)
+
+| Measure | Value |
+|---|---|
+| Resident memory, idle and under load | about 10 MB |
+| Throughput on one laptop core | about 60,000 events a second |
+| Store-and-forward spool, when enabled | bounded by `[spool] max_bytes`, 256 MiB by default, on disk |
+| Helm chart defaults | requests 50m CPU and 64 MiB; limits 250m CPU and 128 MiB |
+
+A connector is one small process. Size it for the spool if links drop, not
+for the parsing.
+
+**Ports**
+
+| Direction | Port | Purpose |
+|---|---|---|
+| In | the one your `[transport]` binds, for example UDP 8600 or TCP 9300 | the equipment's feed; none for `file`, `dir`, `exec`, `stdin`, `tcp-client`, `mqtt`, `rest-poll` or `ws-client`, which read or dial out; `dds` joins the domain's own discovery ports |
+| In, optional | 9090 | `/healthz` and `/metrics`, only when `AJAR_HEALTH_ADDR` is set |
+| Out | 443 on a cluster install, 4222 on the single-server and dev stacks | one mutually-authenticated TLS connection to the bus; nothing else, and no connection to anyone but your Core |
+
+The Helm chart's network policy restricts egress to the bus and DNS. A
+connector never listens for Core; the bus is the only path in either direction.
+
+**Timings**
+
+| Step | Measured |
+|---|---|
+| Quickstart, from nothing to the first verified event in the sink | 165 s, on the CI runner; the budget CI enforces is 900 s |
+| `scripts/new-connector.sh` to passing tests, clean clone | 20 s |
+| First release build of one connector, clean clone | 50 s |
+| First container build with `Dockerfile.build`, nothing cached | about 12 min; rebuilds reuse the cached stages |
+| `--profile`, `ajar-doctor`, `ajar-up` from a packet | seconds |
+
+Clean-clone figures assume the Rust toolchain and crate cache are present;
+the first `cargo build` on a new machine also downloads dependencies.
 
 ## Not in scope
 

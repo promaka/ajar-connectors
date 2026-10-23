@@ -37,6 +37,12 @@ Two version lines are tracked independently (see COMPATIBILITY.md):
   across the README, the onboarding guide, the brief and the authoring
   specification, and the brief's unit example and conformance link are
   corrected.
+- Registration is with whoever runs Core, and the README now says what that
+  means when it is you: the one `ajar onboard` command on the Core host that
+  writes the packet `ajar-up` consumes. A footprint section states what a
+  connector needs and costs: binary, image and tarball sizes, memory and CPU
+  measured at idle and under load, the ports in and out, and the measured
+  time budgets from the quickstart stopwatch to a cold container build.
 
 - Every guide, the SDK headers and the validator messages now state what Core
   does with a name it does not govern, as Core confirms it: an unknown entity
