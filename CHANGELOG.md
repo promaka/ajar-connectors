@@ -13,6 +13,66 @@ Two version lines are tracked independently (see COMPATIBILITY.md):
 
 ## [Unreleased]
 
+### Added
+
+- `ajar-sapient`: SAPIENT (BSI Flex 335) ingress, the UK MOD counter-UAS
+  interface between sensor edge nodes and a fusion node. As the fusion
+  node's message handler it accepts edge nodes over TCP, acknowledges their
+  registrations and takes their reports; as a subscriber it listens to a
+  fusion node's output or replays a capture. Detection and track reports,
+  status reports, registrations and alerts become events under the
+  `sapient:` types, a fragment shipped beside the binary for
+  `ajar onboard --type-spec`; range-and-bearing reports are geolocated
+  against the reporting node, velocities become speed and course in the
+  contract's units, and every message is sealed verbatim. The published
+  schema is vendored and compiled in `ajar-sapient-wire`, with the v1.0
+  schema behind a feature for a site still on it. Image, tarball row and
+  catalogue entry included.
+- `ajar-sapient-egress`: the other direction. Ajar registers with a SAPIENT
+  fusion node as a sensor node, with the registration the standard requires,
+  reports status on the cadence it declared, refuses tasks, and carries each
+  governed event Core releases as a detection report with the standard's
+  identifiers, a WGS-84 position and an ENU velocity; an object keeps its
+  identifier across reports, so the fusion node sees a track. Every envelope
+  is verified under the egress key first. Reports are buffered, bounded,
+  while the fusion node is unreachable, and the link re-registers on
+  reconnection. Image and catalogue entry included.
+- `ajar-feed-synthetic` gains a seventh sensor: a counter-UAS radar speaking
+  SAPIENT on TCP 30335, registering, reporting status with its position, and
+  reporting the fixture's uncrewed aircraft by range and bearing once a
+  second, so the SAPIENT ingress commissions against the same scenario as
+  every other connector, and the same aircraft arrives from its autopilot
+  and from a radar that does not know what it is.
+- `framing = "length-u32le"`, the 4-byte little-endian prefix SAPIENT and
+  other protobuf streams use, on every stream transport; the `file` and
+  `stdin` transports now take a `framing` too, so a binary capture replays
+  from the start frame by frame.
+- `ajar-tak-egress` delivers to ATAK's mesh with no TAK Server:
+  `url = "udp://239.2.3.1:6969"` sends each governed CoT event as one
+  datagram onto the mesh SA multicast group, so every TAK client on the same
+  network shows the picture with no enrolment or certificates. The TLS path
+  to a TAK Server is unchanged; its certificate files are now required only
+  for it, and a config that names a server without them is refused at load.
+- A `.dockerignore`, so a container build ships the sources to the daemon
+  rather than every build directory under the checkout; on a developer's
+  machine that was most of the build time.
+- Every verifying consumer reads Core's signed channel, `ajar.egress.signed.>`,
+  where each released event is published sealed under the egress key in the
+  same envelope layout as ingest, from Core 0.1.28: the SAPIENT and generic
+  egress defaults, and the consumer examples in the Rust, Python and Go
+  SDKs. The rendering subjects (`cot`, `geojson`) carry plain renderings,
+  which the TAK egress relays verbatim and which do not verify.
+- `[options]`: a connector-specific settings table the runtime carries
+  untouched, so a connector can take its own keys without a change to the
+  shared config.
+
+### Changed
+
+- The runtime treats every namespace other than `mim:` as the operator's
+  to govern: a type fragment registered with Core, such as `sapient:`, is
+  checked by Core against what was registered, as vendor `x:` types always
+  were, rather than warned about here as unknown.
+
 ## [0.6.4] - 2026-10-23
 
 ### Added

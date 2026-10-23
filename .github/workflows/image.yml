@@ -90,6 +90,8 @@ jobs:
           - { name: stanag4676, wsdir: rust/connectors, pkg: ajar-stanag4676 }
           - { name: stanag4586, wsdir: rust/connectors, pkg: ajar-stanag4586 }
           - { name: generic-egress, wsdir: rust/connectors, pkg: ajar-generic-egress }
+          - { name: sapient, wsdir: rust/connectors, pkg: ajar-sapient }
+          - { name: sapient-egress, wsdir: rust/connectors, pkg: ajar-sapient-egress }
           - { name: doctor, wsdir: rust/connectors, pkg: ajar-doctor }
           - { name: synthetic-radar, wsdir: rust/examples, pkg: synthetic-radar }
           # One fixture, six sensors, on every connector's real wire format: a
@@ -226,6 +228,10 @@ jobs:
           mkdir -p "$out/configs"
           cp rust/connectors/*/*.example.toml "$out/configs/"
           cp README.md ONBOARDING.md "$out/"
+          # The SAPIENT ontology fragment rides beside its binary: the operator
+          # registers it with `ajar onboard --type-spec`.
+          cp rust/connectors/sapient/sapient.types.json "$out/configs/"
+          test -f "$out/configs/sapient.types.json"
           test -f "$out/configs/asterix.example.toml"
           test -f "$out/ONBOARDING.md"
           ls -la "$out"

@@ -90,10 +90,7 @@ async fn connection_loop(stream: TcpStream, framing: Framing, tx: mpsc::Sender<V
     let mut reader = BufReader::new(stream);
     let mut buf = vec![0u8; MAX_FRAME];
     loop {
-        let framed = match framing {
-            Framing::Line => stream::read_line(&mut reader, &mut buf).await,
-            Framing::LengthDelimited => stream::read_length_delimited(&mut reader, &mut buf).await,
-        };
+        let framed = stream::read_frame(&mut reader, framing, &mut buf).await;
         match framed {
             Ok(n) => {
                 // Backpressure: a full channel slows the pusher, never grows memory.

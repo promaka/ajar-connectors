@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! `ajar-feed-synthetic`: one fixture, six sensors, on every connector's real
+//! `ajar-feed-synthetic`: one fixture, seven sensors, on every connector's real
 //! wire format.
 //!
 //! A conformance and commissioning source. A fusion consumer builds against
@@ -7,10 +7,11 @@
 //! against it before real feeds are switched in. Every sensor here is read by
 //! a real connector on its real wire format; only the thing plugged into each
 //! connector's input is synthesised, so replacing a generator with actual
-//! equipment changes nothing else. The six render one shared fixture (see
+//! equipment changes nothing else. The seven render one shared fixture (see
 //! `scenario`), so the same vessel is seen by AIS and by radar, the same
-//! aircraft by ADS-B and by a system track, and an emitter on the vessel by an
-//! ESM receiver.
+//! aircraft by ADS-B and by a system track, an emitter on the vessel by an
+//! ESM receiver, and the uncrewed aircraft by its autopilot and by a
+//! counter-UAS radar speaking SAPIENT.
 //!
 //! Each generator is proven against the decoder that reads it, in this
 //! workspace, so the two cannot drift apart without a test failing. Cadences
@@ -33,6 +34,7 @@
 //! | adsb    | TCP server on :30003         | adsb      | tcp-client, line |
 //! | ais     | TCP server on :30160         | ais-nmea  | tcp-client, line |
 //! | esm     | TCP server on :30155         | generic   | tcp-client, line |
+//! | sapient | TCP server on :30335         | sapient   | tcp-client, length-u32le (subscriber role) |
 //!
 //! `--bind IP` moves every TCP server and multicast send onto one interface,
 //! for a dual-homed box; `--mavlink-to HOST:PORT` retargets the one unicast
@@ -47,6 +49,7 @@ mod asterix;
 mod cot;
 mod esm;
 mod mavlink;
+mod sapient;
 mod scenario;
 
 use std::net::{Ipv4Addr, SocketAddr};
@@ -66,6 +69,7 @@ const COT_GROUP: (Ipv4Addr, u16) = (Ipv4Addr::new(239, 2, 3, 1), 6969);
 const ADSB_PORT: u16 = 30003;
 const AIS_PORT: u16 = 30160;
 const ESM_PORT: u16 = 30155;
+const SAPIENT_PORT: u16 = 30335;
 const MAVLINK_TO: &str = "127.0.0.1:14550";
 /// AIS static and voyage data cadence, seconds: every six minutes per ITU-R
 /// M.1371.
@@ -84,13 +88,14 @@ const RERESOLVE_EVERY: Duration = Duration::from_secs(30);
 /// worker at full load.
 const ACCEPT_BACKOFF: Duration = Duration::from_millis(250);
 
-const ALL: [Sensor; 6] = [
+const ALL: [Sensor; 7] = [
     Sensor::Asterix,
     Sensor::Ais,
     Sensor::Adsb,
     Sensor::Mavlink,
     Sensor::Cot,
     Sensor::Esm,
+    Sensor::Sapient,
 ];
 
 struct Options {
@@ -104,7 +109,7 @@ struct Options {
 
 fn usage() -> ! {
     eprintln!(
-        "usage: ajar-feed-synthetic [all | ais adsb asterix mavlink cot esm ...] \
+        "usage: ajar-feed-synthetic [all | ais adsb asterix mavlink cot esm sapient ...] \
          [--bind IP] [--mavlink-to HOST:PORT] [--ais-static-every SECS] [--dry-run] [--ticks N]"
     );
     std::process::exit(2)
@@ -388,6 +393,20 @@ async fn run(
                 sink.send(esm::intercept(&Emitter::at(secs), observed).as_bytes())
                     .await;
             }
+            Sensor::Sapient => {
+                // A node registers when it comes up and re-registers now and
+                // then, reports status on its declared interval, and reports
+                // the aircraft every tick.
+                let registered = n % sapient::REGISTER_EVERY == 1;
+                if registered {
+                    sink.send(&sapient::registration(observed)).await;
+                }
+                if n % sapient::STATUS_EVERY == 1 {
+                    sink.send(&sapient::status(observed, n, registered)).await;
+                }
+                sink.send(&sapient::detection(&Uav::at(secs), observed, n))
+                    .await;
+            }
         }
     }
 }
@@ -438,6 +457,7 @@ async fn main() -> anyhow::Result<()> {
                 Sensor::Adsb => tcp_fanout(opts.bind, ADSB_PORT, "adsb").await?,
                 Sensor::Ais => tcp_fanout(opts.bind, AIS_PORT, "ais").await?,
                 Sensor::Esm => tcp_fanout(opts.bind, ESM_PORT, "esm").await?,
+                Sensor::Sapient => tcp_fanout(opts.bind, SAPIENT_PORT, "sapient").await?,
             }
         };
         tasks.push(tokio::spawn(run(

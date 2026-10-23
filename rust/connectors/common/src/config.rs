@@ -71,6 +71,11 @@ pub struct Config {
     /// bound and drain rate.
     #[serde(default)]
     pub spool: Option<SpoolSetting>,
+    /// Connector-specific settings, under `[options]`. The runtime carries the
+    /// table untouched; each connector that reads one documents its keys in
+    /// its README and example config, and refuses a key it does not know.
+    #[serde(default)]
+    pub options: toml::Table,
     /// The one tolerated extension section: the generic connector reads its
     /// `[mapping]` block from the same file with its own loader. Named here so
     /// `deny_unknown_fields` still rejects actual typos everywhere else.
@@ -329,6 +334,10 @@ pub enum Transport {
         /// Replay existing content before following appends (default: appends only).
         #[serde(default)]
         from_start: bool,
+        /// How the file's bytes are split into frames: lines by default, or a
+        /// length prefix for a binary capture such as a SAPIENT recording.
+        #[serde(default)]
+        framing: Framing,
     },
     /// Run a command and read its stdout, one line per frame — wraps any CLI tool
     /// or vendor SDK binary that prints records (`some-vendor-cli --stream`).
@@ -341,7 +350,12 @@ pub enum Transport {
     },
     /// Read this process's stdin, one line per frame — pipe from anything
     /// (`producer | ajar-<connector>`).
-    Stdin,
+    Stdin {
+        /// How stdin is split into frames: lines by default, or a length prefix
+        /// for a binary stream piped in.
+        #[serde(default)]
+        framing: Framing,
+    },
     /// HTTP server — accept webhook deliveries from sources that can only *push to
     /// a URL*: IP cameras and VMS event notifications, SDR republishers, SaaS
     /// callbacks. Each request body is one frame.
@@ -495,6 +509,10 @@ pub enum Framing {
     /// A 2-byte big-endian length prefix, then that many payload bytes per frame
     /// (binary record streams).
     LengthDelimited,
+    /// A 4-byte little-endian length prefix, then that many payload bytes per
+    /// frame: the framing BSI Flex 335 (SAPIENT) puts around each protobuf
+    /// message on a TCP stream.
+    LengthU32le,
 }
 
 #[cfg(feature = "serial")]
@@ -776,7 +794,9 @@ mod tests {
         ));
         assert!(matches!(
             transport("[transport]\nkind='stdin'"),
-            Transport::Stdin
+            Transport::Stdin {
+                framing: Framing::Line
+            }
         ));
         // http-server: path defaults to "/" and the token is optional.
         assert!(matches!(

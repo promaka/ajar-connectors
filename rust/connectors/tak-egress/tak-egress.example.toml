@@ -17,7 +17,10 @@ egress_subject = "ajar.egress.cot.*"
 # Optional: AJAR_HEALTH_ADDR=0.0.0.0:9090 exposes /healthz and /metrics.
 
 [tak]
-# The TAK Server streaming input (standard port 8089).
+# The TAK Server streaming input (standard port 8089). With no TAK Server,
+# ATAK's mesh SA multicast group instead: url = "udp://239.2.3.1:6969", no
+# certificates, every TAK client on the same network sees the picture; add
+# interface = "<ipv4 of the interface the clients share>" on a multi-homed box.
 url = "tls://takserver.mil:8089"
 # CA that signed the TAK Server's certificate.
 tls_ca = "/etc/tak/ca.crt"

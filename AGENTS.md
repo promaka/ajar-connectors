@@ -83,7 +83,15 @@ Then add `"<name>"` to `members` in `rust/connectors/Cargo.toml`. Transports are
 config, not code — never write socket/file I/O; pick a `[transport]` kind in the
 TOML: `udp`, `udp-multicast`, `tcp-client`, `tcp-server`, `http-server`, `file`,
 `dir`, `exec`, `stdin`, `pcap-replay`, `serial`, `mqtt`, `rest-poll`, `ws-client`,
-`dds`. The README's transport table says what each needs.
+`dds`. The README's transport table says what each needs. A stream transport
+takes a `framing`: `line`, `length-delimited` (2-byte big-endian prefix) or
+`length-u32le` (4-byte little-endian prefix); add a new framing in
+`common/src/stream.rs`, where every stream transport reads it.
+
+Settings only your connector understands go under `[options]`, which the
+runtime carries as a TOML table: read it into your own struct with
+`deny_unknown_fields`, as `sapient` does, so a typo is refused rather than
+left at a default.
 
 ## EventBuilder cheat-sheet
 

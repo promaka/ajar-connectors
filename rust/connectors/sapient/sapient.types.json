@@ -1,0 +1,69 @@
+{
+  "types": [
+    {
+      "id": "sapient:detection",
+      "parent": "mim:object",
+      "description": "A SAPIENT (BSI Flex 335) detection report: one observation of an object by an edge node, geolocated when the node reported a position or the connector could derive one from range and bearing.",
+      "requires_location": false,
+      "allows_metadata": true,
+      "attributes": [
+        { "name": "hostility", "datatype": "text", "required": false, "values": ["AssumedFriend", "AssumedHostile", "AssumedInvolved", "AssumedNeutral", "Faker", "Friend", "Hostile", "Involved", "Joker", "Neutral", "Pending", "Suspect", "Unknown"] },
+        { "name": "object_class", "datatype": "text", "required": false },
+        { "name": "speed", "datatype": "number", "unit": "m/s", "required": false, "min": 0 },
+        { "name": "course", "datatype": "number", "unit": "deg", "required": false, "min": 0, "max": 360 },
+        { "name": "vertical_rate", "datatype": "number", "unit": "m/s", "required": false },
+        { "name": "sapient_classification", "datatype": "text", "required": false },
+        { "name": "sapient_classification_confidence", "datatype": "number", "required": false, "min": 0, "max": 1 },
+        { "name": "sapient_behaviour", "datatype": "text", "required": false },
+        { "name": "sapient_state", "datatype": "text", "required": false }
+      ]
+    },
+    {
+      "id": "sapient:track",
+      "parent": "mim:object",
+      "description": "A SAPIENT detection report that carries track information: the node, or a fusion node, is following the object over time under one object identifier.",
+      "requires_location": false,
+      "allows_metadata": true,
+      "attributes": [
+        { "name": "hostility", "datatype": "text", "required": false, "values": ["AssumedFriend", "AssumedHostile", "AssumedInvolved", "AssumedNeutral", "Faker", "Friend", "Hostile", "Involved", "Joker", "Neutral", "Pending", "Suspect", "Unknown"] },
+        { "name": "object_class", "datatype": "text", "required": false },
+        { "name": "speed", "datatype": "number", "unit": "m/s", "required": false, "min": 0 },
+        { "name": "course", "datatype": "number", "unit": "deg", "required": false, "min": 0, "max": 360 },
+        { "name": "vertical_rate", "datatype": "number", "unit": "m/s", "required": false },
+        { "name": "sapient_classification", "datatype": "text", "required": false },
+        { "name": "sapient_classification_confidence", "datatype": "number", "required": false, "min": 0, "max": 1 },
+        { "name": "sapient_behaviour", "datatype": "text", "required": false },
+        { "name": "sapient_state", "datatype": "text", "required": false }
+      ]
+    },
+    {
+      "id": "sapient:sensor-status",
+      "parent": "mim:sensor",
+      "description": "A SAPIENT edge node's registration or status report: what the node is, where it is, and how it is doing.",
+      "requires_location": false,
+      "allows_metadata": true,
+      "attributes": [
+        { "name": "hostility", "datatype": "text", "required": false, "values": ["AssumedFriend", "AssumedHostile", "AssumedInvolved", "AssumedNeutral", "Faker", "Friend", "Hostile", "Involved", "Joker", "Neutral", "Pending", "Suspect", "Unknown"] },
+        { "name": "sapient_node_type", "datatype": "text", "required": false },
+        { "name": "sapient_system", "datatype": "text", "required": false, "values": ["OK", "WARNING", "ERROR", "GOODBYE"] },
+        { "name": "sapient_mode", "datatype": "text", "required": false },
+        { "name": "sapient_power_level", "datatype": "number", "unit": "%", "required": false, "min": 0, "max": 100 },
+        { "name": "update_interval_s", "datatype": "number", "unit": "s", "required": false, "min": 0 }
+      ]
+    },
+    {
+      "id": "sapient:alert",
+      "parent": "mim:action",
+      "description": "A SAPIENT alert raised by an edge node or a fusion node, with its type, status, priority and, when given, the position it concerns.",
+      "requires_location": false,
+      "allows_metadata": true,
+      "attributes": [
+        { "name": "hostility", "datatype": "text", "required": false, "values": ["AssumedFriend", "AssumedHostile", "AssumedInvolved", "AssumedNeutral", "Faker", "Friend", "Hostile", "Involved", "Joker", "Neutral", "Pending", "Suspect", "Unknown"] },
+        { "name": "sapient_alert_type", "datatype": "text", "required": false, "values": ["INFORMATION", "WARNING", "CRITICAL", "ERROR", "FATAL", "MODE_CHANGE"] },
+        { "name": "sapient_alert_status", "datatype": "text", "required": false, "values": ["ACTIVE", "ACKNOWLEDGE", "REJECT", "IGNORE", "CLEAR"] },
+        { "name": "sapient_priority", "datatype": "text", "required": false, "values": ["LOW", "MEDIUM", "HIGH"] },
+        { "name": "sapient_ranking", "datatype": "number", "required": false, "min": 0, "max": 1 }
+      ]
+    }
+  ]
+}
