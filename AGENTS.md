@@ -63,6 +63,10 @@ canonical `Event`s. That is the whole contract.
 
 ## Files to produce (mirror an existing connector exactly)
 
+`scripts/new-connector.sh <name>` writes every file below, registers the crate
+in the workspace, and leaves a parser that builds and passes its tests. After
+it runs, the one file to edit is `src/<name>.rs`.
+
 ```
 rust/connectors/<name>/
   Cargo.toml            # copy asterix/Cargo.toml; rename to ajar-<name>
@@ -76,8 +80,9 @@ rust/connectors/<name>/
 
 Then add `"<name>"` to `members` in `rust/connectors/Cargo.toml`. Transports are
 config, not code — never write socket/file I/O; pick a `[transport]` kind in the
-TOML (`udp`, `tcp-server`, `tcp-client`, `serial`, `file`, `dir`, `exec`, `stdin`,
-`mqtt`, `rest-poll`, `http-server`, `ws-client`).
+TOML: `udp`, `udp-multicast`, `tcp-client`, `tcp-server`, `http-server`, `file`,
+`dir`, `exec`, `stdin`, `pcap-replay`, `serial`, `mqtt`, `rest-poll`, `ws-client`,
+`dds`. The README's transport table says what each needs.
 
 ## EventBuilder cheat-sheet
 

@@ -130,7 +130,8 @@ from ajar_connector import SigningKey
 key = SigningKey.from_seed(open("acme-radar-1.seed", "rb").read())
 ```
 
-**Step 4. Build an event.**
+**Step 4. Build an event.** For one incoming `frame`, the bytes your source
+gave you:
 
 ```python
 from ajar_connector import EventBuilder
@@ -141,7 +142,7 @@ event = (EventBuilder("acme-radar-1", "mim:aircraft")   # source_id, entity type
          .location(25.27, 51.52, 10600.0)                # lat, lon, metres
          .attribute("speed", "231.50")                   # governed, m/s
          .metadata("icao", "4CA2D6")                     # ungoverned, native id
-         .payload(raw_frame)                             # your bytes, verbatim
+         .payload(frame)                                 # your bytes, verbatim
          .build())
 ```
 
@@ -172,8 +173,52 @@ The prebuilt connectors set it automatically.
 
 **Step 7.** Go to [section 8](#8-prove-your-bytes-are-correct).
 
+**The same three steps in Rust:**
+
+```rust
+use ajar_connector::{canonical_bytes, seal, EventBuilder, SigningKey};
+
+let seed: [u8; 32] = std::fs::read("acme-radar-1.seed")?.try_into().expect("a 32-byte seed");
+let key = SigningKey::from_bytes(&seed);
+
+let event = EventBuilder::new("acme-radar-1", "mim:aircraft")
+    .new_id()
+    .now()
+    .location(25.27, 51.52, 10600.0)
+    .attribute("speed", "231.50")
+    .metadata("icao", "4CA2D6")
+    .payload(frame)
+    .build()?;
+
+let sealed = seal(&canonical_bytes(&event), &key);
+```
+
+**And in Go:**
+
+```go
+import ajar "github.com/promaka/ajar-connectors/go/ajarconnector"
+
+seed, _ := os.ReadFile("acme-radar-1.seed")
+key, err := ajar.SigningKeyFromSeed(seed)
+
+event, err := ajar.NewEventBuilder("acme-radar-1", "mim:aircraft").
+    NewID().
+    Now().
+    Location(25.27, 51.52, 10600.0).
+    Attribute("speed", "231.50").
+    Metadata("icao", "4CA2D6").
+    Payload(frame).
+    Build()
+
+canonical, err := ajar.CanonicalBytes(event)
+sealed := ajar.Seal(canonical, key)
+// publish with the headers from ajar.IngestHeaders(event)
+```
+
 Longer guides: [Python](docs/embedding-python.md) · [C++](docs/embedding-cpp.md).
-Rust and Go use the same three calls.
+The [Rust](rust/examples/connector-template/) and
+[Go](go/examples/connector-template/) templates are complete programs built
+from these calls.
 
 **Consuming governed events?** Verification is one call and structurally
 unskippable in every SDK: Python `ajar_connector.consumer.consume`, Go
@@ -224,7 +269,7 @@ against the `.sha256` beside it, then start from the config inside.
 ```toml
 source_id = "acme-radar-1"                        # from section 1
 nats_url = "tls://ajar.example.mil:4222"          # from section 9
-signing_key_path = "/etc/ajar/acme-radar-1.seed"  # from section 1
+signing_key_path = "./acme-radar-1.seed"          # from section 1; /etc/ajar/… once deployed
 
 [transport]                                        # how bytes reach the connector
 kind = "udp-multicast"
@@ -235,12 +280,21 @@ group = "239.2.3.1"
 Any connector runs on any transport. The full list is in
 [section 10](#transport-is-orthogonal-to-protocol).
 
-**Step 4. Run it once locally** to check the config parses:
+**Step 4. Run it once locally.** The seed file from section 1 must exist at
+the path you gave; nothing else is needed yet.
 
 ```bash
 cargo build --release --manifest-path rust/connectors/Cargo.toml -p ajar-asterix
-./rust/connectors/target/release/ajar-asterix ./asterix.toml
+./rust/connectors/target/release/ajar-asterix --profile ./asterix.toml   # config and key parse: prints your profile
+./rust/connectors/target/release/ajar-asterix ./asterix.toml             # runs
 ```
+
+What you will see: `connector starting`, then a `heartbeat` line every few
+seconds with `received`, `published` and `rejected` counts. Until section 9
+gives you a real endpoint, the broker connection is retried quietly and
+events are not kept, so the counts prove the decode, not the delivery. To
+watch events arrive and verify, start the five-minute loop at the top of this
+page and set `nats_url = "nats://127.0.0.1:4222"`.
 
 **Step 5.** Go to [section 7](#7-deploy-it).
 
@@ -281,6 +335,10 @@ cargo build --release --manifest-path rust/connectors/Cargo.toml -p ajar-generic
 ./rust/connectors/target/release/ajar-generic ./generic.toml
 ```
 
+It validates the mapping against the ontology at start-up and refuses a name
+it cannot place. Then the same `heartbeat` counts as section 4, step 4: the
+decode is proven locally, the delivery once section 9 gives you an endpoint.
+
 **Step 5.** Go to [section 7](#7-deploy-it).
 
 Limits (flat fields only, one record per frame): [generic connector](rust/connectors/generic).
@@ -288,6 +346,49 @@ Limits (flat fields only, one record per frame): [generic connector](rust/connec
 ---
 
 ## 6. Set up: write a new connector
+
+Two routes. Pick by where the connector will run.
+
+| Route | Pick it when | What you get |
+|---|---|---|
+| **6a. A parser on the shared runtime** | it runs next to the equipment: a sidecar, a container, a binary on an edge box | every transport, mTLS, store-and-forward, health, the doctor, `--profile` and a container image, all by config; you write one parser |
+| **6b. A standalone program** | you want to own the process, or write it in Python, Go or C++ | the SDK's three calls in a template you keep |
+
+### 6a. A parser on the shared runtime
+
+**Step 1. Scaffold it.**
+
+```bash
+scripts/new-connector.sh acme-legacy
+```
+
+This writes `rust/connectors/acme-legacy`, a crate named `ajar-acme-legacy`
+that builds, runs and passes its tests before you touch it, and registers it
+in the workspace.
+
+**Step 2. Write the parser.** One file,
+`rust/connectors/acme-legacy/src/acme_legacy.rs`: `decode()` turns one frame
+into your record, `to_event()` maps the record onto an event. The tests pin
+the rules every connector keeps: the raw frame sealed in `payload`, canonical
+units, the feed's own identifier as `source_uid`, a typed error for bad input
+and never a panic. [AGENTS.md](AGENTS.md) is the full specification, with a
+worked example to copy for each kind of format.
+
+**Step 3. Test and run it.**
+
+```bash
+cargo test --manifest-path rust/connectors/Cargo.toml -p ajar-acme-legacy
+cargo build --release --manifest-path rust/connectors/Cargo.toml -p ajar-acme-legacy
+./rust/connectors/target/release/ajar-acme-legacy ./rust/connectors/acme-legacy/acme-legacy.example.toml
+```
+
+The example config reads newline-delimited frames pushed over TCP; change
+`[transport]` to whatever your equipment does, as in section 4, step 3.
+
+**Step 4.** Go to [section 7](#7-deploy-it). For a container, section 7b
+builds your crate by name.
+
+### 6b. A standalone program
 
 **Step 1. Copy the template** for your language:
 [Rust](rust/examples/connector-template/) · [Python](python/examples/connector_template.py) ·
@@ -300,10 +401,12 @@ to an event. Around fifteen lines.
 
 ```bash
 cd rust/examples
-echo '{"lat":26.4,"lon":50.9,"alt_m":11000}' | cargo run -p connector-template -- --dry-run
+echo '{"lat":26.4,"lon":50.9,"alt_m":11000,"quality":0.9}' | cargo run -p connector-template -- --dry-run
 ```
 
-**Step 4.** Go to [section 7](#7-deploy-it).
+**Step 4.** Go to [section 7](#7-deploy-it). The template reads stdin and
+publishes with its own NATS client; transports, TLS and health are yours to
+add, which is the trade for owning the process.
 
 ---
 
@@ -326,7 +429,7 @@ ExecStart=/usr/local/bin/ajar-asterix /etc/ajar/asterix.toml
 Environment=AJAR_TLS_CA=/etc/ajar/ca.pem
 Environment=AJAR_TLS_CERT=/etc/ajar/connector.crt
 Environment=AJAR_TLS_KEY=/etc/ajar/connector.key
-Environment=AJAR_HEALTH_ADDR=0.0.0.0:9110
+Environment=AJAR_HEALTH_ADDR=0.0.0.0:9090
 Restart=always
 ```
 
@@ -337,15 +440,33 @@ itself.)
 
 ### 7b. As a container
 
-Images are private. Create a pull secret with `read:packages` for
-`ghcr.io/promaka` first.
+**Build the image yourself**, from the repository root. One Dockerfile builds
+any connector crate by name: multi-stage, distroless, non-root, for the host
+architecture. Add `--platform linux/arm64` for an ARM edge box.
+
+```bash
+docker build -f deploy/docker/Dockerfile.build \
+  --build-arg WSDIR=rust/connectors --build-arg PKG=ajar-asterix \
+  -t ajar-connector-asterix:0.6.3 .
+```
+
+A connector you wrote in section 6a is the same command with its crate name,
+`PKG=ajar-acme-legacy`.
+
+**Run it** with your config and seed mounted read-only:
 
 ```bash
 docker run \
   -v ./asterix.toml:/etc/ajar/connector.toml:ro \
   -v ./acme-radar-1.seed:/etc/ajar/seed:ro \
-  ghcr.io/promaka/ajar-connector-asterix:0.6.3 /etc/ajar/connector.toml
+  ajar-connector-asterix:0.6.3 /etc/ajar/connector.toml
 ```
+
+Set `signing_key_path = "/etc/ajar/seed"` in the mounted config. Prebuilt
+images are also published, privately, at
+`ghcr.io/promaka/ajar-connector-<name>:<version>`; the packages page lists
+which connectors and versions, and your operator can grant a pull secret
+with `read:packages`.
 
 ### 7c. On Kubernetes
 
@@ -365,7 +486,7 @@ and can restrict egress to NATS only. Pull secrets, mTLS and health probes:
 
 ### 7d. Health and metrics
 
-Set `AJAR_HEALTH_ADDR=0.0.0.0:9110` on any method. Gives `/healthz` and
+Set `AJAR_HEALTH_ADDR=0.0.0.0:9090` on any method. Gives `/healthz` and
 `/metrics` with counters for received, published, rejected and
 backpressure-dropped events, the spool (`connector_spooled_total`,
 `connector_drained_total`, `connector_spool_failed_total`,
@@ -545,7 +666,8 @@ config alone.
 They share a runtime crate, [`connectors/common`](rust/connectors/common), which
 provides config, key loading, mTLS NATS, the transport layer, the seal-and-publish
 loop, health and graceful shutdown. A new connector is therefore a format parser
-(`FrameParser`) plus a few lines of wiring.
+(`FrameParser`) plus a few lines of wiring: `scripts/new-connector.sh <name>`
+writes both, and [AGENTS.md](AGENTS.md) is the specification the parser follows.
 
 | Connector | Standard | What it feeds | Typical transport |
 |-----------|----------|---------------|-------------------|

@@ -22,7 +22,9 @@ Everything is one TOML file: the usual connector config (identity, transport,
 key) plus a `[mapping]` block. See [`generic.example.toml`](generic.example.toml).
 
 ```toml
-[transport]              # any method: udp / tcp / http-server / file / exec / stdin / serial / mqtt / rest-poll
+[transport]              # any kind in the repository README's transport table: udp, udp-multicast,
+                         # tcp-client, tcp-server, http-server, file, dir, exec, stdin, pcap-replay,
+                         # serial, mqtt, rest-poll, ws-client, dds
 kind = "tcp-client"
 connect = "gateway:9000"
 

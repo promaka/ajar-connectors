@@ -97,12 +97,15 @@ Ask your operator for one. They need three things from you:
 3. If you insist on generating your own signing key, its public half. See
    [Keys](#keys). Most people skip this and let the operator generate it.
 
-While you wait, everything can be built and tested with no packet, no broker
-and no key. Every connector has a dry run:
+While you wait, everything can be built and tested with no packet and no
+broker. The templates run with `--dry-run` and need no key; a shipped
+connector proves its config and key with `--profile`, which opens no transport
+and publishes nothing:
 
 ```bash
 cd rust/examples && echo '{"lat":26.4,"lon":50.9,"alt_m":11000,"quality":0.9}' \
   | cargo run -p connector-template -- --dry-run
+ajar-generic --profile ./generic.toml     # needs only the seed file the config names
 ```
 
 ## 3. Sending from your own code
@@ -307,7 +310,7 @@ offline with `cargo build --offline`, `go build -mod=vendor` or
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | Rejected: signature invalid | public key not registered, wrong seed, or a `source_id` that differs from the registered one | compare the registered public key with yours; check `AJAR_SOURCE_ID` |
-| Rejected: unknown attribute | an attribute the entity type does not declare | remove it, or ask the operator to add it |
+| An attribute never reaches policy or the picture; a strict site rejects the event | an attribute the entity type does not declare: a default site keeps it only as metadata, a strict site rejects the event | use a declared name, or ask the operator to add it |
 | Rejected: unknown entity type | the type is not in Core's ontology | use a declared type, or get yours registered |
 | Build error: unnamespaced entity type | the type is not `mim:<type>` or `x:<vendor>:<type>` | namespace it |
 | Nothing arrives, no error | wrong subject or `source_id` | the subject is `ajar.ingest.<source_id>` with your assigned id |

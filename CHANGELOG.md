@@ -15,12 +15,28 @@ Two version lines are tracked independently (see COMPATIBILITY.md):
 
 ### Added
 
+- `scripts/new-connector.sh <name>`: scaffolds an ingress connector on the
+  shared runtime. The crate it writes builds, runs, prints its profile and
+  passes its tests before the parser is written; the one file to edit is
+  the parser, and the tests pin the rules every connector keeps.
 - Images for every ingress and egress connector: `gmti`, `klv`,
   `stanag4676`, `stanag4586` and `generic-egress` join the matrix, and
   `doctor` with them so a cluster runs diagnostics from the same registry.
   The out-of-the-box sidecar set is now the whole suite.
 
 ### Documentation
+
+- The README's new-connector section names its two routes: a parser on the
+  shared runtime, scaffolded and deployed as a sidecar, and a standalone
+  program from the templates. Its container section builds any connector's
+  image locally with the parameterised Dockerfile, before the private
+  registry. The embedding section shows the three calls in Rust and Go
+  alongside Python, and the first local run of a prebuilt or generic
+  connector says what to expect before a broker is reachable. The health
+  port, the transport lists and the undeclared-attribute wording now agree
+  across the README, the onboarding guide, the brief and the authoring
+  specification, and the brief's unit example and conformance link are
+  corrected.
 
 - Every guide, the SDK headers and the validator messages now state what Core
   does with a name it does not govern, as Core confirms it: an unknown entity
