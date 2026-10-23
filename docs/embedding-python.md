@@ -173,7 +173,7 @@ from ajar_connector.consumer import consume
 
 async for delivery in consume(
     "tls://nats.operator.example:4443",
-    subject="ajar.egress.geojson.>",
+    subject="ajar.egress.signed.>",
     egress_verifying_key="<64-hex from your operator>",
     ca="ca.pem", cert="client.pem", key="client.key",
 ):

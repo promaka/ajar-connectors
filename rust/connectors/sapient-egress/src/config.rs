@@ -16,10 +16,11 @@ pub struct EgressConfig {
     /// Ajar's NATS endpoint (`tls://…` in production, with the subscribe-only
     /// client certificate as this consumer's transport identity).
     pub nats_url: String,
-    /// Governed egress subject to consume: `ajar.egress.<format>.>` or
-    /// narrower. The envelope's event carries the position and attributes
-    /// whatever the rendered format, so any format the deployment egresses
-    /// will do; `ajar.egress.json.>` is the usual one.
+    /// Governed egress subject to consume. The signed channel,
+    /// `ajar.egress.signed.>`, carries each released event sealed under the
+    /// egress key, the same envelope layout as ingest; the rendering slugs
+    /// (`cot`, `geojson`) carry plain renderings and will not verify. Narrow
+    /// it to one source with `ajar.egress.signed.<source_id>`.
     #[serde(default = "default_subject")]
     pub subject: String,
     /// Core's egress verifying key (64-char hex, or a path to a file holding
@@ -30,7 +31,7 @@ pub struct EgressConfig {
 }
 
 fn default_subject() -> String {
-    "ajar.egress.json.>".to_string()
+    "ajar.egress.signed.>".to_string()
 }
 
 /// How this connector appears on the fusion node.
@@ -191,7 +192,7 @@ mod tests {
     #[test]
     fn defaults_are_sensible_and_the_subject_stays_under_egress() {
         let c = cfg("").unwrap();
-        assert_eq!(c.subject, "ajar.egress.json.>");
+        assert_eq!(c.subject, "ajar.egress.signed.>");
         assert_eq!(c.sapient.status_interval_s, 5.0);
         assert_eq!(c.sapient.buffer_max, 1000);
         assert_eq!(c.sapient.name, "Ajar");

@@ -56,6 +56,12 @@ Two version lines are tracked independently (see COMPATIBILITY.md):
 - A `.dockerignore`, so a container build ships the sources to the daemon
   rather than every build directory under the checkout; on a developer's
   machine that was most of the build time.
+- Every verifying consumer reads Core's signed channel, `ajar.egress.signed.>`,
+  where each released event is published sealed under the egress key in the
+  same envelope layout as ingest, from Core 0.1.28: the SAPIENT and generic
+  egress defaults, and the consumer examples in the Rust, Python and Go
+  SDKs. The rendering subjects (`cot`, `geojson`) carry plain renderings,
+  which the TAK egress relays verbatim and which do not verify.
 - `[options]`: a connector-specific settings table the runtime carries
   untouched, so a connector can take its own keys without a change to the
   shared config.

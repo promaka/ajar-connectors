@@ -12,10 +12,11 @@
 # set to the subscribe-only client certificate the operator issued.
 nats_url = "nats://127.0.0.1:4222"
 
-# The governed egress subject. Any rendered format carries the event's
-# position and attributes; `ajar.egress.json.>` is the usual one. Narrow it
-# to one source with `ajar.egress.json.<source_id>`.
-subject = "ajar.egress.json.>"
+# The governed egress subject: the signed channel, where Core publishes each
+# released event sealed under the egress key. The rendering subjects (cot,
+# geojson) carry plain renderings and will not verify. Narrow it to one
+# source with `ajar.egress.signed.<source_id>`.
+subject = "ajar.egress.signed.>"
 
 # Core's egress verifying key, 64 hex characters or a path to a file holding
 # them. From the operator's packet. Nothing that fails to verify under it

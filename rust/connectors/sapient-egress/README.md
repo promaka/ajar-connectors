@@ -14,7 +14,7 @@ egress key before it is mapped; nothing that fails reaches the fusion node.
 ## Model
 
 ```
-NATS ajar.egress.json.> ──▶ ajar-sapient-egress ──TCP──▶ fusion node
+NATS ajar.egress.signed.> ──▶ ajar-sapient-egress ──TCP──▶ fusion node
   (sealed by Core)          verify + map + register      (sees a SAPIENT node)
 ```
 
@@ -58,8 +58,13 @@ rejected registration is logged with the fusion node's reasons and retried.
 subscribe-only certificate, as for the TAK egress:
 
 ```sh
-ajar onboard sapient-out-1 --consumer --egress-scope json ...
+ajar onboard sapient-out-1 --consumer --egress-scope signed ...
 ```
+
+The connector reads the signed channel, `ajar.egress.signed.>`, where Core
+publishes each released event sealed under the egress key; the rendering
+subjects carry plain CoT and GeoJSON and will not verify. Core publishes
+the signed channel from release 0.1.28.
 
 The packet's `egress_verifying_key_hex` and `nats_url` go into the config.
 
