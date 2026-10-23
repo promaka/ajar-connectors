@@ -738,7 +738,7 @@ writes both, and [AGENTS.md](AGENTS.md) is the specification the parser follows.
 | [sapient](rust/connectors/sapient) | SAPIENT (BSI Flex 335) | counter-UAS detections, tracks, sensor status and alerts, from edge nodes or a fusion node | TCP server (edge nodes connect in) / TCP client / file |
 | [tak-cot](rust/connectors/tak-cot) | TAK / Cursor-on-Target | ground/air situational-awareness tracks | UDP multicast / unicast |
 | [generic](rust/connectors/generic) | any flat JSON / CSV | the long tail, by field mapping rather than code | any of the below |
-| [tak-egress](rust/connectors/tak-egress) | TAK / CoT (**egress**) | governed COP tracks OUT to a TAK Server, verbatim | NATS → TLS 8089 |
+| [tak-egress](rust/connectors/tak-egress) | TAK / CoT (**egress**) | governed COP tracks OUT to a TAK Server, or straight to ATAK's mesh with no server, verbatim | NATS → TLS 8089, or multicast 239.2.3.1:6969 |
 | [generic-egress](rust/connectors/generic-egress) | any JSON consumer (**egress**) | governed events OUT by field mapping, markings unmappable-away | NATS → HTTP |
 | [sapient-egress](rust/connectors/sapient-egress) | SAPIENT (BSI Flex 335) (**egress**) | governed events OUT as detection reports from a registered sensor node, to a counter-UAS fusion node | NATS → TCP |
 | [sink](rust/connectors/sink) | — (**development sink**) | verifies, persists and audit-chains events; runs the whole path without Core | NATS → SQLite |

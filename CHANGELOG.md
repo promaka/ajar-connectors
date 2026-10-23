@@ -47,6 +47,15 @@ Two version lines are tracked independently (see COMPATIBILITY.md):
   other protobuf streams use, on every stream transport; the `file` and
   `stdin` transports now take a `framing` too, so a binary capture replays
   from the start frame by frame.
+- `ajar-tak-egress` delivers to ATAK's mesh with no TAK Server:
+  `url = "udp://239.2.3.1:6969"` sends each governed CoT event as one
+  datagram onto the mesh SA multicast group, so every TAK client on the same
+  network shows the picture with no enrolment or certificates. The TLS path
+  to a TAK Server is unchanged; its certificate files are now required only
+  for it, and a config that names a server without them is refused at load.
+- A `.dockerignore`, so a container build ships the sources to the daemon
+  rather than every build directory under the checkout; on a developer's
+  machine that was most of the build time.
 - `[options]`: a connector-specific settings table the runtime carries
   untouched, so a connector can take its own keys without a change to the
   shared config.

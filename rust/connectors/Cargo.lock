@@ -401,6 +401,7 @@ dependencies = [
  "rcgen",
  "rustls-pki-types",
  "serde",
+ "socket2",
  "tokio",
  "tokio-rustls",
  "toml",

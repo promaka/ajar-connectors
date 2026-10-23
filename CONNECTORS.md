@@ -139,7 +139,9 @@ usual SA broadcast; TCP where a server pushes to you.
 
 The reverse direction. Relays governed, provenance-checked tracks back out to a TAK
 Server so ATAK users see the fused picture. This is an egress relay rather than an
-ingest connector, and it connects over TLS to the server's streaming input.
+ingest connector, and it connects over TLS to the server's streaming input. With
+no TAK Server, it sends the same events onto ATAK's mesh multicast group instead,
+so every TAK client on one network shows the picture with nothing enrolled.
 
 ## Conformance and commissioning
 

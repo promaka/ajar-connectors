@@ -31,6 +31,24 @@ v0). Optional protobuf-v1 negotiation is a possible later addition.
 | `AJAR_TLS_CA/CERT/KEY` env | the Ajar operator's PKI | mTLS to Ajar NATS; the NATS authz for this CN is **subscribe-only** on `ajar.egress.cot.*` (the outbound analogue of ingest onboarding — an "egress-reader" entry, no publish rights) |
 | `[tak] tls_cert/tls_key` | the TAK Server's enrollment | client authentication on the TAK Server streaming input |
 
+## No TAK Server: ATAK's mesh
+
+With no TAK Server, point the relay at ATAK's mesh SA multicast group instead:
+
+```toml
+[tak]
+url = "udp://239.2.3.1:6969"
+# interface = "192.168.1.20"   # the interface the TAK clients share
+```
+
+Every ATAK, WinTAK or iTAK on the same network then shows the governed
+picture directly, one CoT event per datagram, with no server, enrolment or
+certificates. The relay rules are unchanged: the bytes are Core's, verbatim.
+Multicast stays on the local network (`multicast_ttl = 1`); ATAK's mesh mode
+must be on, which it is by default. Use this for a demonstration, a vehicle,
+or a field team on one hotspot; a TAK Server remains the way to reach clients
+across networks and to control who may join.
+
 ## Configure & run
 
 Copy [`tak-egress.example.toml`](tak-egress.example.toml).
@@ -45,7 +63,7 @@ ajar-tak-egress /etc/ajar/tak-egress.toml
 
 - **Ajar side**: async-nats reconnects by itself (same as every connector).
 - **TAK side**: reconnect with pacing on any drop; connects lazily so startup
-  never blocks on the TAK Server.
+  never blocks on the TAK Server. Mesh multicast has no connection to lose.
 - **TAK down**: events queue in a bounded in-memory buffer (`buffer_max`). On
   overflow the **oldest** event is dropped — the freshest picture wins — and the
   gap metric increments. Bounded and lossy **by design** for a live map feed;
