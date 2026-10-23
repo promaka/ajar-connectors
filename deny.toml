@@ -22,11 +22,12 @@ ignore = [
   # rumqttc, at its latest release, pins ^0.102.8, so cargo cannot lift it; the
   # fix is upstream's. Exposure is bounded: mqtt is feature-gated and OFF in
   # every shipped image and binary, so these reach only a consumer who builds
-  # --features mqtt and runs MQTT over TLS. Drop all four when rumqttc moves.
+  # --features mqtt and runs MQTT over TLS. Drop all five when rumqttc moves.
   { id = "RUSTSEC-2026-0049", reason = "optional mqtt feature only; rumqttc pins 0.102; not in shipped artefacts" },
   { id = "RUSTSEC-2026-0098", reason = "optional mqtt feature only; rumqttc pins 0.102; not in shipped artefacts" },
   { id = "RUSTSEC-2026-0099", reason = "optional mqtt feature only; rumqttc pins 0.102; not in shipped artefacts" },
   { id = "RUSTSEC-2026-0104", reason = "optional mqtt feature only; rumqttc pins 0.102; not in shipped artefacts" },
+  { id = "RUSTSEC-2026-0382", reason = "optional mqtt feature only; rumqttc pins 0.102; not in shipped artefacts; the 0.103 line every shipped binary uses is at the fixed version" },
   # The DDS transport's stack (rustdds) still depends on mio 0.6, which pulls
   # net2, and on netdev, which pulls the paste macro crate. Both advisories are
   # unmaintained, not vulnerable: net2 is socket-option plumbing on a LAN

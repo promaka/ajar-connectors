@@ -75,6 +75,20 @@ Two version lines are tracked independently (see COMPATIBILITY.md):
   the guides, described such fields as discarded or not delivered; on a
   graceful site they were kept, as metadata.
 
+### Security
+
+- rustls 0.23.45 to 0.23.46, rustls-webpki 0.103.15 to 0.103.16, tokio
+  1.53.1 to 1.54.1 and webpki-roots 1.0.8 to 1.0.11 in every workspace, for
+  RUSTSEC-2026-0346 to 0349 (rustls: session values' debug output exposing
+  TLS secrets, buffered data sent to the outer server after an ECH
+  rejection, unbounded certificate decompression before authentication, and
+  a key-exchange downgrade by an unauthenticated ServerHello),
+  RUSTSEC-2026-0382 (rustls-webpki accepting distrusted intermediates),
+  RUSTSEC-2026-0381 (webpki-roots trusting distrusted emSign intermediates)
+  and RUSTSEC-2026-0386 (tokio's AsyncFd constructors breaking I/O safety).
+  rustls is the TLS under every connector's mTLS link to the bus and under
+  the egress relays.
+
 ## [0.6.3] - 2026-09-20
 
 ### Security
