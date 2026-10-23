@@ -13,6 +13,8 @@ Two version lines are tracked independently (see COMPATIBILITY.md):
 
 ## [Unreleased]
 
+## [0.6.4] - 2026-10-23
+
 ### Added
 
 - `scripts/new-connector.sh <name>`: scaffolds an ingress connector on the
