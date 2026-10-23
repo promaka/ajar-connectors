@@ -29,7 +29,9 @@ async fn file_tails_appends_and_survives_rotation() {
     let path = tmp("file").join("feed.log");
     std::fs::write(&path, "old line\n").unwrap();
 
-    let mut src = file::open(path.to_str().unwrap(), false).await.unwrap();
+    let mut src = file::open(path.to_str().unwrap(), false, Framing::Line)
+        .await
+        .unwrap();
     let p = path.clone();
     tokio::task::spawn_blocking(move || {
         std::thread::sleep(Duration::from_millis(300));
@@ -52,13 +54,17 @@ async fn file_tails_appends_and_survives_rotation() {
 async fn file_from_start_replays_existing_content() {
     let path = tmp("file-replay").join("feed.log");
     std::fs::write(&path, "already here\n").unwrap();
-    let mut src = file::open(path.to_str().unwrap(), true).await.unwrap();
+    let mut src = file::open(path.to_str().unwrap(), true, Framing::Line)
+        .await
+        .unwrap();
     assert_eq!(recv_string(&mut src).await, "already here");
 }
 
 #[tokio::test]
 async fn file_open_refuses_a_missing_path() {
-    assert!(file::open("/nonexistent/feed.log", false).await.is_err());
+    assert!(file::open("/nonexistent/feed.log", false, Framing::Line)
+        .await
+        .is_err());
 }
 
 #[tokio::test]

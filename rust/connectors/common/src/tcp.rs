@@ -43,10 +43,7 @@ impl FrameSource for TcpSource {
         loop {
             self.ensure_connected().await?;
             let reader = self.reader.as_mut().expect("connected above");
-            let framed = match self.framing {
-                Framing::Line => stream::read_line(reader, buf).await,
-                Framing::LengthDelimited => stream::read_length_delimited(reader, buf).await,
-            };
+            let framed = stream::read_frame(reader, self.framing, buf).await;
             match framed {
                 Ok(n) => return Ok(n),
                 Err(e) => {

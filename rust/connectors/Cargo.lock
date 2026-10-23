@@ -249,6 +249,40 @@ dependencies = [
 ]
 
 [[package]]
+name = "ajar-sapient"
+version = "0.6.3"
+dependencies = [
+ "ajar-connector",
+ "ajar-connector-common",
+ "ajar-sapient-wire",
+ "anyhow",
+ "async-trait",
+ "ed25519-dalek",
+ "hex",
+ "proptest",
+ "prost",
+ "prost-types",
+ "serde",
+ "serde_json",
+ "tokio",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
+name = "ajar-sapient-wire"
+version = "0.6.3"
+dependencies = [
+ "prost",
+ "prost-build",
+ "prost-types",
+ "protoc-bin-vendored",
+ "time",
+]
+
+[[package]]
 name = "ajar-sink"
 version = "0.6.3"
 dependencies = [

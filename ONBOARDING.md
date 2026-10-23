@@ -29,7 +29,11 @@ Whichever box you are in, the first thing you need is a packet.
 Your operator (whoever runs Ajar for you) ran one command on their side and
 sent you a single file, `<your-id>.packet.tar`. If you run Core yourself, you
 are the operator: the command is `ajar onboard <your-id> --mint …` on the Core
-host, and the packet it writes is this file. It contains everything you
+host, and the packet it writes is this file. A connector whose types are its
+own fragment rather than MIM's, such as SAPIENT, adds
+`--type-spec <fragment>.json` with the file shipped beside its binary, for
+example `ajar onboard sapient-fusion-1 --mint --types sapient: --protocol sapient
+--type-spec sapient.types.json …`. The packet contains everything you
 need, and nothing you have to create yourself:
 
 | File | What it is |

@@ -101,6 +101,21 @@ MQ-8 Fire Scout and Watchkeeper, and on their vehicle-specific modules. This
 connector ingests vehicle state; it does not command aircraft. UDP between the VSM
 and the control system.
 
+## Counter-UAS
+
+### `ajar-sapient` (SAPIENT, BSI Flex 335)
+
+The UK MOD interface between autonomous sensor edge nodes and a fusion node,
+the backbone of counter-UAS installations: radars, cameras, passive RF and
+acoustic nodes register with a fusion node and report detections, tracks,
+status and alerts as protobuf with a length prefix over TCP. The connector is
+either the fusion node's message handler, with the edge nodes pointed at it,
+or a listener on a fusion node's output or a capture. Each report becomes an
+event under the `sapient:` types, an operator-registered fragment shipped
+beside the binary, geolocated against the reporting node where the report is
+range and bearing. Spec and schema are public; the connector is built against
+BSI Flex 335 v2.0.
+
 ## Command and control
 
 ### `ajar-tak-cot` (TAK / Cursor-on-Target, ingress)
@@ -188,6 +203,7 @@ file, stdin or exec.
 | ISR tracks (STANAG 4676) | `ajar-stanag4676` |
 | Small or commercial drone telemetry (MAVLink) | `ajar-mavlink` |
 | Military UAS telemetry (STANAG 4586) | `ajar-stanag4586` |
+| Counter-UAS sensors or a fusion node (SAPIENT, BSI Flex 335) | `ajar-sapient` |
 | TAK / CoT | `ajar-tak-cot` inbound, `ajar-tak-egress` outbound |
 | Modern JSON or CSV with no dedicated connector | `ajar-generic` |
 

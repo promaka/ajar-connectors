@@ -1,0 +1,76 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Example SAPIENT (BSI Flex 335) ingress config. Copy, adjust, and run:
+#   ajar-sapient ./sapient.toml
+#
+# One connector takes a SAPIENT system's reports: registrations and status
+# reports from edge nodes, detection and track reports, and alerts. Each
+# becomes a signed event under the `sapient:` types in sapient.types.json,
+# which the Core operator registers once with `ajar onboard --type-spec`.
+
+# This connector's Ajar identity. Its signing key (below) must be registered in
+# Core against this same id.
+source_id = "sapient-fusion-1"
+
+# Where Core listens. Production is tls://<host>:443 with the AJAR_TLS_* env set
+# (see the repository README); nats://… is for local development only.
+nats_url = "nats://127.0.0.1:4222"
+
+# Publishes to <subject_prefix>.<source_id>. Leave as-is unless Core says otherwise.
+subject_prefix = "ajar.ingest"
+
+# The connector's own Ed25519 signing seed: 32 raw bytes, or a 64-char hex file.
+# Secret — never commit it, never share it.
+signing_key_path = "/etc/ajar/sapient-fusion-1.seed"
+
+# SAPIENT reports carry no hostility; assign one for the picture, or leave it
+# unset to assert nothing.
+# default_hostility = "Suspect"
+
+# The security marking every event carries, stamped inside its signature.
+# Every field is optional; see the repository README, section 7f.
+# [marking]
+# classification = "restricted"
+# releasable_to = ["GBR", "ITA"]
+# caveats = ["EXERCISE"]
+
+# Which Ajar type a classified object becomes, keyed by the SAPIENT
+# classification type the node reports (case-insensitive). Unmapped
+# classifications stay `sapient:detection` or `sapient:track`. Mapping to a
+# MIM type gives the object a standard symbol; the SAPIENT-specific attributes
+# then ride as metadata, since a MIM type does not govern them.
+# [entity_map]
+# "UAV" = "mim:aircraft"
+# "Person" = "mim:person"
+
+[options]
+# `dmm`: this connector is the fusion node's message handler. Edge nodes connect
+# to the address below, register, are acknowledged, and report. `subscriber`:
+# the connector connects to a fusion node's output (or reads a capture) and
+# only listens.
+role = "dmm"
+# This fusion node's identity, a UUID, carried in every acknowledgement. Unset,
+# a fresh one is made at start-up; set it so the sensors see a stable peer.
+# node_id = "2f1c6a1e-4a5e-4b7e-9b1a-0d3f2e6c7a11"
+
+# How bytes reach the connector. The `dmm` role needs `tcp-server`: the
+# address the edge nodes are configured to connect to. The standard's framing
+# is applied regardless of the `framing` line.
+[transport]
+kind = "tcp-server"
+bind = "0.0.0.0:7777"
+framing = "length-u32le"
+
+# The `subscriber` role takes any transport that carries the standard's
+# framing. A fusion node's output:
+# [transport]
+# kind = "tcp-client"
+# connect = "fusion-node:7777"
+# framing = "length-u32le"
+#
+# A recorded capture, replayed from the start:
+# [transport]
+# kind = "file"
+# path = "/var/ajar/captures/sapient-bench.bin"
+# from_start = true
+# framing = "length-u32le"

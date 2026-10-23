@@ -15,6 +15,26 @@ Two version lines are tracked independently (see COMPATIBILITY.md):
 
 ### Added
 
+- `ajar-sapient`: SAPIENT (BSI Flex 335) ingress, the UK MOD counter-UAS
+  interface between sensor edge nodes and a fusion node. As the fusion
+  node's message handler it accepts edge nodes over TCP, acknowledges their
+  registrations and takes their reports; as a subscriber it listens to a
+  fusion node's output or replays a capture. Detection and track reports,
+  status reports, registrations and alerts become events under the
+  `sapient:` types, a fragment shipped beside the binary for
+  `ajar onboard --type-spec`; range-and-bearing reports are geolocated
+  against the reporting node, velocities become speed and course in the
+  contract's units, and every message is sealed verbatim. The published
+  schema is vendored and compiled in `ajar-sapient-wire`, with the v1.0
+  schema behind a feature for a site still on it. Image, tarball row and
+  catalogue entry included.
+- `framing = "length-u32le"`, the 4-byte little-endian prefix SAPIENT and
+  other protobuf streams use, on every stream transport; the `file` and
+  `stdin` transports now take a `framing` too, so a binary capture replays
+  from the start frame by frame.
+- `[options]`: a connector-specific settings table the runtime carries
+  untouched, so a connector can take its own keys without a change to the
+  shared config.
 - `scripts/new-connector.sh <name>`: scaffolds an ingress connector on the
   shared runtime. The crate it writes builds, runs, prints its profile and
   passes its tests before the parser is written; the one file to edit is
@@ -30,6 +50,10 @@ Two version lines are tracked independently (see COMPATIBILITY.md):
 
 ### Changed
 
+- The runtime treats every namespace other than `mim:` as the operator's
+  to govern: a type fragment registered with Core, such as `sapient:`, is
+  checked by Core against what was registered, as vendor `x:` types always
+  were, rather than warned about here as unknown.
 - The runtime reports once at start-up when the configured entity type is
   not in the ontology, since Core rejects such events on every site, and
   counts them under `connector_ungoverned_total` with the undeclared

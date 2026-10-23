@@ -735,6 +735,7 @@ writes both, and [AGENTS.md](AGENTS.md) is the specification the parser follows.
 | [stanag4676](rust/connectors/stanag4676) | STANAG 4676 (NATO ISR Tracking) | fused ISR tracks | TCP / file |
 | [mavlink](rust/connectors/mavlink) | MAVLink v1/v2 | small-UAS / drone telemetry | UDP |
 | [stanag4586](rust/connectors/stanag4586) | STANAG 4586 (NATO UAS Control) | military UAS telemetry | UDP |
+| [sapient](rust/connectors/sapient) | SAPIENT (BSI Flex 335) | counter-UAS detections, tracks, sensor status and alerts, from edge nodes or a fusion node | TCP server (edge nodes connect in) / TCP client / file |
 | [tak-cot](rust/connectors/tak-cot) | TAK / Cursor-on-Target | ground/air situational-awareness tracks | UDP multicast / unicast |
 | [generic](rust/connectors/generic) | any flat JSON / CSV | the long tail, by field mapping rather than code | any of the below |
 | [tak-egress](rust/connectors/tak-egress) | TAK / CoT (**egress**) | governed COP tracks OUT to a TAK Server, verbatim | NATS → TLS 8089 |
@@ -759,13 +760,13 @@ arrive, so any connector runs on any transport by config:
 | `kind` | Method | Notes |
 |--------|--------|-------|
 | `udp-multicast`, `udp` | UDP datagrams | one packet per frame (SA broadcast) |
-| `tcp-client` | TCP stream (dial out) | `framing = "line"` or `"length-delimited"`, auto-reconnect |
+| `tcp-client` | TCP stream (dial out) | `framing = "line"`, `"length-delimited"` (2-byte big-endian prefix) or `"length-u32le"` (4-byte little-endian prefix, as SAPIENT frames), auto-reconnect |
 | `tcp-server` | TCP listen | sources that push to a configured address; multiple pushers |
 | `http-server` | HTTP(S) listen (webhooks) | sources that only POST to a URL; optional TLS and client certs; refuses with 503 when saturated so the sender retries |
-| `file` | tail a file | follows appends, handles rotation |
+| `file` | tail a file | follows appends, handles rotation; `framing` as for TCP, so a binary capture replays from the start |
 | `dir` | watch a drop directory | batch file drops (SFTP exports); reads files once settled |
 | `exec` | run a CLI tool | reads its stdout; wraps any vendor binary |
-| `stdin` | pipe | `producer \| ajar-<connector>` |
+| `stdin` | pipe | `producer \| ajar-<connector>`; `framing` as for TCP |
 | `pcap-replay` | recorded capture | replays a .pcap with original timing - evaluate on real recordings |
 | `serial` | RS-232/422/485 | shipped in `ajar-ais-nmea`; other connectors build with the `serial` feature |
 | `mqtt` | subscribe a topic | needs the `mqtt` feature (IoT buses) |
