@@ -116,6 +116,16 @@ beside the binary, geolocated against the reporting node where the report is
 range and bearing. Spec and schema are public; the connector is built against
 BSI Flex 335 v2.0.
 
+### `ajar-sapient-egress` (SAPIENT, BSI Flex 335, egress)
+
+The other direction: Ajar registers with the customer's fusion node as one more
+SAPIENT sensor node and carries governed events to it as detection reports,
+so feeds SAPIENT never had, a MAVLink drone, ADS-B, AIS, a radar's ASTERIX,
+arrive on the fusion node as tracks from a node called Ajar. It reports status
+on the cadence it declared, refuses tasks, buffers while the fusion node is
+unreachable and re-registers on reconnection. Only what Core's policy released
+reaches the fusion node, verified under the egress key first.
+
 ## Command and control
 
 ### `ajar-tak-cot` (TAK / Cursor-on-Target, ingress)
@@ -204,6 +214,7 @@ file, stdin or exec.
 | Small or commercial drone telemetry (MAVLink) | `ajar-mavlink` |
 | Military UAS telemetry (STANAG 4586) | `ajar-stanag4586` |
 | Counter-UAS sensors or a fusion node (SAPIENT, BSI Flex 335) | `ajar-sapient` |
+| A SAPIENT fusion node that should see Ajar's tracks | `ajar-sapient-egress` |
 | TAK / CoT | `ajar-tak-cot` inbound, `ajar-tak-egress` outbound |
 | Modern JSON or CSV with no dedicated connector | `ajar-generic` |
 

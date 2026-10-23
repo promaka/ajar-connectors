@@ -30,6 +30,7 @@ members = [
     "feed-synthetic",
     "sapient-wire",
     "sapient",
+    "sapient-egress",
 ]
 
 [workspace.package]

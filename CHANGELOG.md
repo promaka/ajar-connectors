@@ -28,6 +28,15 @@ Two version lines are tracked independently (see COMPATIBILITY.md):
   schema is vendored and compiled in `ajar-sapient-wire`, with the v1.0
   schema behind a feature for a site still on it. Image, tarball row and
   catalogue entry included.
+- `ajar-sapient-egress`: the other direction. Ajar registers with a SAPIENT
+  fusion node as a sensor node, with the registration the standard requires,
+  reports status on the cadence it declared, refuses tasks, and carries each
+  governed event Core releases as a detection report with the standard's
+  identifiers, a WGS-84 position and an ENU velocity; an object keeps its
+  identifier across reports, so the fusion node sees a track. Every envelope
+  is verified under the egress key first. Reports are buffered, bounded,
+  while the fusion node is unreachable, and the link re-registers on
+  reconnection. Image and catalogue entry included.
 - `framing = "length-u32le"`, the 4-byte little-endian prefix SAPIENT and
   other protobuf streams use, on every stream transport; the `file` and
   `stdin` transports now take a `framing` too, so a binary capture replays

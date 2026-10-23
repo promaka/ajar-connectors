@@ -1,0 +1,53 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Example SAPIENT (BSI Flex 335) egress config. Copy, adjust, and run:
+#   ajar-sapient-egress ./sapient-egress.toml
+#
+# Ajar appears on the fusion node as one more registered sensor node. Every
+# event Core's policy releases onto governed egress becomes a detection
+# report; the node reports its status on the cadence it declared, and refuses
+# any task, since it relays governed events and cannot be pointed.
+
+# Ajar's NATS endpoint. Production is tls://<host>:443 with the AJAR_TLS_* env
+# set to the subscribe-only client certificate the operator issued.
+nats_url = "nats://127.0.0.1:4222"
+
+# The governed egress subject. Any rendered format carries the event's
+# position and attributes; `ajar.egress.json.>` is the usual one. Narrow it
+# to one source with `ajar.egress.json.<source_id>`.
+subject = "ajar.egress.json.>"
+
+# Core's egress verifying key, 64 hex characters or a path to a file holding
+# them. From the operator's packet. Nothing that fails to verify under it
+# reaches the fusion node.
+egress_verifying_key = "/etc/ajar/egress.pub"
+
+[sapient]
+# The fusion node's SAPIENT endpoint.
+fusion_node = "fusion-node.example:7777"
+# This node's identity, a UUID. Set it so a restart re-registers as the same
+# node; unset, a fresh one is made each start.
+# node_id = "7d2e0b1c-1111-4222-8333-444455556666"
+# How the fusion node names this node.
+name = "Ajar"
+short_name = "AJAR"
+# Seconds between status reports; declared at registration.
+status_interval_s = 5.0
+# Reports held while the fusion node is unreachable; the oldest is dropped
+# beyond this, and counted.
+buffer_max = 1000
+# The SAPIENT classification for an entity type nothing else names.
+default_classification = "Unknown"
+
+# This node's own position, in each status report. Optional: a relay has no
+# sensor position of its own.
+# [sapient.location]
+# lat = 51.4700
+# lon = -0.4543
+# alt_m = 25
+
+# The classification reported per Ajar entity type, on top of the built-in
+# table (mim:aircraft is Aircraft, mim:vessel is Vessel, and so on). An
+# event's own `sapient_classification` or `object_class` attribute wins.
+# [sapient.classification]
+# "x:acme:drone" = "UAV"

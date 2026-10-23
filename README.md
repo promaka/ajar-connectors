@@ -740,6 +740,7 @@ writes both, and [AGENTS.md](AGENTS.md) is the specification the parser follows.
 | [generic](rust/connectors/generic) | any flat JSON / CSV | the long tail, by field mapping rather than code | any of the below |
 | [tak-egress](rust/connectors/tak-egress) | TAK / CoT (**egress**) | governed COP tracks OUT to a TAK Server, verbatim | NATS → TLS 8089 |
 | [generic-egress](rust/connectors/generic-egress) | any JSON consumer (**egress**) | governed events OUT by field mapping, markings unmappable-away | NATS → HTTP |
+| [sapient-egress](rust/connectors/sapient-egress) | SAPIENT (BSI Flex 335) (**egress**) | governed events OUT as detection reports from a registered sensor node, to a counter-UAS fusion node | NATS → TCP |
 | [sink](rust/connectors/sink) | — (**development sink**) | verifies, persists and audit-chains events; runs the whole path without Core | NATS → SQLite |
 | [doctor](rust/connectors/doctor) | — (**diagnostics**) | names the broken onboarding step when nothing flows | read-only probes |
 | [feed-synthetic](rust/connectors/feed-synthetic) | — (**conformance source**) | one fixture on six real wire formats, for building against and commissioning before equipment arrives | multicast / TCP / UDP |

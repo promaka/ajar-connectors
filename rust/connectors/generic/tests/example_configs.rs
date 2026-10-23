@@ -48,7 +48,7 @@ fn workspace_examples() -> Vec<std::path::PathBuf> {
 }
 
 /// Crates whose example uses their own config schema, not the shared one.
-const OWN_SCHEMA: &[&str] = &["sink", "tak-egress", "generic-egress"];
+const OWN_SCHEMA: &[&str] = &["sink", "tak-egress", "generic-egress", "sapient-egress"];
 
 #[test]
 fn every_example_config_works_when_copied_verbatim() {

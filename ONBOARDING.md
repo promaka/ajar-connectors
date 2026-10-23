@@ -72,6 +72,12 @@ config and run the matching egress connector with it:
 ./ajar-generic-egress <your-id>-http-egress.toml     # delivers into the web endpoint
 ```
 
+A SAPIENT fusion node is a consumer too: copy
+`rust/connectors/sapient-egress/sapient-egress.example.toml`, put the packet's
+`nats_url` and `egress_verifying_key_hex` in it with the fusion node's
+address, and run `ajar-sapient-egress` with it. Ajar then registers on the
+fusion node as a sensor node and carries released events as detection reports.
+
 The TAK config has two lines to fill before it runs, `tls_cert` and
 `tls_key`: the client certificate and key your TAK server enrolled for this
 connector. `ajar-up` says so when it writes the file. Each flag also needs

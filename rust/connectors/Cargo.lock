@@ -140,8 +140,11 @@ dependencies = [
  "ajar-connector-common",
  "ajar-generic",
  "ajar-mavlink",
+ "ajar-sapient",
+ "ajar-sapient-wire",
  "ajar-tak-cot",
  "anyhow",
+ "prost-types",
  "serde",
  "serde_json",
  "socket2",
@@ -264,6 +267,30 @@ dependencies = [
  "prost-types",
  "serde",
  "serde_json",
+ "tokio",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
+name = "ajar-sapient-egress"
+version = "0.6.3"
+dependencies = [
+ "ajar-connector",
+ "ajar-connector-common",
+ "ajar-generic-egress",
+ "ajar-sapient-wire",
+ "anyhow",
+ "async-nats",
+ "ed25519-dalek",
+ "futures-util",
+ "hex",
+ "prost",
+ "prost-types",
+ "serde",
+ "time",
  "tokio",
  "toml",
  "tracing",
