@@ -40,7 +40,6 @@ crate="ajar-$name"
 snake="${name//-/_}"
 # PascalCase for the parser type: acme-legacy -> AcmeLegacy
 pascal="$(echo "$name" | awk -F- '{ for (i = 1; i <= NF; i++) printf "%s%s", toupper(substr($i, 1, 1)), substr($i, 2) }')"
-version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' "$ws/Cargo.toml" | head -1)"
 
 mkdir -p "$dir/src"
 

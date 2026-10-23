@@ -43,6 +43,16 @@ Two version lines are tracked independently (see COMPATIBILITY.md):
   connector needs and costs: binary, image and tarball sizes, memory and CPU
   measured at idle and under load, the ports in and out, and the measured
   time budgets from the quickstart stopwatch to a cold container build.
+- Every command in the onboarding guide now does what the guide says, each
+  verified by running it: the derived-event producer snippet awaits the two
+  calls the library actually exposes; the consumer delivery flags are shown
+  writing an egress config that the egress connector then runs; `--no-exec`
+  and `--check` are described per role; the vendor-held key recipe extracts
+  the seed the connector loads; the conformance gates run one per line from
+  the repository root, with the C++ build step included; the air-gap recipe
+  vendors both Rust workspaces, writes the cargo config, and manifests the
+  files it produced; and a template-based connector is told how its profile
+  is built.
 
 - Every guide, the SDK headers and the validator messages now state what Core
   does with a name it does not govern, as Core confirms it: an unknown entity
