@@ -80,6 +80,12 @@ ajar-sapient --profile ./sapient.toml  # the document your operator registers
 |---|---|---|
 | `role` | `dmm`, `subscriber` | `dmm` |
 | `node_id` | this node's UUID, carried in every acknowledgement | a fresh UUID at start-up |
+| `types.detection`, `types.track`, `types.sensor_status`, `types.alert` | the entity type each kind of report becomes | the `sapient:` fragment's types |
+
+A site that has not registered the fragment sets `[options.types]` to MIM
+types, for example `track = "mim:aircraft"` and `sensor_status = "mim:sensor"`,
+and needs nothing new on Core; the SAPIENT-specific attributes then ride as
+metadata, since a MIM type does not govern them.
 
 The `dmm` role needs `[transport] kind = "tcp-server"`. The `subscriber` role
 takes any transport with `framing = "length-u32le"`, the standard's 4-byte

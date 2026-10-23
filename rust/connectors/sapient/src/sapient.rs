@@ -54,6 +54,48 @@ pub struct Options {
     /// This node's identity, carried in every acknowledgement the `dmm` role
     /// sends. Made fresh at start-up when the config does not set it.
     pub node_id: String,
+    /// The entity type each kind of report becomes.
+    pub types: Types,
+}
+
+/// The entity types this connector emits, one per kind of SAPIENT report.
+/// The defaults are the `sapient:` fragment; a site without the fragment
+/// registered maps each to a MIM type instead, as `[options.types]`.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Types {
+    #[serde(default = "default_detection")]
+    pub detection: String,
+    #[serde(default = "default_track")]
+    pub track: String,
+    #[serde(default = "default_sensor_status")]
+    pub sensor_status: String,
+    #[serde(default = "default_alert")]
+    pub alert: String,
+}
+
+fn default_detection() -> String {
+    TYPE_DETECTION.into()
+}
+fn default_track() -> String {
+    TYPE_TRACK.into()
+}
+fn default_sensor_status() -> String {
+    TYPE_SENSOR_STATUS.into()
+}
+fn default_alert() -> String {
+    TYPE_ALERT.into()
+}
+
+impl Default for Types {
+    fn default() -> Self {
+        Types {
+            detection: default_detection(),
+            track: default_track(),
+            sensor_status: default_sensor_status(),
+            alert: default_alert(),
+        }
+    }
 }
 
 #[derive(serde::Deserialize)]
@@ -63,6 +105,8 @@ struct OptionsTable {
     role: Role,
     #[serde(default)]
     node_id: Option<String>,
+    #[serde(default)]
+    types: Types,
 }
 
 fn default_role() -> Role {
@@ -78,9 +122,22 @@ impl Options {
             Some(id) if !id.trim().is_empty() => id,
             _ => uuid::Uuid::new_v4().to_string(),
         };
+        for (kind, ty) in [
+            ("detection", &t.types.detection),
+            ("track", &t.types.track),
+            ("sensor_status", &t.types.sensor_status),
+            ("alert", &t.types.alert),
+        ] {
+            if !ty.contains(':') {
+                anyhow::bail!(
+                    "[options.types] {kind} = {ty:?}: an entity type is namespaced, e.g. mim:aircraft or sapient:detection"
+                );
+            }
+        }
         Ok(Self {
             role: t.role,
             node_id,
+            types: t.types,
         })
     }
 }
@@ -142,6 +199,8 @@ pub struct SapientParser {
     enrichment: Enrichment,
     /// SAPIENT classification type (lower-cased) to the entity type it becomes.
     entity_map: HashMap<String, String>,
+    /// The entity type each kind of report becomes.
+    types: Types,
     nodes: Mutex<HashMap<String, Node>>,
     counters: Counters,
     /// The acceptor's counters, when this connector is the fusion node, so
@@ -155,10 +214,17 @@ impl SapientParser {
             source_id: source_id.into(),
             enrichment,
             entity_map: HashMap::new(),
+            types: Types::default(),
             nodes: Mutex::new(HashMap::new()),
             counters: Counters::default(),
             dmm: None,
         }
+    }
+
+    /// Emit each kind of report under the operator's chosen entity types.
+    pub fn with_types(mut self, types: Types) -> Self {
+        self.types = types;
+        self
     }
 
     /// Publish the fusion-node acceptor's counters alongside the parser's.
@@ -278,9 +344,9 @@ impl SapientParser {
             .and_then(|(class, _)| self.entity_map.get(&class.to_lowercase()))
             .map(String::as_str)
             .unwrap_or(if r.track_info.is_empty() {
-                TYPE_DETECTION
+                &self.types.detection
             } else {
-                TYPE_TRACK
+                &self.types.track
             })
             .to_string();
         let mut b = self.builder(&entity_type, node_id, observed, raw);
@@ -518,7 +584,7 @@ impl SapientParser {
             }
         }
         let node = self.node(node_id);
-        let t = TYPE_SENSOR_STATUS;
+        let t = self.types.sensor_status.as_str();
         let mut b = self.builder(t, node_id, observed, raw);
         b = b.metadata("source_uid", node_id);
         if let Some(id) = &r.report_id {
@@ -632,7 +698,7 @@ impl SapientParser {
             n.node_type = node_type.clone();
             n.velocity_kph = velocity_kph;
         });
-        let t = TYPE_SENSOR_STATUS;
+        let t = self.types.sensor_status.as_str();
         let mut b = self.builder(t, node_id, observed, raw);
         b = b.metadata("source_uid", node_id);
         b = b.metadata("sapient_message", "registration");
@@ -699,7 +765,7 @@ impl SapientParser {
         raw: &[u8],
     ) -> Result<Event, ajar_connector::BuildError> {
         let node = self.node(node_id);
-        let t = TYPE_ALERT;
+        let t = self.types.alert.as_str();
         let mut b = self.builder(t, node_id, observed, raw);
         let alert_id = a.alert_id.clone().unwrap_or_default();
         b = b.metadata("source_uid", format!("{node_id}:{alert_id}"));
@@ -1234,6 +1300,34 @@ mod tests {
         let o = Options::from_table(&t).unwrap();
         assert_eq!(o.role, Role::Dmm);
         assert_eq!(o.node_id, "fusion-1");
+    }
+
+    #[test]
+    fn report_kinds_can_be_mapped_to_mim_types_for_a_site_without_the_fragment() {
+        let t: toml::Table =
+            toml::from_str("[types]\ntrack = \"mim:aircraft\"\nsensor_status = \"mim:sensor\"")
+                .unwrap();
+        let o = Options::from_table(&t).unwrap();
+        assert_eq!(
+            o.types.detection, TYPE_DETECTION,
+            "unset kinds keep the fragment"
+        );
+        let p = parser().with_types(o.types);
+        let status = envelope(Content::StatusReport(v2::StatusReport {
+            node_location: Some(latlng(51.0, 0.0, Some(10.0))),
+            system: Some(status_report::System::Ok as i32),
+            ..Default::default()
+        }));
+        let s = &p.parse(&status).unwrap()[0];
+        assert_eq!(s.entity_type, "mim:sensor");
+        // mim:sensor does not govern the SAPIENT names, so they ride as metadata.
+        assert_eq!(attribute(s, "sapient_system"), None);
+        assert_eq!(metadata(s, "sapient_system"), Some("OK"));
+        let t: toml::Table = toml::from_str("[types]\nalert = \"action\"").unwrap();
+        assert!(
+            Options::from_table(&t).is_err(),
+            "an unnamespaced type is refused"
+        );
     }
 
     #[test]

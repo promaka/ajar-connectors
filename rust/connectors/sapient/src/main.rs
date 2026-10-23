@@ -44,6 +44,7 @@ async fn main() -> anyhow::Result<()> {
 
     let options = Options::from_table(&cfg.options).context("reading [options]")?;
     let mut parser = SapientParser::new(cfg.source_id.clone(), cfg.enrichment())
+        .with_types(options.types.clone())
         .with_entity_map(&cfg.entity_map)
         .context("validating [entity_map]")?;
 

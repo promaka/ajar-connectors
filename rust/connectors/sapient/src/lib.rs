@@ -13,4 +13,4 @@
 pub mod dmm;
 pub mod sapient;
 
-pub use sapient::{Options, Role, SapientError, SapientParser};
+pub use sapient::{Options, Role, SapientError, SapientParser, Types};

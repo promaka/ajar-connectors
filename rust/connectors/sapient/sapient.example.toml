@@ -53,6 +53,15 @@ role = "dmm"
 # a fresh one is made at start-up; set it so the sensors see a stable peer.
 # node_id = "2f1c6a1e-4a5e-4b7e-9b1a-0d3f2e6c7a11"
 
+# The entity type each kind of report becomes. The defaults are the `sapient:`
+# fragment. A site that has not registered the fragment maps each kind to a
+# MIM type instead; the SAPIENT-specific attributes then ride as metadata.
+# [options.types]
+# detection = "mim:object"
+# track = "mim:aircraft"
+# sensor_status = "mim:sensor"
+# alert = "mim:action"
+
 # How bytes reach the connector. The `dmm` role needs `tcp-server`: the
 # address the edge nodes are configured to connect to. The standard's framing
 # is applied regardless of the `framing` line.
