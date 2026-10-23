@@ -13,6 +13,8 @@ Two version lines are tracked independently (see COMPATIBILITY.md):
 
 ## [Unreleased]
 
+## [0.6.5] - 2026-10-24
+
 ### Added
 
 - `ajar-sapient`: SAPIENT (BSI Flex 335) ingress, the UK MOD counter-UAS
