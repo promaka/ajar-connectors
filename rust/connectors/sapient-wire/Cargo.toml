@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: Apache-2.0
+[package]
+name = "ajar-sapient-wire"
+description = "The SAPIENT (BSI Flex 335) wire format: the published protobuf schema compiled to Rust, and the length-prefixed TCP framing around each message."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+# The generated bindings carry the standard's own comments, which are not Rust
+# doctests.
+[lib]
+doctest = false
+
+[features]
+default = []
+# Also compile the BSI Flex 335 v1.0 schema, for a site still on it. The v2.0
+# schema is always compiled; the version a connector speaks is its own choice.
+v1 = []
+
+[dependencies]
+prost.workspace = true
+prost-types.workspace = true
+time.workspace = true
+
+[build-dependencies]
+prost-build.workspace = true
+protoc-bin-vendored.workspace = true

@@ -8,10 +8,10 @@ use crate::runtime::FrameSource;
 use crate::stream::StreamSource;
 
 /// Build a stdin source (line-framed).
-pub fn open() -> anyhow::Result<impl FrameSource> {
+pub fn open(framing: Framing) -> anyhow::Result<impl FrameSource> {
     Ok(StreamSource::new(
         tokio::io::stdin(),
-        Framing::Line,
+        framing,
         "stdin".to_string(),
     ))
 }

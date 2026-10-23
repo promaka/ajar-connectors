@@ -17,7 +17,7 @@ Usage, in full::
 
     async for delivery in consume(
         "tls://nats.operator.example:4443",
-        subject="ajar.egress.geojson.>",
+        subject="ajar.egress.signed.>",
         egress_verifying_key="<64-hex from your operator>",
         ca="ca.pem", cert="client.pem", key="client.key",
     ):
@@ -47,7 +47,7 @@ class Delivery:
     event: "event_pb2.Event"
     #: The event's rendered payload bytes (GeoJSON, CoT, native frame...).
     payload: bytes
-    #: The NATS subject it arrived on (e.g. ajar.egress.geojson.coastal-1).
+    #: The NATS subject it arrived on (e.g. ajar.egress.signed.coastal-1).
     subject: str
 
 

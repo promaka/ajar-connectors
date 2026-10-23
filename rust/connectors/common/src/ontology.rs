@@ -192,20 +192,29 @@ fn index() -> &'static Index {
     })
 }
 
-/// Whether the ontology declares `attribute` on `entity_type` itself. A vendor
-/// namespace (`x:`) is the operator's to govern and is always allowed.
+/// Whether `entity_type` lives in a namespace the operator governs rather than
+/// the vendored contract: a vendor extension (`x:<vendor>:<type>`) or a type
+/// fragment the operator registered with Core under its own namespace, such as
+/// `sapient:detection`. Only `mim:` types are checked against the contract
+/// here; Core checks the rest against what the operator registered.
+pub fn operator_namespace(entity_type: &str) -> bool {
+    !entity_type.starts_with("mim:")
+}
+
+/// Whether the ontology declares `attribute` on `entity_type` itself. A type in
+/// an operator namespace is the operator's to govern and is always allowed.
 pub fn governs(entity_type: &str, attribute: &str) -> bool {
-    entity_type.starts_with("x:")
+    operator_namespace(entity_type)
         || index()
             .attrs
             .get(entity_type)
             .is_some_and(|set| set.contains(attribute))
 }
 
-/// Whether the ontology declares `entity_type`. A vendor namespace (`x:`) is
-/// the operator's to register and counts as known.
+/// Whether the ontology declares `entity_type`. A type in an operator namespace
+/// is the operator's to register and counts as known.
 pub fn knows_type(entity_type: &str) -> bool {
-    entity_type.starts_with("x:") || index().attrs.contains_key(entity_type)
+    operator_namespace(entity_type) || index().attrs.contains_key(entity_type)
 }
 
 /// The governed attributes on a built event that its own entity type does not

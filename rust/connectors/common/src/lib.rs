@@ -100,9 +100,13 @@ pub async fn open_source(transport: &Transport) -> anyhow::Result<Box<dyn FrameS
             path,
             process_existing,
         } => Box::new(dir::open(path, *process_existing)?),
-        Transport::File { path, from_start } => Box::new(file::open(path, *from_start).await?),
+        Transport::File {
+            path,
+            from_start,
+            framing,
+        } => Box::new(file::open(path, *from_start, *framing).await?),
         Transport::Exec { command, args } => Box::new(exec::open(command, args)?),
-        Transport::Stdin => Box::new(stdin::open()?),
+        Transport::Stdin { framing } => Box::new(stdin::open(*framing)?),
         Transport::HttpServer {
             bind,
             path,

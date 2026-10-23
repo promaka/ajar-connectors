@@ -1,0 +1,21 @@
+# What a container build does not need from the checkout. The Dockerfiles copy
+# `rust/` and `vendor/`; without this file Docker first ships every build
+# directory under them to the daemon, which on a developer's machine is tens
+# of gigabytes and most of the build time.
+**/target
+.git
+cpp/build
+**/.venv
+**/__pycache__
+dist
+vendor-crates
+.cargo
+# Secrets never enter an image.
+*.key
+*.seed
+*.pem
+*.p12
+*.pfx
+*.crt
+*.cer
+*.packet.tar

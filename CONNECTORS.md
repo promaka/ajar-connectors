@@ -101,6 +101,31 @@ MQ-8 Fire Scout and Watchkeeper, and on their vehicle-specific modules. This
 connector ingests vehicle state; it does not command aircraft. UDP between the VSM
 and the control system.
 
+## Counter-UAS
+
+### `ajar-sapient` (SAPIENT, BSI Flex 335)
+
+The UK MOD interface between autonomous sensor edge nodes and a fusion node,
+the backbone of counter-UAS installations: radars, cameras, passive RF and
+acoustic nodes register with a fusion node and report detections, tracks,
+status and alerts as protobuf with a length prefix over TCP. The connector is
+either the fusion node's message handler, with the edge nodes pointed at it,
+or a listener on a fusion node's output or a capture. Each report becomes an
+event under the `sapient:` types, an operator-registered fragment shipped
+beside the binary, geolocated against the reporting node where the report is
+range and bearing. Spec and schema are public; the connector is built against
+BSI Flex 335 v2.0.
+
+### `ajar-sapient-egress` (SAPIENT, BSI Flex 335, egress)
+
+The other direction: Ajar registers with the customer's fusion node as one more
+SAPIENT sensor node and carries governed events to it as detection reports,
+so feeds SAPIENT never had, a MAVLink drone, ADS-B, AIS, a radar's ASTERIX,
+arrive on the fusion node as tracks from a node called Ajar. It reports status
+on the cadence it declared, refuses tasks, buffers while the fusion node is
+unreachable and re-registers on reconnection. Only what Core's policy released
+reaches the fusion node, verified under the egress key first.
+
 ## Command and control
 
 ### `ajar-tak-cot` (TAK / Cursor-on-Target, ingress)
@@ -114,22 +139,25 @@ usual SA broadcast; TCP where a server pushes to you.
 
 The reverse direction. Relays governed, provenance-checked tracks back out to a TAK
 Server so ATAK users see the fused picture. This is an egress relay rather than an
-ingest connector, and it connects over TLS to the server's streaming input.
+ingest connector, and it connects over TLS to the server's streaming input. With
+no TAK Server, it sends the same events onto ATAK's mesh multicast group instead,
+so every TAK client on one network shows the picture with nothing enrolled.
 
 ## Conformance and commissioning
 
-### `ajar-feed-synthetic` (one fixture, six sensors)
+### `ajar-feed-synthetic` (one fixture, seven sensors)
 
 A synthetic multi-sensor source for conformance and commissioning: a fusion
 consumer builds against it before any equipment arrives, and a site
 commissions its connectors against it before real feeds are switched in.
 Every sensor is read by a real connector on its real wire format; only the
 thing plugged into each connector's input is synthesised, so replacing a
-generator with actual equipment changes nothing else. The six render one
+generator with actual equipment changes nothing else. The seven render one
 fixture in the Solent approaches: a container ship seen by AIS and by the
 coastal radar, an airliner seen by ADS-B and by the radar's system track, a
 navigation radar on the ship intercepted by an ESM receiver, an uncrewed
-aircraft on MAVLink and a shore party on CoT. The same object seen twice gives
+aircraft on MAVLink and, by range and bearing, on a counter-UAS radar
+speaking SAPIENT, and a shore party on CoT. The same object seen twice gives
 a fusion consumer association work with a known answer.
 
 Each sensor emits only what that sensor carries: AIS has an identity and no
@@ -161,6 +189,7 @@ ajar-feed-synthetic asterix ais               # a subset
 | MAVLink | v1 frames to UDP 14550 | `ajar-mavlink` |
 | CoT | XML on multicast 239.2.3.1:6969 | `ajar-tak-cot` |
 | ESM | JSON lines on TCP 30155 | `ajar-generic` with `esm-synthetic.example.toml` |
+| SAPIENT | BSI Flex 335 framed protobuf on TCP 30335: registration, status, UAV track | `ajar-sapient` in the `subscriber` role |
 
 Every connector reading this feed carries `[marking] caveats = ["EXERCISE"]`,
 so each track says what it is inside its signature wherever it goes; the
@@ -188,6 +217,8 @@ file, stdin or exec.
 | ISR tracks (STANAG 4676) | `ajar-stanag4676` |
 | Small or commercial drone telemetry (MAVLink) | `ajar-mavlink` |
 | Military UAS telemetry (STANAG 4586) | `ajar-stanag4586` |
+| Counter-UAS sensors or a fusion node (SAPIENT, BSI Flex 335) | `ajar-sapient` |
+| A SAPIENT fusion node that should see Ajar's tracks | `ajar-sapient-egress` |
 | TAK / CoT | `ajar-tak-cot` inbound, `ajar-tak-egress` outbound |
 | Modern JSON or CSV with no dedicated connector | `ajar-generic` |
 

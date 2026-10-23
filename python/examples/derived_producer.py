@@ -14,7 +14,7 @@ Run against a live deployment:
     python examples/derived_producer.py \
         --nats tls://nats.operator.example:4443 \
         --source-id assess-1 --seed ./assess-1.seed \
-        --consume "ajar.egress.geojson.>"
+        --consume "ajar.egress.signed.>"
 
 (mTLS: also pass --ca/--cert/--key, the PEMs your operator issued.)
 """

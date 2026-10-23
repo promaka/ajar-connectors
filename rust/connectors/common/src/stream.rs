@@ -104,6 +104,41 @@ pub(crate) async fn read_length_delimited<R: AsyncRead + Unpin>(
     Ok(n)
 }
 
+/// Read one frame with a 4-byte little-endian length prefix, the framing BSI
+/// Flex 335 (SAPIENT) uses, then that many payload bytes into `buf`. A length
+/// larger than the buffer is rejected before any payload is read, so a hostile
+/// prefix cannot make the reader allocate or wait for gigabytes.
+pub(crate) async fn read_length_u32le<R: AsyncRead + Unpin>(
+    reader: &mut R,
+    buf: &mut [u8],
+) -> Result<usize> {
+    let mut len = [0u8; 4];
+    reader.read_exact(&mut len).await?;
+    let n = u32::from_le_bytes(len) as usize;
+    if n > buf.len() {
+        return Err(Error::new(
+            ErrorKind::InvalidData,
+            format!("length-u32le frame {n} exceeds buffer {}", buf.len()),
+        ));
+    }
+    reader.read_exact(&mut buf[..n]).await?;
+    Ok(n)
+}
+
+/// Read one frame as `framing` says. The one dispatch every stream transport
+/// shares, so a new framing is added here and nowhere else.
+pub(crate) async fn read_frame<R: AsyncBufRead + Unpin>(
+    reader: &mut R,
+    framing: Framing,
+    buf: &mut [u8],
+) -> Result<usize> {
+    match framing {
+        Framing::Line => read_line(reader, buf).await,
+        Framing::LengthDelimited => read_length_delimited(reader, buf).await,
+        Framing::LengthU32le => read_length_u32le(reader, buf).await,
+    }
+}
+
 /// A [`FrameSource`] over any async byte stream, applying a [`Framing`].
 pub(crate) struct StreamSource<R> {
     reader: BufReader<R>,
@@ -124,10 +159,7 @@ impl<R: AsyncRead + Unpin + Send> StreamSource<R> {
 #[async_trait::async_trait]
 impl<R: AsyncRead + Unpin + Send> FrameSource for StreamSource<R> {
     async fn recv(&mut self, buf: &mut [u8]) -> Result<usize> {
-        match self.framing {
-            Framing::Line => read_line(&mut self.reader, buf).await,
-            Framing::LengthDelimited => read_length_delimited(&mut self.reader, buf).await,
-        }
+        read_frame(&mut self.reader, self.framing, buf).await
     }
 
     fn describe(&self) -> String {

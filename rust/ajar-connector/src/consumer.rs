@@ -17,7 +17,7 @@
 //! let key = ajar_connector::VerifyingKey::from_bytes(&[0u8; 32])?;
 //! let stats = Arc::new(Stats::default());
 //! let mut events =
-//!     verified_events(&client, "ajar.egress.geojson.>", key, Guards::default(), stats).await?;
+//!     verified_events(&client, "ajar.egress.signed.>", key, Guards::default(), stats).await?;
 //! use futures_util::StreamExt as _;
 //! while let Some(delivery) = events.next().await {
 //!     // delivery.event verified; delivery.payload is the rendered bytes.
