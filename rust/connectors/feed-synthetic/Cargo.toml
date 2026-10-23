@@ -15,7 +15,9 @@ name = "ajar-feed-synthetic"
 path = "src/main.rs"
 
 [dependencies]
+ajar-sapient-wire = { path = "../sapient-wire" }
 anyhow.workspace = true
+prost-types.workspace = true
 serde_json.workspace = true
 socket2.workspace = true
 time = { version = "0.3", features = ["formatting"] }
@@ -33,6 +35,7 @@ ajar-connector = { path = "../../ajar-connector" }
 ajar-connector-common = { path = "../common" }
 ajar-generic = { path = "../generic" }
 ajar-mavlink = { path = "../mavlink" }
+ajar-sapient = { path = "../sapient" }
 ajar-tak-cot = { path = "../tak-cot" }
 serde.workspace = true
 toml.workspace = true

@@ -48,7 +48,7 @@ type ConsumerStats struct {
 // The SDK deliberately has no transport dependency, so the subscription is
 // yours; the security-critical middle is this function's:
 //
-//	sub, _ := nc.Subscribe("ajar.egress.geojson.>", func(m *nats.Msg) {
+//	sub, _ := nc.Subscribe("ajar.egress.signed.>", func(m *nats.Msg) {
 //	    deliver(m.Data, m.Subject)
 //	})
 //

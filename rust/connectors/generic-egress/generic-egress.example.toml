@@ -10,7 +10,7 @@ nats_url = "tls://ajar.example.mil:4222"
 # Governed egress subject: ajar.egress.<format>.<source>, or a wildcard under
 # it. Must sit under ajar.egress. — the effector cue channel is structurally
 # out of reach. The certificate decides what this consumer may actually see.
-subject = "ajar.egress.json.>"
+subject = "ajar.egress.signed.>"
 
 # Core's egress verifying key, from the operator's handover pack (64-char hex,
 # or a path to the key file). REQUIRED: every payload is verified under this

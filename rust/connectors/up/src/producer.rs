@@ -25,7 +25,7 @@ pub async fn run(packet: &Packet, opts: &Options) -> anyhow::Result<()> {
             "this producer packet names no protocol, so no connector can be chosen. \
              Ask the operator to re-issue it with --protocol (one of: tak-cot, \
              ais-nmea, asterix, mavlink, adsb, generic, klv, gmti, stanag4586, \
-             stanag4676)"
+             stanag4676, sapient)"
         )
     })?;
     let transport = m.transport.as_ref().ok_or_else(|| {

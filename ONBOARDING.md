@@ -29,7 +29,11 @@ Whichever box you are in, the first thing you need is a packet.
 Your operator (whoever runs Ajar for you) ran one command on their side and
 sent you a single file, `<your-id>.packet.tar`. If you run Core yourself, you
 are the operator: the command is `ajar onboard <your-id> --mint …` on the Core
-host, and the packet it writes is this file. It contains everything you
+host, and the packet it writes is this file. A connector whose types are its
+own fragment rather than MIM's, such as SAPIENT, adds
+`--type-spec <fragment>.json` with the file shipped beside its binary, for
+example `ajar onboard sapient-fusion-1 --mint --types sapient: --protocol sapient
+--type-spec sapient.types.json …`. The packet contains everything you
 need, and nothing you have to create yourself:
 
 | File | What it is |
@@ -67,6 +71,12 @@ config and run the matching egress connector with it:
 ./ajar-up <your-id>.packet.tar --to-http <url>       # writes <your-id>-http-egress.toml
 ./ajar-generic-egress <your-id>-http-egress.toml     # delivers into the web endpoint
 ```
+
+A SAPIENT fusion node is a consumer too: copy
+`rust/connectors/sapient-egress/sapient-egress.example.toml`, put the packet's
+`nats_url` and `egress_verifying_key_hex` in it with the fusion node's
+address, and run `ajar-sapient-egress` with it. Ajar then registers on the
+fusion node as a sensor node and carries released events as detection reports.
 
 The TAK config has two lines to fill before it runs, `tls_cert` and
 `tls_key`: the client certificate and key your TAK server enrolled for this
