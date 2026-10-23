@@ -56,6 +56,7 @@ pub enum Sensor {
     Mavlink,
     Cot,
     Esm,
+    Sapient,
 }
 
 impl Sensor {
@@ -65,6 +66,7 @@ impl Sensor {
     pub fn latency(self) -> f64 {
         match self {
             Sensor::Mavlink => 0.2,
+            Sensor::Sapient => 0.3,
             Sensor::Adsb => 0.5,
             Sensor::Asterix => 1.0,
             Sensor::Esm => 1.5,
@@ -78,6 +80,7 @@ impl Sensor {
     pub fn period(self) -> f64 {
         match self {
             Sensor::Mavlink => 1.0,
+            Sensor::Sapient => 1.0,
             Sensor::Adsb => 1.0,
             Sensor::Asterix => RADAR_SCAN_PERIOD_S,
             Sensor::Esm => 2.0,
@@ -101,6 +104,7 @@ impl Sensor {
             Sensor::Mavlink => "mavlink",
             Sensor::Cot => "cot",
             Sensor::Esm => "esm",
+            Sensor::Sapient => "sapient",
         }
     }
 }

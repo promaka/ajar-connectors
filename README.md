@@ -743,7 +743,7 @@ writes both, and [AGENTS.md](AGENTS.md) is the specification the parser follows.
 | [sapient-egress](rust/connectors/sapient-egress) | SAPIENT (BSI Flex 335) (**egress**) | governed events OUT as detection reports from a registered sensor node, to a counter-UAS fusion node | NATS → TCP |
 | [sink](rust/connectors/sink) | — (**development sink**) | verifies, persists and audit-chains events; runs the whole path without Core | NATS → SQLite |
 | [doctor](rust/connectors/doctor) | — (**diagnostics**) | names the broken onboarding step when nothing flows | read-only probes |
-| [feed-synthetic](rust/connectors/feed-synthetic) | — (**conformance source**) | one fixture on six real wire formats, for building against and commissioning before equipment arrives | multicast / TCP / UDP |
+| [feed-synthetic](rust/connectors/feed-synthetic) | — (**conformance source**) | one fixture on seven real wire formats, for building against and commissioning before equipment arrives | multicast / TCP / UDP |
 
 Each maps a standard's position reports, and where present its identity and
 tactical fields, onto Ajar tracks. Each connector's README states which message

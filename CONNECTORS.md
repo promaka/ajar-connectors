@@ -143,18 +143,19 @@ ingest connector, and it connects over TLS to the server's streaming input.
 
 ## Conformance and commissioning
 
-### `ajar-feed-synthetic` (one fixture, six sensors)
+### `ajar-feed-synthetic` (one fixture, seven sensors)
 
 A synthetic multi-sensor source for conformance and commissioning: a fusion
 consumer builds against it before any equipment arrives, and a site
 commissions its connectors against it before real feeds are switched in.
 Every sensor is read by a real connector on its real wire format; only the
 thing plugged into each connector's input is synthesised, so replacing a
-generator with actual equipment changes nothing else. The six render one
+generator with actual equipment changes nothing else. The seven render one
 fixture in the Solent approaches: a container ship seen by AIS and by the
 coastal radar, an airliner seen by ADS-B and by the radar's system track, a
 navigation radar on the ship intercepted by an ESM receiver, an uncrewed
-aircraft on MAVLink and a shore party on CoT. The same object seen twice gives
+aircraft on MAVLink and, by range and bearing, on a counter-UAS radar
+speaking SAPIENT, and a shore party on CoT. The same object seen twice gives
 a fusion consumer association work with a known answer.
 
 Each sensor emits only what that sensor carries: AIS has an identity and no
@@ -186,6 +187,7 @@ ajar-feed-synthetic asterix ais               # a subset
 | MAVLink | v1 frames to UDP 14550 | `ajar-mavlink` |
 | CoT | XML on multicast 239.2.3.1:6969 | `ajar-tak-cot` |
 | ESM | JSON lines on TCP 30155 | `ajar-generic` with `esm-synthetic.example.toml` |
+| SAPIENT | BSI Flex 335 framed protobuf on TCP 30335: registration, status, UAV track | `ajar-sapient` in the `subscriber` role |
 
 Every connector reading this feed carries `[marking] caveats = ["EXERCISE"]`,
 so each track says what it is inside its signature wherever it goes; the

@@ -37,6 +37,12 @@ Two version lines are tracked independently (see COMPATIBILITY.md):
   is verified under the egress key first. Reports are buffered, bounded,
   while the fusion node is unreachable, and the link re-registers on
   reconnection. Image and catalogue entry included.
+- `ajar-feed-synthetic` gains a seventh sensor: a counter-UAS radar speaking
+  SAPIENT on TCP 30335, registering, reporting status with its position, and
+  reporting the fixture's uncrewed aircraft by range and bearing once a
+  second, so the SAPIENT ingress commissions against the same scenario as
+  every other connector, and the same aircraft arrives from its autopilot
+  and from a radar that does not know what it is.
 - `framing = "length-u32le"`, the 4-byte little-endian prefix SAPIENT and
   other protobuf streams use, on every stream transport; the `file` and
   `stdin` transports now take a `framing` too, so a binary capture replays
