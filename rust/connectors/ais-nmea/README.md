@@ -60,7 +60,7 @@ connect = "ais-feed.example.mil:5631"
 ```bash
 ajar-ais-nmea ./ais-nmea.toml
 # production mTLS + health as per the repo README
-export AJAR_TLS_CA=… AJAR_TLS_CERT=… AJAR_TLS_KEY=… AJAR_HEALTH_ADDR=0.0.0.0:9110
+export AJAR_TLS_CA=… AJAR_TLS_CERT=… AJAR_TLS_KEY=… AJAR_HEALTH_ADDR=0.0.0.0:9090
 ```
 
 ## Security note

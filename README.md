@@ -295,12 +295,23 @@ cargo build --release --manifest-path rust/connectors/Cargo.toml -p ajar-asterix
 ./rust/connectors/target/release/ajar-asterix ./asterix.toml             # runs
 ```
 
-What you will see: `connector starting`, then a `heartbeat` line every few
+What you will see: `connector starting`, then a `heartbeat` line every 15
 seconds with `received`, `published` and `rejected` counts. Until section 9
 gives you a real endpoint, the broker connection is retried quietly and
-events are not kept, so the counts prove the decode, not the delivery. To
-watch events arrive and verify, start the five-minute loop at the top of this
-page and set `nats_url = "nats://127.0.0.1:4222"`.
+events are not kept, so the counts prove the decode, not the delivery.
+
+To watch events arrive and verify before then, use the five-minute loop at
+the top of this page. Its sink trusts only keys it knows, so register yours
+first: in `deploy/dev/sink.toml`, add
+
+```toml
+[sources]
+"acme-radar-1" = "<the public key hex that gen-connector-key.sh printed>"
+```
+
+then start the loop and set `nats_url = "nats://127.0.0.1:4222"` in your
+connector's config. The sink logs each verified event and `audit` proves the
+chain.
 
 **Step 5.** Go to [section 7](#7-deploy-it).
 
@@ -380,11 +391,14 @@ units, the feed's own identifier as `source_uid`, a typed error for bad input
 and never a panic. [AGENTS.md](AGENTS.md) is the full specification, with a
 worked example to copy for each kind of format.
 
-**Step 3. Test and run it.**
+**Step 3. Test and run it.** The example config names the seed
+`./acme-legacy-1.seed`, so make one first, as in section 1.
 
 ```bash
+scripts/gen-connector-key.sh acme-legacy-1
 cargo test --manifest-path rust/connectors/Cargo.toml -p ajar-acme-legacy
 cargo build --release --manifest-path rust/connectors/Cargo.toml -p ajar-acme-legacy
+./rust/connectors/target/release/ajar-acme-legacy --profile ./rust/connectors/acme-legacy/acme-legacy.example.toml
 ./rust/connectors/target/release/ajar-acme-legacy ./rust/connectors/acme-legacy/acme-legacy.example.toml
 ```
 
@@ -757,7 +771,11 @@ cargo build && cargo test
 ## Footprint, ports and timings
 
 What a connector needs and costs, measured on this release, so a deployment
-can be sized without asking anyone.
+can be sized without asking anyone. The resource numbers come from
+`scripts/footprint.sh`, which builds one connector, pushes 300,000 records
+through it to a bus and prints the same table for your machine; the image
+size is the build in section 7b; the quickstart time is the figure the CI
+job `quickstart stopwatch` publishes in its summary on every run of `main`.
 
 **Size**
 
@@ -773,7 +791,7 @@ a local bus)
 | Measure | Value |
 |---|---|
 | Resident memory, idle and under load | about 10 MB |
-| Throughput on one laptop core | about 60,000 events a second |
+| Throughput on one laptop core | about 50,000 events a second |
 | Store-and-forward spool, when enabled | bounded by `[spool] max_bytes`, 256 MiB by default, on disk |
 | Helm chart defaults | requests 50m CPU and 64 MiB; limits 250m CPU and 128 MiB |
 
@@ -795,7 +813,7 @@ connector never listens for Core; the bus is the only path in either direction.
 
 | Step | Measured |
 |---|---|
-| Quickstart, from nothing to the first verified event in the sink | 165 s, on the CI runner; the budget CI enforces is 900 s |
+| Quickstart, from nothing to the first verified event in the sink | 165 s on the last CI run of `main`; the budget CI enforces is 900 s |
 | `scripts/new-connector.sh` to passing tests, clean clone | 20 s |
 | First release build of one connector, clean clone | 50 s |
 | First container build with `Dockerfile.build`, nothing cached | about 12 min; rebuilds reuse the cached stages |

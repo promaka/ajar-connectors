@@ -68,8 +68,11 @@ config and run the matching egress connector with it:
 ./ajar-generic-egress <your-id>-http-egress.toml     # delivers into the web endpoint
 ```
 
-Each flag needs the packet to name the matching format, `cot` for TAK and
-`geojson` or `json` for HTTP; `ajar-up` refuses otherwise and says so.
+The TAK config has two lines to fill before it runs, `tls_cert` and
+`tls_key`: the client certificate and key your TAK server enrolled for this
+connector. `ajar-up` says so when it writes the file. Each flag also needs
+the packet to name the matching format, `cot` for TAK and `geojson` or
+`json` for HTTP; `ajar-up` refuses otherwise and says so.
 
 ### Useful options
 
@@ -191,8 +194,13 @@ Only for a format that needs real parsing and is not in
 not need this: the [generic connector](rust/connectors/generic) maps it from a
 config file.
 
-1. Copy the template for your language and edit the two spots marked `EDIT`,
-   about fifteen lines: describe your record, then map it to an event.
+1. Start from one of two places. For a connector that runs next to the
+   equipment, scaffold it on the shared runtime and write one parser:
+   `scripts/new-connector.sh <name>`, as
+   [README section 6a](README.md#6a-a-parser-on-the-shared-runtime)
+   walks through. To own the process, or to write it in another language,
+   copy the template and edit the two spots marked `EDIT`, about fifteen
+   lines: describe your record, then map it to an event.
    [Rust](rust/examples/connector-template/) ·
    [Python](python/examples/connector_template.py) ·
    [Go](go/examples/connector-template/) ·
@@ -207,8 +215,8 @@ config file.
    ajar-<connector> --profile ./config.toml
    ```
    A connector built from a template does not take `--profile`; build the
-   same document with `ConnectorProfile` in the SDK, as
-   [README section 9](README.md#9-register-with-core) shows.
+   same document with `ConnectorProfile` in the SDK, which
+   [README section 9](README.md#9-register-with-core) names.
 
 The transport is a config choice, not code: UDP, multicast, TCP either way,
 HTTP, serial, MQTT, a file, a directory, a pipe, a polled REST endpoint, a
@@ -323,7 +331,8 @@ at the release tag you intend to ship:
 git clone --depth 1 --branch v0.6.3 https://github.com/promaka/ajar-connectors
 cd ajar-connectors
 mkdir -p .cargo && cargo vendor --manifest-path rust/Cargo.toml \
-  -s rust/connectors/Cargo.toml vendor-crates/ > .cargo/config.toml   # Rust, both workspaces
+  -s rust/connectors/Cargo.toml -s rust/examples/Cargo.toml \
+  vendor-crates/ > .cargo/config.toml                                  # Rust, all three workspaces
 (cd go && go mod vendor)                                               # Go
 pip download ./python -d wheels/                                       # Python
 find . -type f -not -path './.git/*' -print0 | xargs -0 sha256sum -b > MANIFEST.sha256

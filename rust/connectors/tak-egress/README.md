@@ -37,7 +37,7 @@ Copy [`tak-egress.example.toml`](tak-egress.example.toml).
 
 ```bash
 export AJAR_TLS_CA=/etc/ajar/ca.pem AJAR_TLS_CERT=/etc/ajar/egress-reader.crt AJAR_TLS_KEY=/etc/ajar/egress-reader.key
-export AJAR_HEALTH_ADDR=0.0.0.0:9110   # optional: /healthz and /metrics
+export AJAR_HEALTH_ADDR=0.0.0.0:9090   # optional: /healthz and /metrics
 ajar-tak-egress /etc/ajar/tak-egress.toml
 ```
 

@@ -8,7 +8,9 @@
 # as every shipped connector: config, key, mTLS NATS, every transport, the
 # seal-and-publish loop, store-and-forward, health, shutdown.
 #
-# After it runs, the one file to edit is rust/connectors/<name>/src/<name>.rs.
+# After it runs, the one file to edit is the parser,
+# rust/connectors/<name>/src/<name>.rs, with the hyphens in <name> written as
+# underscores.
 #
 # Usage:  scripts/new-connector.sh <name>      e.g. scripts/new-connector.sh acme-legacy
 #         <name> is lower-case letters, digits and hyphens, and must be new.
@@ -23,6 +25,16 @@ if [[ ! "$name" =~ ^[a-z][a-z0-9]*(-[a-z0-9]+)*$ ]]; then
   echo "error: '$name' must be lower-case letters, digits and hyphens, starting with a letter" >&2
   exit 2
 fi
+# A name that becomes a Rust keyword cannot be a module, and two names would
+# shadow the SDK and runtime crates.
+case "$name" in
+  as|async|await|break|const|continue|crate|dyn|else|enum|extern|false|fn|for|if|impl|in|let|loop|match|mod|move|mut|pub|ref|return|self|static|struct|super|trait|true|type|unsafe|use|where|while|abstract|become|box|do|final|macro|override|priv|try|typeof|unsized|virtual|yield|gen)
+    echo "error: '$name' is a Rust keyword; pick another name" >&2
+    exit 2 ;;
+  connector|connector-common)
+    echo "error: 'ajar-$name' is the name of a shipped crate; pick another name" >&2
+    exit 2 ;;
+esac
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ws="$root/rust/connectors"
@@ -205,6 +217,8 @@ impl ${pascal}Parser {
         let mut builder = EventBuilder::new(&self.source_id, "mim:object")
             .new_id()
             .now()
+            // A location always carries an altitude. When the frame has none,
+            // say so in metadata rather than let 0 m pass as a measurement.
             .location(record.lat, record.lon, record.alt_m.unwrap_or(0.0))
             // The raw frame rides inside the signed event, verbatim.
             .payload(raw.to_vec())
@@ -212,6 +226,9 @@ impl ${pascal}Parser {
             // format has none, so the connector's identity stands in; replace
             // it with the native id (tail number, track number, MMSI, ...).
             .metadata("source_uid", &self.source_id);
+        if record.alt_m.is_none() {
+            builder = builder.metadata("altitude_known", "false");
+        }
         // Hostility is asserted by the operator, never invented here.
         if let Some(h) = self.enrichment.hostility.as_deref() {
             builder = builder.attribute("hostility", h);
@@ -276,6 +293,14 @@ mod tests {
     fn the_feed_identity_is_the_source_uid() {
         let events = parser().parse(b"1,2").unwrap();
         assert_eq!(metadata(&events[0], "source_uid"), Some("test-1"));
+    }
+
+    #[test]
+    fn a_missing_altitude_is_declared_not_invented() {
+        let without = parser().parse(b"1,2").unwrap();
+        assert_eq!(metadata(&without[0], "altitude_known"), Some("false"));
+        let with = parser().parse(b"1,2,30").unwrap();
+        assert_eq!(metadata(&with[0], "altitude_known"), None);
     }
 
     #[test]
@@ -459,8 +484,10 @@ awk -v member="    \"$name\"," '
 
 # Line widths depend on the name, so format the generated sources the way the
 # repository's gate expects them.
-if command -v cargo >/dev/null 2>&1; then
-  (cd "$ws" && cargo fmt -p "$crate" 2>/dev/null) || true
+if command -v cargo >/dev/null 2>&1 && (cd "$ws" && cargo fmt -p "$crate" 2>/dev/null); then
+  :
+else
+  echo "note: could not run 'cargo fmt -p $crate'; run it once the Rust toolchain is installed, before 'cargo fmt --check'" >&2
 fi
 
 cat <<EOF

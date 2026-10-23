@@ -23,6 +23,19 @@ Two version lines are tracked independently (see COMPATIBILITY.md):
   `stanag4676`, `stanag4586` and `generic-egress` join the matrix, and
   `doctor` with them so a cluster runs diagnostics from the same registry.
   The out-of-the-box sidecar set is now the whole suite.
+- `scripts/footprint.sh`: builds one connector, pushes a feed of records
+  through it to a bus, and prints binary size, resident memory and
+  throughput, so the README's footprint figures can be reproduced on any
+  machine.
+
+### Changed
+
+- The runtime reports once at start-up when the configured entity type is
+  not in the ontology, since Core rejects such events on every site, and
+  counts them under `connector_ungoverned_total` with the undeclared
+  attributes it already counted. The per-attribute warning states Core's
+  handling: quarantined into metadata on a default site, the event rejected
+  on a strict one. The ontology gains `knows_type()` for the check.
 
 ### Documentation
 
@@ -50,10 +63,9 @@ Two version lines are tracked independently (see COMPATIBILITY.md):
   and `--check` are described per role; the vendor-held key recipe extracts
   the seed the connector loads; the conformance gates run one per line from
   the repository root, with the C++ build step included; the air-gap recipe
-  vendors both Rust workspaces, writes the cargo config, and manifests the
+  vendors all three Rust workspaces, writes the cargo config, and manifests the
   files it produced; and a template-based connector is told how its profile
   is built.
-
 - Every guide, the SDK headers and the validator messages now state what Core
   does with a name it does not govern, as Core confirms it: an unknown entity
   type is rejected; an undeclared attribute, or a value outside its

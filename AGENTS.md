@@ -65,7 +65,8 @@ canonical `Event`s. That is the whole contract.
 
 `scripts/new-connector.sh <name>` writes every file below, registers the crate
 in the workspace, and leaves a parser that builds and passes its tests. After
-it runs, the one file to edit is `src/<name>.rs`.
+it runs, the one file to edit is the parser, `src/<name>.rs` with the
+hyphens in `<name>` written as underscores.
 
 ```
 rust/connectors/<name>/

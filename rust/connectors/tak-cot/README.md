@@ -88,7 +88,7 @@ ajar-tak-cot ./tak-cot.toml
 export AJAR_TLS_CA=/etc/ajar/ca.pem
 export AJAR_TLS_CERT=/etc/ajar/tak-field-1.crt
 export AJAR_TLS_KEY=/etc/ajar/tak-field-1.key
-export AJAR_HEALTH_ADDR=0.0.0.0:9110   # optional: /healthz and /metrics
+export AJAR_HEALTH_ADDR=0.0.0.0:9090   # optional: /healthz and /metrics
 ajar-tak-cot /etc/ajar/tak-cot.toml
 ```
 
