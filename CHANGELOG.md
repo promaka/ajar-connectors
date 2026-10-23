@@ -13,6 +13,82 @@ Two version lines are tracked independently (see COMPATIBILITY.md):
 
 ## [Unreleased]
 
+### Added
+
+- `scripts/new-connector.sh <name>`: scaffolds an ingress connector on the
+  shared runtime. The crate it writes builds, runs, prints its profile and
+  passes its tests before the parser is written; the one file to edit is
+  the parser, and the tests pin the rules every connector keeps.
+- Images for every ingress and egress connector: `gmti`, `klv`,
+  `stanag4676`, `stanag4586` and `generic-egress` join the matrix, and
+  `doctor` with them so a cluster runs diagnostics from the same registry.
+  The out-of-the-box sidecar set is now the whole suite.
+- `scripts/footprint.sh`: builds one connector, pushes a feed of records
+  through it to a bus, and prints binary size, resident memory and
+  throughput, so the README's footprint figures can be reproduced on any
+  machine.
+
+### Changed
+
+- The runtime reports once at start-up when the configured entity type is
+  not in the ontology, since Core rejects such events on every site, and
+  counts them under `connector_ungoverned_total` with the undeclared
+  attributes it already counted. The per-attribute warning states Core's
+  handling: quarantined into metadata on a default site, the event rejected
+  on a strict one. The ontology gains `knows_type()` for the check.
+
+### Documentation
+
+- The README's new-connector section names its two routes: a parser on the
+  shared runtime, scaffolded and deployed as a sidecar, and a standalone
+  program from the templates. Its container section builds any connector's
+  image locally with the parameterised Dockerfile, before the private
+  registry. The embedding section shows the three calls in Rust and Go
+  alongside Python, and the first local run of a prebuilt or generic
+  connector says what to expect before a broker is reachable. The health
+  port, the transport lists and the undeclared-attribute wording now agree
+  across the README, the onboarding guide, the brief and the authoring
+  specification, and the brief's unit example and conformance link are
+  corrected.
+- Registration is with whoever runs Core, and the README now says what that
+  means when it is you: the one `ajar onboard` command on the Core host that
+  writes the packet `ajar-up` consumes. A footprint section states what a
+  connector needs and costs: binary, image and tarball sizes, memory and CPU
+  measured at idle and under load, the ports in and out, and the measured
+  time budgets from the quickstart stopwatch to a cold container build.
+- Every command in the onboarding guide now does what the guide says, each
+  verified by running it: the derived-event producer snippet awaits the two
+  calls the library actually exposes; the consumer delivery flags are shown
+  writing an egress config that the egress connector then runs; `--no-exec`
+  and `--check` are described per role; the vendor-held key recipe extracts
+  the seed the connector loads; the conformance gates run one per line from
+  the repository root, with the C++ build step included; the air-gap recipe
+  vendors all three Rust workspaces, writes the cargo config, and manifests the
+  files it produced; and a template-based connector is told how its profile
+  is built.
+- Every guide, the SDK headers and the validator messages now state what Core
+  does with a name it does not govern, as Core confirms it: an unknown entity
+  type is rejected; an undeclared attribute, or a value outside its
+  vocabulary, unit or range, is quarantined into metadata on a graceful site,
+  where it is kept and signed but invisible to policy and the typed picture,
+  and rejects the event on a strict site. Earlier notes in this changelog, and
+  the guides, described such fields as discarded or not delivered; on a
+  graceful site they were kept, as metadata.
+
+### Security
+
+- rustls 0.23.45 to 0.23.46, rustls-webpki 0.103.15 to 0.103.16, tokio
+  1.53.1 to 1.54.1 and webpki-roots 1.0.8 to 1.0.11 in every workspace, for
+  RUSTSEC-2026-0346 to 0349 (rustls: session values' debug output exposing
+  TLS secrets, buffered data sent to the outer server after an ECH
+  rejection, unbounded certificate decompression before authentication, and
+  a key-exchange downgrade by an unauthenticated ServerHello),
+  RUSTSEC-2026-0382 (rustls-webpki accepting distrusted intermediates),
+  RUSTSEC-2026-0381 (webpki-roots trusting distrusted emSign intermediates)
+  and RUSTSEC-2026-0386 (tokio's AsyncFd constructors breaking I/O safety).
+  rustls is the TLS under every connector's mTLS link to the bus and under
+  the egress relays.
+
 ## [0.6.3] - 2026-09-20
 
 ### Security

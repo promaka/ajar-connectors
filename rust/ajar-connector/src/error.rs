@@ -6,7 +6,7 @@ use thiserror::Error;
 /// Why an [`crate::EventBuilder`] refused to produce an [`crate::Event`].
 ///
 /// The builder fails closed: it would rather reject than emit a non-canonical
-/// or under-specified event that Ajar's boundary would discard anyway.
+/// or under-specified event that Ajar's boundary would refuse anyway.
 #[derive(Debug, Error, PartialEq)]
 pub enum BuildError {
     /// A field required by the contract was not set.

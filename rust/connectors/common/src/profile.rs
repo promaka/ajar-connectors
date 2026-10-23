@@ -5,9 +5,8 @@
 //! Onboarding otherwise asks a vendor to hand-write this document — or, for the
 //! no-code connector, to write Rust to produce it. Every field is already known
 //! at startup, so transcribing it is work that only introduces typos. An
-//! `entity_type` misspelled by hand is not rejected: Core's graceful mode
-//! discards the unrecognised value, and the connector runs perfectly while its
-//! tracks never appear.
+//! `entity_type` misspelled by hand is rejected by Core, and nothing tells the
+//! connector: it runs perfectly while its tracks never appear.
 //!
 //! `allowed_entity_types` are **prefixes**, matched by Core with `starts_with`.
 //! That is what makes an open-ended connector expressible: `tak-cot` maps two

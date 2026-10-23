@@ -81,6 +81,16 @@ jobs:
           - { name: ais-nmea, wsdir: rust/connectors, pkg: ajar-ais-nmea }
           - { name: asterix, wsdir: rust/connectors, pkg: ajar-asterix }
           - { name: tak-cot, wsdir: rust/connectors, pkg: ajar-tak-cot }
+          # The out-of-the-box sidecar set is every ingress and egress
+          # connector, so whatever a site asks for exists built, signed and
+          # attested rather than assembled by hand when asked. The doctor
+          # rides too, so a cluster runs diagnostics from the same registry.
+          - { name: gmti, wsdir: rust/connectors, pkg: ajar-gmti }
+          - { name: klv, wsdir: rust/connectors, pkg: ajar-klv }
+          - { name: stanag4676, wsdir: rust/connectors, pkg: ajar-stanag4676 }
+          - { name: stanag4586, wsdir: rust/connectors, pkg: ajar-stanag4586 }
+          - { name: generic-egress, wsdir: rust/connectors, pkg: ajar-generic-egress }
+          - { name: doctor, wsdir: rust/connectors, pkg: ajar-doctor }
           - { name: synthetic-radar, wsdir: rust/examples, pkg: synthetic-radar }
           # One fixture, six sensors, on every connector's real wire format: a
           # conformance and commissioning source, released beside the connectors.
@@ -104,7 +114,7 @@ jobs:
             exit 1
           fi
           # Install instructions that pin an older release send vendors to an SDK
-          # from an earlier ontology, whose events Core discards silently.
+          # from an earlier ontology, whose events Core rejects or quarantines.
           bash scripts/check-doc-pins.sh "$tag"
           bash scripts/check-versions.sh "$tag"
           echo "release-guard OK: tag, crate version, changelog and doc pins agree ($ver)"

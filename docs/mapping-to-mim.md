@@ -6,8 +6,10 @@ What you map, where you map it, and what the valid targets are.
 The SDK does **not** do this for you. It builds canonical bytes, signs them and
 enforces structure. Deciding that your `TrackType=3` is a `mim:aircraft`, and that
 your speed is in knots and must be metres per second, is yours. Nothing catches a
-mistake: a wrong type or a misspelled attribute compiles, seals and publishes, and
-Ajar discards it without an error.
+mistake: a wrong type or a misspelled attribute compiles, seals and publishes
+with no error at your end. Ajar rejects an unknown entity type; an attribute or
+value it does not govern is moved to metadata on a default site, or rejects the
+event on a strict site.
 
 ---
 
@@ -205,14 +207,15 @@ are silently wrong on the map.
 
 ## 4. Controlled vocabularies
 
-Exact strings. A wrong case is discarded, so a track keeps its position and loses
-its affiliation.
+Exact strings. A wrong case is not governed: on a graceful site the value is
+quarantined into metadata, so a track keeps its position and loses its
+affiliation on the picture; on a strict site the event is rejected.
 
 **`alt_id_standard`** — MIM 5.3 standard codes, verbatim: `ADEM`, `AIS`,
 `ASCA`, `Link11`, `Link16`, `Link22`, `MAVLink`, `MIP2`, `MIP31`,
 `MaritimeTrack`, `NFFI13`, `NVG`, `UDRA_ID`, `UTID`, `VMF`; plus Ajar's own for
 standards MIM does not list: `ASTERIX`, `STANAG4676`, `CoT`, `ICAO24`. A
-misspelt code is discarded silently, so copy these exactly.
+misspelt code is not governed, so copy these exactly.
 
 **`hostility`** — MIM 5.3 `HostilityCodeType`:
 
@@ -232,7 +235,7 @@ AIR  LAND  SURFACE  SUBSURFACE  SPACE  UNKNOWN
 This drives the battle dimension a C2 renders. It is governed on `mim:object`
 alone: a typed class (an aircraft, a vessel) already implies its domain, so set
 it when all you have is a domain and the event is a bare object, and never on
-a typed class, where Core does not deliver it.
+a typed class, where Core does not govern it.
 
 ---
 
@@ -247,7 +250,9 @@ Your raw frame goes in `payload` verbatim. A future ontology can re-extract from
 it, so a field you cannot map today is not lost.
 
 Rule of thumb: **if in doubt, metadata.** A governed attribute you get wrong is
-discarded; the same value in metadata arrives intact.
+moved to metadata anyway on a default site, and rejects the event on a strict
+one; the same value sent as metadata is kept on every site. (Anonymised
+cross-coalition egress strips metadata entirely, whatever put it there.)
 
 ---
 

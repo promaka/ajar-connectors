@@ -52,8 +52,10 @@ Beyond position, the connector extracts the attributes an operating picture need
 | confidence | `<detail><confidence>0.87</confidence>` or `<confidence value="87"/>` (percent accepted) | the event's `confidence` field (if present) |
 
 `hostility` carries the MIM 5.3 `HostilityCodeType` vocabulary. The values are
-case-sensitive, and Core discards an unrecognised one without raising an error,
-so a track keeps its position and loses its affiliation silently:
+case-sensitive, and Core does not govern an unrecognised one: on a graceful
+site the value is quarantined into metadata and a track keeps its position but
+loses its affiliation on the picture, and on a strict site the event is
+rejected. Neither raises an error at the connector:
 
 | CoT | `hostility` | CoT | `hostility` |
 |-----|-------------|-----|-------------|
@@ -86,7 +88,7 @@ ajar-tak-cot ./tak-cot.toml
 export AJAR_TLS_CA=/etc/ajar/ca.pem
 export AJAR_TLS_CERT=/etc/ajar/tak-field-1.crt
 export AJAR_TLS_KEY=/etc/ajar/tak-field-1.key
-export AJAR_HEALTH_ADDR=0.0.0.0:9110   # optional: /healthz and /metrics
+export AJAR_HEALTH_ADDR=0.0.0.0:9090   # optional: /healthz and /metrics
 ajar-tak-cot /etc/ajar/tak-cot.toml
 ```
 

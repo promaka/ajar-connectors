@@ -71,8 +71,8 @@ pub(crate) struct Metrics {
     /// and this says so, instead of a phantom increment of `spooled`.
     pub spool_failed: Arc<AtomicU64>,
     /// Events published carrying an attribute their own entity type does not
-    /// govern. Core does not deliver those as attributes; each name is also
-    /// logged once, so a mapping that loses a field has a symptom.
+    /// govern. Core quarantines those, or rejects the event on a strict site;
+    /// each name is also logged once, so either outcome has a symptom here.
     pub ungoverned: Arc<AtomicU64>,
 }
 
@@ -169,16 +169,29 @@ pub async fn run(
                                     if let Some(m) = &marking {
                                         m.apply(&mut event);
                                     }
-                                    let lost = crate::ontology::ungoverned(&event);
-                                    if !lost.is_empty() {
+                                    // Report once per type or name what Core will not
+                                    // govern, since nothing fails at this end.
+                                    if !crate::ontology::knows_type(&event.entity_type) {
                                         metrics.ungoverned.fetch_add(1, Ordering::Relaxed);
+                                        if reported.insert((event.entity_type.clone(), String::new())) {
+                                            tracing::warn!(
+                                                entity_type = %event.entity_type,
+                                                ontology = crate::ontology::version(),
+                                                "entity type is not in the ontology; Core will reject these events on every site"
+                                            );
+                                        }
+                                    } else {
+                                        let lost = crate::ontology::ungoverned(&event);
+                                        if !lost.is_empty() {
+                                            metrics.ungoverned.fetch_add(1, Ordering::Relaxed);
+                                        }
                                         for name in lost {
                                             if reported.insert((event.entity_type.clone(), name.clone())) {
                                                 tracing::warn!(
                                                     entity_type = %event.entity_type,
                                                     attribute = %name,
                                                     ontology = crate::ontology::version(),
-                                                    "attribute is not governed on this entity type; Core will not deliver it as an attribute, put it in metadata"
+                                                    "attribute is not governed on this entity type; Core will quarantine it or, on a strict site, reject the event: put it in metadata"
                                                 );
                                             }
                                         }

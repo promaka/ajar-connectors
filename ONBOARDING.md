@@ -27,7 +27,9 @@ Whichever box you are in, the first thing you need is a packet.
 ## 1. You were given a packet
 
 Your operator (whoever runs Ajar for you) ran one command on their side and
-sent you a single file, `<your-id>.packet.tar`. It contains everything you
+sent you a single file, `<your-id>.packet.tar`. If you run Core yourself, you
+are the operator: the command is `ajar onboard <your-id> --mint …` on the Core
+host, and the packet it writes is this file. It contains everything you
 need, and nothing you have to create yourself:
 
 | File | What it is |
@@ -55,19 +57,29 @@ need, and nothing you have to create yourself:
 begins reading your equipment's feed. Your equipment is not touched.
 
 **If you are a consumer**, verified events start streaming to your terminal.
-To deliver them somewhere useful instead:
+To deliver them somewhere useful instead, ask `ajar-up` for a ready egress
+config and run the matching egress connector with it:
 
 ```bash
-./ajar-up <your-id>.packet.tar --to-tak host:8089   # into a TAK server
-./ajar-up <your-id>.packet.tar --to-http <url>      # into any web endpoint
+./ajar-up <your-id>.packet.tar --to-tak host:8089    # writes <your-id>-tak-egress.toml
+./ajar-tak-egress <your-id>-tak-egress.toml          # delivers into the TAK server
+
+./ajar-up <your-id>.packet.tar --to-http <url>       # writes <your-id>-http-egress.toml
+./ajar-generic-egress <your-id>-http-egress.toml     # delivers into the web endpoint
 ```
+
+The TAK config has two lines to fill before it runs, `tls_cert` and
+`tls_key`: the client certificate and key your TAK server enrolled for this
+connector. `ajar-up` says so when it writes the file. Each flag also needs
+the packet to name the matching format, `cot` for TAK and `geojson` or
+`json` for HTTP; `ajar-up` refuses otherwise and says so.
 
 ### Useful options
 
 | Option | When |
 |---|---|
-| `--no-exec` | do everything except start. Use this if you are embedding the library (sections 3 and 4): your keys are placed and checked, then your own code takes over. |
-| `--check` | verify the packet and exit. Good for CI. |
+| `--no-exec` | producer packets: verify, place the key, write the config and run the preflight, then print the run command instead of starting. Use it when your own code or service manager will start the connector, or when embedding (section 3). A consumer packet's credentials are its files as unpacked; section 4's code loads them directly, so no placement step is needed. |
+| `--check` | verify the packet's signature and checksums and exit 0. For a producer packet this also places the key and runs the doctor preflight against the broker, so it needs the seed and a route to the endpoint; for a consumer packet it checks the manifest and files only. |
 | `--signing-key <file>` | you generated your own key and only gave the operator the public half. See [Keys](#keys). |
 | `--dir <dir>` | where to unpack. Default is next to the packet. |
 
@@ -97,12 +109,15 @@ Ask your operator for one. They need three things from you:
 3. If you insist on generating your own signing key, its public half. See
    [Keys](#keys). Most people skip this and let the operator generate it.
 
-While you wait, everything can be built and tested with no packet, no broker
-and no key. Every connector has a dry run:
+While you wait, everything can be built and tested with no packet and no
+broker. The templates run with `--dry-run` and need no key; a shipped
+connector proves its config and key with `--profile`, which opens no transport
+and publishes nothing:
 
 ```bash
 cd rust/examples && echo '{"lat":26.4,"lon":50.9,"alt_m":11000,"quality":0.9}' \
   | cargo run -p connector-template -- --dry-run
+ajar-generic --profile ./generic.toml     # needs only the seed file the config names
 ```
 
 ## 3. Sending from your own code
@@ -124,11 +139,21 @@ For C++ see [docs/embedding-cpp.md](docs/embedding-cpp.md).
 Then it is one connect and one call per event. Python:
 
 ```python
-from ajar_connector.producer import connect
+from ajar_connector.producer import connect, publish_assessment
 
-conn = connect(nats_url, source_id="acme-fuser-1", signing_seed=seed)
-conn.publish_assessment(entity_type="mim:aircraft", ...)
+producer = await connect(nats_url, source_id="acme-fuser-1", signing_seed="acme-fuser-1.seed")
+event_id = await publish_assessment(
+    producer,
+    entity_type="mim:aircraft",
+    model="fuser@1.0",                 # what produced it, name@version
+    derived_from=[source_event_id],    # the governed events it reasoned over
+    location=(25.27, 51.52, 10600.0),
+)
 ```
+
+Both `model` and `derived_from` are required: the boundary refuses a derived
+event without lineage. The complete program is
+[examples/derived_producer.py](python/examples/derived_producer.py).
 
 Rust, Go and C++ are the same three steps everywhere: build the event, seal
 it, publish it. The [README](README.md#3-set-up-inside-your-own-code) has
@@ -169,8 +194,13 @@ Only for a format that needs real parsing and is not in
 not need this: the [generic connector](rust/connectors/generic) maps it from a
 config file.
 
-1. Copy the template for your language and edit the two spots marked `EDIT`,
-   about fifteen lines: describe your record, then map it to an event.
+1. Start from one of two places. For a connector that runs next to the
+   equipment, scaffold it on the shared runtime and write one parser:
+   `scripts/new-connector.sh <name>`, as
+   [README section 6a](README.md#6a-a-parser-on-the-shared-runtime)
+   walks through. To own the process, or to write it in another language,
+   copy the template and edit the two spots marked `EDIT`, about fifteen
+   lines: describe your record, then map it to an event.
    [Rust](rust/examples/connector-template/) ·
    [Python](python/examples/connector_template.py) ·
    [Go](go/examples/connector-template/) ·
@@ -178,11 +208,15 @@ config file.
 2. Run it with `--dry-run` and look at the events it prints.
 3. Run the conformance gate (below). Green means your bytes are exactly what
    Ajar accepts.
-4. Send your operator the connector's profile. A connector prints its own:
+4. Send your operator the connector's profile. It contains your public key
+   and the entity types you emit, nothing secret. A connector on the shared
+   runtime prints its own:
    ```bash
    ajar-<connector> --profile ./config.toml
    ```
-   It contains your public key and the entity types you emit. Nothing secret.
+   A connector built from a template does not take `--profile`; build the
+   same document with `ConnectorProfile` in the SDK, which
+   [README section 9](README.md#9-register-with-core) names.
 
 The transport is a config choice, not code: UDP, multicast, TCP either way,
 HTTP, serial, MQTT, a file, a directory, a pipe, a polled REST endpoint, a
@@ -194,11 +228,13 @@ WebSocket, or a recorded pcap. The full list is in the
 **Before anything is connected**, prove your build is byte-compatible:
 
 ```bash
-cd rust && cargo test -p conformance --test golden_vectors   # Rust
-cd go && go test ./conformance/ -count=1                      # Go
-cd python && PYTHONPATH=. python conformance/golden_vectors.py # Python
-ctest --test-dir cpp/build                                     # C++
+(cd rust && cargo test -p conformance --test golden_vectors)      # Rust
+(cd go && go test ./conformance/ -count=1)                         # Go
+(cd python && PYTHONPATH=. python3 conformance/golden_vectors.py)  # Python
+cmake -S cpp -B cpp/build && cmake --build cpp/build && ctest --test-dir cpp/build   # C++
 ```
+
+Each line runs on its own from the repository root.
 
 **When nothing flows**, run the doctor. It checks your setup in onboarding
 order and names the first broken step in plain words. It never publishes an
@@ -233,12 +269,16 @@ If your policy says a private key must be born on your own hardware, generate
 it yourself and send the operator only the public half:
 
 ```bash
-scripts/gen-connector-key.sh          # or:
+scripts/gen-connector-key.sh connector    # writes connector.seed and prints the public half; or:
 openssl genpkey -algorithm ed25519 -out connector.key
-openssl pkey -in connector.key -pubout -outform DER | tail -c 32 | xxd -p -c 64
+openssl pkey -in connector.key -outform DER | tail -c 32 > connector.seed              # the 32-byte seed the connector loads
+openssl pkey -in connector.key -pubout -outform DER | tail -c 32 | xxd -p -c 64        # the public half, for the operator
 ```
 
-Then run `ajar-up <packet> --signing-key <file>`. Everything else is
+The operator registers that public half with `--pubkey` in place of
+`--mint`, and the packet then carries no signing key. Run
+`ajar-up <packet> --signing-key connector.seed`. The file must be the
+32-byte seed, or its 64 hex characters, not the PEM. Everything else is
 identical. Keep the private half in a secrets manager or a file with
 locked-down permissions, never in source control.
 
@@ -292,22 +332,26 @@ at the release tag you intend to ship:
 ```bash
 git clone --depth 1 --branch v0.6.3 https://github.com/promaka/ajar-connectors
 cd ajar-connectors
-cargo vendor vendor-crates/          # Rust
-(cd go && go mod vendor)             # Go
-pip download ./python -d wheels/     # Python
-sha256sum -b $(git ls-files) > MANIFEST.sha256
+mkdir -p .cargo && cargo vendor --manifest-path rust/Cargo.toml \
+  -s rust/connectors/Cargo.toml -s rust/examples/Cargo.toml \
+  vendor-crates/ > .cargo/config.toml                                  # Rust, all three workspaces
+(cd go && go mod vendor)                                               # Go
+pip download ./python -d wheels/                                       # Python
+find . -type f -not -path './.git/*' -print0 | xargs -0 sha256sum -b > MANIFEST.sha256
 ```
 
-Carry the directory across, verify `MANIFEST.sha256` on arrival, and build
-offline with `cargo build --offline`, `go build -mod=vendor` or
-`pip install --no-index --find-links wheels/`.
+The Rust line also writes the `.cargo/config.toml` that points every build
+at the vendored crates; about 600 MB in all. Carry the directory across,
+verify `MANIFEST.sha256` on arrival, and build offline with
+`cargo build --offline --manifest-path rust/connectors/Cargo.toml`,
+`go build -mod=vendor` or `pip install --no-index --find-links wheels/`.
 
 ### Troubleshooting
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | Rejected: signature invalid | public key not registered, wrong seed, or a `source_id` that differs from the registered one | compare the registered public key with yours; check `AJAR_SOURCE_ID` |
-| Rejected: unknown attribute | an attribute the entity type does not declare | remove it, or ask the operator to add it |
+| An attribute never reaches policy or the picture; a strict site rejects the event | an attribute the entity type does not declare: a default site keeps it only as metadata, a strict site rejects the event | use a declared name, or ask the operator to add it |
 | Rejected: unknown entity type | the type is not in Core's ontology | use a declared type, or get yours registered |
 | Build error: unnamespaced entity type | the type is not `mim:<type>` or `x:<vendor>:<type>` | namespace it |
 | Nothing arrives, no error | wrong subject or `source_id` | the subject is `ajar.ingest.<source_id>` with your assigned id |

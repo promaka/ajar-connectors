@@ -27,7 +27,7 @@ added to any public repository.
 |---|---|
 | **source_id** | `<your-source-id, e.g. acme-radar-1>` |
 | **entity type(s)** you may emit | `<e.g. mim:aircraft>` |
-| **attributes** (if any) for those types | `<e.g. none, or: heading (deg), speed (kn)>` |
+| **attributes** (if any) for those types | `<e.g. none, or: heading (deg), speed (m/s)>` |
 | **NATS endpoint** to publish to | `<e.g. tls://nats.ourgrid.example:443>` |
 | **mTLS materials** (we issue these) | `<CA PEM + your client cert (CN=source_id) + key>` |
 | **contact** for questions / your public key | `<e.g. connectors@our-org.example>` |
@@ -40,6 +40,8 @@ added to any public repository.
    - **Python** — copy [python/examples/connector_template.py](python/examples/connector_template.py)
    - **Go** — copy [go/examples/connector-template](go/examples/connector-template/)
    - **C++** — copy [cpp/examples/connector_template.cpp](cpp/examples/connector_template.cpp); build with CMake per **[cpp/README.md](cpp/README.md)**
+   - Connecting **equipment** rather than your own software? Scaffold a sidecar
+     instead: `scripts/new-connector.sh <name>`, [README §6a](README.md#6a-a-parser-on-the-shared-runtime).
 2. **Edit two things:** the shape of *your* record (**`EDIT 1`**) and the mapping
    to an event (**`EDIT 2`**) — use the **entity type** above, and add an
    `.attribute(k, v)` only for the attributes listed above. Both spots are marked
@@ -68,14 +70,15 @@ added to any public repository.
 ## The rules that matter (the SDK enforces them for you)
 
 - Events are **canonical + signed**; if `build()` succeeds, the shape is valid.
-- Use **only** the entity type(s) and attributes we agreed above — anything else
-  is rejected.
+- Use **only** the entity type(s) and attributes we agreed above. An entity
+  type we do not know is rejected. An attribute we do not govern is kept only
+  as metadata on a default site, and rejects the event on a strict one.
 - Don't set `received_at` (we stamp it). Timestamps are RFC 3339 UTC.
 
 ## Verify you're byte-compatible (optional but recommended)
 
 Run the conformance gate for your language (proves your build produces the exact
-bytes Ajar accepts) — commands in [ONBOARDING.md §9](ONBOARDING.md).
+bytes Ajar accepts) — commands in [ONBOARDING.md §6](ONBOARDING.md#6-check-it-works).
 
 ---
 

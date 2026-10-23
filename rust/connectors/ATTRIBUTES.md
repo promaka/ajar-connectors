@@ -28,10 +28,13 @@ A connector does not decide what is valuable:
    that correlate across frames, the payload carries every contributing frame; if a
    bounded buffer overflowed, the event is marked `payload_truncated`.)
 2. **Every decoded field → an attribute.** The connector does not gate on the
-   ontology. Core's ingest **demotes any undeclared key to quarantine metadata**
-   (`demote_to_quarantine`) — so a field the ontology has not declared is never
-   rejected and never lost, just ungoverned. A later ontology change promotes it
-   with no connector change.
+   ontology. On a graceful site, the default, Core **moves any undeclared key
+   into quarantine metadata**, where it is kept and signed but invisible to
+   policy, so a field the ontology has not declared is not lost, just
+   ungoverned, and a later ontology revision governs it with no connector
+   change. On a strict site Core rejects the whole event instead. The shared
+   runtime logs each undeclared name once and counts the events as
+   `connector_ungoverned_total`, so either outcome has a symptom here.
 3. **Native identifiers** (CoT uid, MMSI, ICAO, MAVLink sysid, ASTERIX track) ride
    as metadata / `source_uid`, never the event id (always a fresh UUIDv7).
    Confidence is the event's first-class `confidence` field.
@@ -123,8 +126,9 @@ with its parent, and Core looks each attribute up on the event's own entity
 type. So the narrowing in that list is deliberate and enforced: `mim:sensor`
 has no `speed` although its parent `mim:equipment` does, and `environment` is
 governed on `mim:object` alone, because a typed class already implies its
-domain. Set an attribute on a type that does not declare it and Core does not
-deliver it as an attribute, with the event otherwise accepted.
+domain. Set an attribute on a type that does not declare it and Core
+quarantines it into metadata on a graceful site, or rejects the event on a
+strict one.
 
 Two consequences for a connector author. Check each type you emit separately,
 not all your types against all your attributes at once. And do not set a domain
@@ -171,8 +175,9 @@ Pending  Unknown  Faker  Joker
 
 Not `friendly`, not `FRIEND`. This is the attribute where a mistake is hardest to
 notice: Core runs graceful mode by default, so an unrecognised name or value is
-not rejected. The event is accepted, the field is dropped, and the deployment
-looks healthy while the map loses its friend-or-foe colouring. After changing
+not rejected. The event is accepted, the field is quarantined into metadata,
+and the deployment looks healthy while the map loses its friend-or-foe
+colouring. On a strict site the whole event is rejected instead. After changing
 anything here, check `ajar_attributes_quarantined_total{attribute="hostility"}`
 reads zero. That metric holds at most 32 distinct attribute names and overflows
 the rest into `other`, so if the `hostility` series is absent rather than zero,

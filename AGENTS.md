@@ -26,8 +26,11 @@ canonical `Event`s. That is the whole contract.
    payload for a later ontology to extract. *A connector must not decide what is
    valuable.*
 2. **Emit every decoded field as an attribute.** Use `.attribute(key, value)`.
-   Core's ingest demotes undeclared keys to quarantine metadata — you do **not**
-   gate on any ontology. Absent stays absent: never invent a default (including
+   On a graceful site, the default, Core's ingest moves undeclared keys into
+   quarantine metadata, where they are kept; on a strict site it rejects the
+   whole event. Put a field you know the ontology does not govern in metadata,
+   and otherwise do **not** gate on any ontology. Absent stays absent: never
+   invent a default (including
    hostility — emit it only if the operator configured one).
 3. **Canonical names + units.** Governed attributes have declared units. Normalise
    to them (speed → m/s, vertical_rate → m/s, altitude → metres, angles → degrees)
@@ -60,6 +63,11 @@ canonical `Event`s. That is the whole contract.
 
 ## Files to produce (mirror an existing connector exactly)
 
+`scripts/new-connector.sh <name>` writes every file below, registers the crate
+in the workspace, and leaves a parser that builds and passes its tests. After
+it runs, the one file to edit is the parser, `src/<name>.rs` with the
+hyphens in `<name>` written as underscores.
+
 ```
 rust/connectors/<name>/
   Cargo.toml            # copy asterix/Cargo.toml; rename to ajar-<name>
@@ -73,8 +81,9 @@ rust/connectors/<name>/
 
 Then add `"<name>"` to `members` in `rust/connectors/Cargo.toml`. Transports are
 config, not code — never write socket/file I/O; pick a `[transport]` kind in the
-TOML (`udp`, `tcp-server`, `tcp-client`, `serial`, `file`, `dir`, `exec`, `stdin`,
-`mqtt`, `rest-poll`, `http-server`, `ws-client`).
+TOML: `udp`, `udp-multicast`, `tcp-client`, `tcp-server`, `http-server`, `file`,
+`dir`, `exec`, `stdin`, `pcap-replay`, `serial`, `mqtt`, `rest-poll`, `ws-client`,
+`dds`. The README's transport table says what each needs.
 
 ## EventBuilder cheat-sheet
 

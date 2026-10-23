@@ -120,10 +120,14 @@ Transport security is mTLS in production; the client certificate CN is the
 `entity_type` and `attributes` are governed by Ajar's ontology. `metadata` is not
 governed and is always accepted.
 
-**The failure mode to understand before you build:** Ajar runs a graceful mode.
-An unrecognised `entity_type`, attribute name, or controlled-vocabulary value is
-**discarded without an error**. Your connector runs, seals events, publishes
-successfully — and the data does not arrive. Nothing fails loudly.
+**The failure mode to understand before you build:** nothing fails at your
+end. Ajar rejects an unrecognised `entity_type` on every site. An attribute the
+entity type does not declare, or a value outside its vocabulary, unit or range,
+is handled by the site's mode: in graceful mode, the default, it is moved out of
+the governed attributes into metadata, where it is kept and signed but policy
+cannot see it, the typed picture does not show it, and anonymised coalition
+egress strips it; in strict mode the whole event is rejected. Your connector
+runs, seals and publishes successfully either way.
 
 Consequences:
 
@@ -132,7 +136,8 @@ Consequences:
 - Controlled vocabularies are **case-sensitive**. `hostility` takes MIM 5.3
   `HostilityCodeType`: `Friend`, `AssumedFriend`, `Hostile`, `AssumedHostile`,
   `Suspect`, `Neutral`, `AssumedNeutral`, `Involved`, `AssumedInvolved`,
-  `Pending`, `Unknown`, `Faker`, `Joker`. Lower-case `friendly` is silently lost.
+  `Pending`, `Unknown`, `Faker`, `Joker`. Lower-case `friendly` is not governed,
+  so the track loses its affiliation on the picture.
 - Units are yours to normalise. Governed `speed` is m/s, `vertical_rate` m/s,
   `course` degrees. Keep the native units in `metadata`.
 

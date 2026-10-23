@@ -43,9 +43,9 @@ pub struct Config {
     /// Values are MIM 5.3 `HostilityCodeType`, and the case is exact: `Friend`,
     /// `AssumedFriend`, `Hostile`, `AssumedHostile`, `Suspect`, `Neutral`,
     /// `AssumedNeutral`, `Involved`, `AssumedInvolved`, `Pending`, `Unknown`,
-    /// `Faker`, `Joker`. An unrecognised value is quarantined by Core rather than
-    /// rejected, so a lower-case `friendly` would silently lose friend/foe
-    /// colouring on the map.
+    /// `Faker`, `Joker`. An unrecognised value is quarantined into metadata by
+    /// Core on a default site (rejected on a strict one), so a lower-case
+    /// `friendly` loses friend/foe colouring on the map.
     #[serde(default)]
     pub default_hostility: Option<String>,
     /// The security marking stamped on every event this connector publishes,

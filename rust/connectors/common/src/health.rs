@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 //! A dependency-free health/metrics endpoint. Opt-in via `AJAR_HEALTH_ADDR`
-//! (e.g. `0.0.0.0:9110`); left unset, nothing is opened. Deliberately raw
+//! (e.g. `0.0.0.0:9090`); left unset, nothing is opened. Deliberately raw
 //! `std::net` so a connector pulls in no HTTP framework just to answer a probe.
 //!
 //! Serves `GET /healthz` → `ok` and `GET /metrics` → Prometheus text. The ingest

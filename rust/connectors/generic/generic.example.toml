@@ -4,8 +4,9 @@
 #   ajar-generic ./generic.toml
 #
 # This one reads newline-delimited JSON from a TCP feed and maps it to a sensor
-# track. Point [transport] at any method (see the connectors README): udp, tcp,
-# file, exec, stdin, or (with the matching feature) serial, mqtt, rest-poll.
+# track. Point [transport] at any kind in the repository README's transport
+# table: udp, udp-multicast, tcp-client, tcp-server, http-server, file, dir,
+# exec, stdin, pcap-replay, serial, mqtt, rest-poll, ws-client, dds.
 
 source_id = "acme-sensor-1"
 nats_url = "nats://127.0.0.1:4222"

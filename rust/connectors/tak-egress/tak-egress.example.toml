@@ -14,7 +14,7 @@ nats_url = "tls://nats.ajar.svc:4222"
 # Governed CoT egress subject; * = per-source token.
 egress_subject = "ajar.egress.cot.*"
 
-# Optional: AJAR_HEALTH_ADDR=0.0.0.0:9110 exposes /healthz and /metrics.
+# Optional: AJAR_HEALTH_ADDR=0.0.0.0:9090 exposes /healthz and /metrics.
 
 [tak]
 # The TAK Server streaming input (standard port 8089).
