@@ -1,19 +1,19 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # synthetic-radar (example)
 
-Streams synthetic `mim:aircraft` tracks into a locally running **Ajar Core** so
-you can watch the whole path end to end:
+Streams synthetic `mim:` tracks (aircraft, vessels and land vehicles) into a
+locally running **Ajar Core** so you can watch the whole path end to end:
 
 ```
 synthetic-radar ──PUB──▶ NATS ──▶ Core ──▶ accepted ──▶ Postgres + audit
    (this example)     ajar.ingest.<source>
 ```
 
-Each aircraft follows a **flight path** (a looping waypoint route over the Gulf
-region), and the connector emits a position for every track each sweep — building
-the event with the SDK's `EventBuilder`, **sealing** it, and publishing the
-sealed bytes to NATS subject `ajar.ingest.<source>`. The volume is configurable;
-it streams **thousands of records a minute** (default ~3000/min, 50 aircraft).
+Each track follows a **looping waypoint route** over the Gulf region, and the
+connector emits a position for every track each sweep — building the event with
+the SDK's `EventBuilder`, **sealing** it, and publishing the sealed bytes to NATS
+subject `ajar.ingest.<source>`. The rate is configurable (default ~600
+records/min across a fixed set of 14 tracks).
 
 > **Example only.** This signs with the seed file named by `AJAR_SIGNING_SEED`
 > (an ephemeral throwaway key in `--dry-run`) and picks a transport (NATS). The `ajar-connector` crate stays minimal
@@ -30,54 +30,45 @@ the SDK crate.
 ```bash
 cd rust/examples
 
-# Dry run — build + seal + print, no NATS needed (and CI-friendly):
+# Dry run — build + seal + print, no NATS and no key needed (CI-friendly):
 cargo run -p synthetic-radar -- --dry-run
 cargo run -p synthetic-radar -- --dry-run --ticks 3   # bounded, exits after 3 ticks
 
-# Against a default local Core (NATS on 127.0.0.1:4222):
-cargo run -p synthetic-radar
+# Publish to a local Core (NATS on 127.0.0.1:4222). Publishing needs your
+# connector's seed, e.g. from `scripts/gen-connector-key.sh demo-radar`:
+AJAR_SIGNING_SEED=/path/to/demo-radar.seed cargo run -p synthetic-radar
 
-# Crank the volume: 100 aircraft at ~12000 records/min:
-AJAR_TRACKS=100 AJAR_RATE_PER_MIN=12000 cargo run -p synthetic-radar
-
-# Negative test: also emit one known-bad track Ajar Core MUST reject:
-cargo run -p synthetic-radar -- --inject-rejected
+# More volume, ~12000 records/min:
+AJAR_SIGNING_SEED=/path/to/demo-radar.seed AJAR_RATE_PER_MIN=12000 cargo run -p synthetic-radar
 ```
 
-Environment overrides:
+Environment:
 
 | Var | Default | Meaning |
 |-----|---------|---------|
 | `NATS_URL` | `nats://127.0.0.1:4222` | NATS server address |
-| `AJAR_SOURCE_ID` | `demo-connector` | must equal the Core's `AJAR_SOURCE_ID` |
+| `AJAR_SIGNING_SEED` | _(required)_ | path to the connector's Ed25519 seed (32 raw bytes or 64 hex chars); only `--dry-run` runs without it |
+| `AJAR_SOURCE_ID` | `demo-radar` | connector identity; must match the `source_id` Core has registered for this key |
 | `AJAR_INGEST_PREFIX` | `ajar.ingest` | subject prefix (full subject is `<prefix>.<source>`) |
-| `AJAR_TRACKS` | `50` | number of aircraft on flight paths |
-| `AJAR_RATE_PER_MIN` | `3000` | target records per minute (sweep interval is derived) |
-| `AJAR_INJECT_REJECTED` | _(unset)_ | if set (or `--inject-rejected`), also emit one known-bad track Core must reject |
-
-## Negative test: a track Ajar must reject
-
-`--inject-rejected` (or `AJAR_INJECT_REJECTED=1`) adds **one** extra track
-(`RJX-666`) each sweep: a well-formed, validly **signed** `mim:aircraft` that
-carries an **undeclared attribute**. The signature is valid, so this isolates
-Core's *ontology/validation* boundary — Core must reject it as `UnknownAttribute`
-while the 50 good tracks flow through to `accepted`. It's a boundary test: if any
-of these are ever **accepted**, that's the vulnerability. Watch Core's audit /
-reject log for steady `RJX-666` rejections. Off by default so the normal demo
-stays clean.
+| `AJAR_RATE_PER_MIN` | `600` | target records per minute (sweep interval is derived) |
+| `AJAR_TLS_CA` / `AJAR_TLS_CERT` / `AJAR_TLS_KEY` | _(unset)_ | all three set → mutual TLS to NATS |
+| `AJAR_HEALTH_ADDR` | _(unset)_ | serve Prometheus `/metrics` and `/healthz` on this address |
 
 ## Why these exact choices
 
-The defaults are tuned to reach a stock local Core with **zero core changes**:
+The defaults are tuned for a local test:
 
-- **`source` = `demo-connector`** matches the Core's `AJAR_SOURCE_ID`, so the
-  subject (`ajar.ingest.demo-connector`) is the one Core is listening on.
+- **`source` = `demo-radar`** is the identity the dev stack
+  (`deploy/dev/compose.yml`) registers. Against a Core, register `demo-radar`
+  with this connector's public key, or set `AJAR_SOURCE_ID` to the identity
+  Core already has.
 - **`AJAR_SIGNING_SEED`** names the seed whose public half the receiving
   registry (the dev sink, or Core) has registered, so the sealed signature
   verifies. The demo stack mints one at startup; none lives in this repository.
-- **`entity_type = "mim:aircraft"`** with a **`location`** (the seed ontology
-  requires position for aircraft) and **no attributes** (the seed `mim:aircraft`
-  has no attribute schema yet, so any attribute is rejected as
-  `UnknownAttribute`). `received_at` is left empty — Core stamps it.
-- The default policy accepts anything whose `entity_type` starts with `mim:`, so
-  these flow straight through to `accepted → stored + audited`.
+- **`entity_type`** is `mim:aircraft`, `mim:vessel` or `mim:land-vehicle` by
+  domain, always with a **`location`**, and the governed attributes `hostility`
+  and `callsign` (plus `vessel_domain` on vessels). `received_at` is left
+  empty — Core stamps it.
+- A dev-mode Core's built-in policy accepts anything whose `entity_type` starts
+  with `mim:`, so these flow straight through to `accepted → stored + audited`.
+  A sovereign-mode Core needs a policy rule for this connector first.
