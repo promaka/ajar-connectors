@@ -2,7 +2,7 @@
 [package]
 name = "ajar-stanag4676"
 description = "Ajar ingress connector for STANAG 4676 (NATO ISR Tracking Standard, AEDP-12 Edition B) track messages."
-version.workspace = true
+version = "0.6.5"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -38,3 +38,7 @@ hex.workspace = true
 serde_json = "1"
 proptest = "1"
 uuid = "1"
+
+# See CONTRIBUTING.md, "Releases".
+[package.metadata.ajar]
+release = false

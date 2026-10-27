@@ -27,8 +27,37 @@ jobs:
       # next release when the docs have already been wrong for weeks.
       - name: Documented version pins
         run: ./scripts/check-doc-pins.sh
-      - name: Manifest versions agree
+      - name: SDK manifest versions agree
         run: ./scripts/check-versions.sh
+      # Every tag a release would cut from this tree must resolve and pass its
+      # guard, so a released package with no changelog entry for its version
+      # fails here rather than at merge, when the release runs.
+      - name: Every released package can be released at its version
+        run: |
+          set -euo pipefail
+          for ws in rust/connectors rust/examples; do
+            cargo metadata --no-deps --format-version 1 --manifest-path "$ws/Cargo.toml" \
+              | jq -r '.packages[] | select(.metadata.ajar.release == true)
+                       | "\(.name | ltrimstr("ajar-"))-v\(.version)"'
+          done | while read -r tag; do ./scripts/release-target.sh "$tag" >/dev/null; done
+          chart=deploy/helm/connector/Chart.yaml
+          if grep -qE '^ +ajar\.release: *"?true"?' "$chart"; then
+            ./scripts/release-target.sh "chart-v$(grep -m1 '^version:' "$chart" | awk '{print $2}')" >/dev/null
+          fi
+
+  # Each connector is released when a version bump merges. A change without a
+  # bump is sometimes intended, so this advises the reviewer and never fails.
+  bump-check:
+    name: bump-check (advisory)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Changed packages carry a new version
+        run: ./scripts/check-bumps.sh "origin/${{ github.base_ref }}"
 
   dds-interop:
     name: dds interop (Fast DDS + Cyclone DDS publishers)

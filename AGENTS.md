@@ -70,13 +70,16 @@ hyphens in `<name>` written as underscores.
 
 ```
 rust/connectors/<name>/
-  Cargo.toml            # copy asterix/Cargo.toml; rename to ajar-<name>
+  Cargo.toml            # copy asterix/Cargo.toml; rename to ajar-<name>;
+                        #   its own `version` (start at 0.1.0) and
+                        #   [package.metadata.ajar] release = false until it ships
   src/lib.rs            # pub mod <name>; re-export the Parser + Error + record types
   src/<name>.rs         # the parser: struct, error enum, FrameParser impl, tests
   src/main.rs           # ~20 lines of wiring; copy asterix/src/main.rs verbatim,
                         #   swap in your Parser type
   <name>.example.toml   # copy an existing one; set source_id, key path, transport
   README.md             # what it decodes, what rides in payload, units
+  CHANGELOG.md          # one entry per version; the release notes come from it
 ```
 
 Then add `"<name>"` to `members` in `rust/connectors/Cargo.toml`. Transports are
@@ -87,6 +90,12 @@ TOML: `udp`, `udp-multicast`, `tcp-client`, `tcp-server`, `http-server`, `file`,
 takes a `framing`: `line`, `length-delimited` (2-byte big-endian prefix) or
 `length-u32le` (4-byte little-endian prefix); add a new framing in
 `common/src/stream.rs`, where every stream transport reads it.
+
+Each connector is versioned and released on its own. Once it ships
+(`release = true`), every change that should reach a site bumps `version` in its
+`Cargo.toml` and adds a `CHANGELOG.md` entry in the same PR; merging releases it.
+Renaming or removing an entity type, attribute or config key it emits is a
+major bump. See CONTRIBUTING.md, "Releases".
 
 Settings only your connector understands go under `[options]`, which the
 runtime carries as a TOML table: read it into your own struct with
@@ -126,6 +135,7 @@ reject (proves no panic), and a raw-preserved-in-payload assertion.
 
 ## Definition of done
 
-All four commands above pass; the connector seals raw into payload, emits decoded
+All four commands above pass, and a change to a released connector bumps its
+version with a changelog entry; the connector seals raw into payload, emits decoded
 fields as attributes with canonical units, sets `source_uid`, and never panics on
 malformed input. That's a mergeable connector.

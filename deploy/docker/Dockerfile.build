@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Parameterized production connector image — build ANY connector by package name,
-# distroless + non-root. Used by deploy/release.sh.
+# distroless + non-root. Used by .github/workflows/release-connector.yml and
+# deploy/release.sh.
 #
 # Multi-arch by TRUE CROSS-COMPILATION, not QEMU: the build stage is pinned to the
 # runner's native arch ($BUILDPLATFORM) and cross-compiles to the target arch, so
@@ -9,8 +10,9 @@
 # speed on an amd64 runner instead of under slow emulation.
 #
 #   docker build -f deploy/docker/Dockerfile.build \
-#     --build-arg WSDIR=rust/connectors --build-arg PKG=tak-egress \
-#     -t ghcr.io/promaka/ajar-connector-tak-egress:v0.1.0 .
+#     --build-arg WSDIR=rust/connectors --build-arg PKG=ajar-tak-egress \
+#     --build-arg VERSION=0.6.5 --build-arg REVISION="$(git rev-parse HEAD)" \
+#     -t ghcr.io/promaka/ajar-connector-tak-egress:0.6.5 .
 #
 # For a specific arch, add `--platform linux/arm64` (buildx). Bare `docker build`
 # targets the host arch, which cross-compiles to itself — same path, no emulation.
@@ -53,6 +55,16 @@ RUN TARGET="$(cat /rust-target)" \
 # No --platform here: the final image resolves to $TARGETPLATFORM, so the arm64
 # build pulls the arm64 distroless base and carries the arm64 binary.
 FROM gcr.io/distroless/cc-debian12:nonroot
+# The connector's own version (each connector is versioned on its own) and the
+# commit it was built from, so `docker inspect` answers "what is this?" without
+# the registry. The release workflow adds the ajar.* labels beside these.
+ARG PKG
+ARG VERSION=unknown
+ARG REVISION=unknown
+LABEL org.opencontainers.image.title="${PKG}" \
+      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.revision="${REVISION}"
+ENV AJAR_CONNECTOR_VERSION="${VERSION}"
 COPY --from=build /connector /usr/local/bin/connector
 USER nonroot
 ENTRYPOINT ["/usr/local/bin/connector"]

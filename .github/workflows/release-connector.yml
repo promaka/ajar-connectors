@@ -1,0 +1,279 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Release ONE package: a connector or tool (<name>-vX.Y.Z) or the connector chart
+# (chart-vX.Y.Z). Each is versioned on its own, so a release builds only what
+# its tag names: one image, that crate's binaries, one GitHub release.
+#
+# Normally called by tag-releases.yml when a version bump merges to main. A tag
+# pushed by hand runs it too, and workflow_dispatch re-runs a tag that exists.
+# scripts/release-target.sh refuses a tag whose version or changelog entry does
+# not match the tree, before anything is published.
+name: release-connector
+
+on:
+  push:
+    tags: ["*-v*"]
+  workflow_call:
+    inputs:
+      tag:
+        description: "release tag, e.g. adsb-v0.6.6"
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "existing release tag to (re)run, e.g. adsb-v0.6.6"
+        required: true
+        type: string
+
+permissions:
+  contents: write        # the GitHub release
+  packages: write        # the image and chart on ghcr
+  id-token: write        # keyless signing of the attestations
+  attestations: write
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  resolve:
+    name: resolve ${{ inputs.tag || github.ref_name }}
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.t.outputs.tag }}
+      name: ${{ steps.r.outputs.name }}
+      kind: ${{ steps.r.outputs.kind }}
+      version: ${{ steps.r.outputs.version }}
+      wsdir: ${{ steps.r.outputs.wsdir }}
+      pkg: ${{ steps.r.outputs.pkg }}
+      dir: ${{ steps.r.outputs.dir }}
+      image: ${{ steps.r.outputs.image }}
+      contract: ${{ steps.r.outputs.contract }}
+    steps:
+      # The tag reaches the shell through env, never through ${{ }}, so a
+      # dispatch input cannot inject a command.
+      - id: t
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v7
+        with:
+          ref: refs/tags/${{ steps.t.outputs.tag }}
+      - id: r
+        name: release-guard — tag, manifest version and changelog agree
+        env:
+          TAG: ${{ steps.t.outputs.tag }}
+        run: |
+          set -euo pipefail
+          ./scripts/release-target.sh "$TAG" | tee -a "$GITHUB_OUTPUT"
+          # The wire contract every connector in this tree emits; stamped on the
+          # image so a site can check it against what its Core accepts.
+          echo "contract=$(grep -m1 -v '^#' vendor/contract/CONTRACT_VERSION | tr -d '[:space:]')" >> "$GITHUB_OUTPUT"
+
+  image:
+    name: build + push + attest image
+    needs: resolve
+    if: needs.resolve.outputs.kind == 'crate' && needs.resolve.outputs.image == 'true'
+    runs-on: ubuntu-latest
+    env:
+      IMAGE: ghcr.io/${{ github.repository_owner }}/ajar-connector-${{ needs.resolve.outputs.name }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: refs/tags/${{ needs.resolve.outputs.tag }}
+      # No QEMU: Dockerfile.build cross-compiles to arm64 on the native amd64
+      # runner, so there is no emulated arch to register.
+      # The tagged commit, not github.sha: a re-run from workflow_dispatch runs
+      # on a branch, but builds and labels what the tag points at.
+      - id: rev
+        run: |
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "short=$(git rev-parse --short=7 HEAD)" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.IMAGE }}
+          # The connector's own version, never `latest`: a site pins what it ran.
+          tags: |
+            type=raw,value=${{ needs.resolve.outputs.version }}
+            type=raw,value=sha-${{ steps.rev.outputs.short }}
+          labels: |
+            org.opencontainers.image.title=ajar-connector-${{ needs.resolve.outputs.name }}
+            org.opencontainers.image.version=${{ needs.resolve.outputs.version }}
+            org.opencontainers.image.revision=${{ steps.rev.outputs.sha }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            ajar.connector.name=${{ needs.resolve.outputs.name }}
+            ajar.connector.version=${{ needs.resolve.outputs.version }}
+            ajar.contract=${{ needs.resolve.outputs.contract }}
+      - id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: deploy/docker/Dockerfile.build
+          platforms: linux/amd64,linux/arm64
+          build-args: |
+            WSDIR=${{ needs.resolve.outputs.wsdir }}
+            PKG=${{ needs.resolve.outputs.pkg }}
+            VERSION=${{ needs.resolve.outputs.version }}
+            REVISION=${{ steps.rev.outputs.sha }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          provenance: true
+          sbom: true
+      - uses: actions/attest-build-provenance@v4
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+  # Static binaries of this one crate. An evaluator on a laptop, or an air-gapped
+  # site that cannot pull images, otherwise has to build a Rust toolchain first.
+  # Same cross-compile path the image uses.
+  binaries:
+    name: build binaries (${{ matrix.target }})
+    needs: resolve
+    if: needs.resolve.outputs.kind == 'crate'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: refs/tags/${{ needs.resolve.outputs.tag }}
+      - name: Cross toolchain for aarch64
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc-aarch64-linux-gnu libc6-dev-arm64-cross
+      - run: rustup target add ${{ matrix.target }}
+      - name: Build
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+          CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
+        run: |
+          cargo build --release --target ${{ matrix.target }} \
+            --manifest-path ${{ needs.resolve.outputs.wsdir }}/Cargo.toml \
+            -p ${{ needs.resolve.outputs.pkg }} --bins
+      - name: Collect into one archive
+        env:
+          NAME: ${{ needs.resolve.outputs.name }}
+          VERSION: ${{ needs.resolve.outputs.version }}
+          WSDIR: ${{ needs.resolve.outputs.wsdir }}
+          PKG: ${{ needs.resolve.outputs.pkg }}
+          DIR: ${{ needs.resolve.outputs.dir }}
+        run: |
+          set -euo pipefail
+          out="ajar-$NAME-$VERSION-${{ matrix.target }}"
+          mkdir -p "$out/configs"
+          cp "$WSDIR/target/${{ matrix.target }}/release/$PKG" "$out/"
+          # The example config and any ontology fragment ride beside the
+          # binary (sapient's types are registered with `ajar onboard
+          # --type-spec`), with the connector's own README and changelog.
+          find "$DIR" -maxdepth 1 \( -name '*.example.toml' -o -name '*.types.json' \) \
+            -exec cp {} "$out/configs/" \;
+          for f in README.md CHANGELOG.md; do
+            [ -f "$DIR/$f" ] && cp "$DIR/$f" "$out/"
+          done
+          test -x "$out/$PKG"
+          test -f "$out/CHANGELOG.md"
+          ls -la "$out" "$out/configs"
+          tar czf "$out.tar.gz" "$out"
+          sha256sum "$out.tar.gz" > "$out.tar.gz.sha256"
+      - uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: ajar-*.tar.gz
+      - uses: actions/upload-artifact@v7
+        with:
+          name: binaries-${{ matrix.target }}
+          path: |
+            ajar-*.tar.gz
+            ajar-*.tar.gz.sha256
+
+  chart:
+    name: package + push the Helm chart
+    needs: resolve
+    if: needs.resolve.outputs.kind == 'chart'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: refs/tags/${{ needs.resolve.outputs.tag }}
+      - uses: azure/setup-helm@v5
+      - name: Package at the chart's version and push to ghcr
+        env:
+          VERSION: ${{ needs.resolve.outputs.version }}
+        run: |
+          set -euo pipefail
+          echo "${{ secrets.GITHUB_TOKEN }}" \
+            | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
+          helm package deploy/helm/connector -d dist
+          test -f "dist/connector-$VERSION.tgz"
+          helm push "dist/connector-$VERSION.tgz" "oci://ghcr.io/${{ github.repository_owner }}/charts"
+
+  # The GitHub release is created here and nowhere else, after everything it
+  # refers to has been published. A failed build therefore leaves no release.
+  release:
+    name: publish the release
+    needs: [resolve, image, binaries, chart]
+    if: >-
+      always() && needs.resolve.result == 'success'
+      && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: refs/tags/${{ needs.resolve.outputs.tag }}
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: binaries-*
+          merge-multiple: true
+          path: dist
+      - name: notes for this version, from the package's CHANGELOG.md
+        env:
+          VERSION: ${{ needs.resolve.outputs.version }}
+          DIR: ${{ needs.resolve.outputs.dir }}
+          IMAGE: ${{ needs.resolve.outputs.image }}
+          NAME: ${{ needs.resolve.outputs.name }}
+          CONTRACT: ${{ needs.resolve.outputs.contract }}
+        run: |
+          set -euo pipefail
+          awk -v v="$VERSION" '
+            $0 == "## [" v "]" || index($0, "## [" v "] ") == 1 { inside = 1; next }
+            inside && /^## \[/ { exit }
+            inside { print }
+          ' "$DIR/CHANGELOG.md" > notes.md
+          if [ ! -s notes.md ]; then
+            echo "::error::$DIR/CHANGELOG.md has no entry for $VERSION"
+            exit 1
+          fi
+          if [ "$IMAGE" = true ]; then
+            printf '\n---\nImage: `ghcr.io/%s/ajar-connector-%s:%s` (contract `%s`)\n' \
+              "${{ github.repository_owner }}" "$NAME" "$VERSION" "$CONTRACT" >> notes.md
+          fi
+          cat notes.md
+      # --latest=false: the repository's "latest" release stays the SDK's, so a
+      # connector release never displaces the version a vendor should pin.
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.resolve.outputs.tag }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          files=(dist/*)
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            # A re-run (workflow_dispatch) refreshes the assets of the release.
+            [ ${#files[@]} -eq 0 ] || gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber "${files[@]}"
+          else
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "$TAG" \
+              --notes-file notes.md --verify-tag --latest=false "${files[@]}"
+          fi

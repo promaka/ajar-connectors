@@ -15,6 +15,11 @@ directory, stdin, an exec'd CLI, MQTT or an HTTP poll. A system that
 outputs ASTERIX over UDP multicast and one that sends it over a TCP stream use the
 same connector with a different four-line transport section.
 
+Each connector is versioned and released on its own, as the image
+`ghcr.io/promaka/ajar-connector-<name>:<version>` and a binaries tarball. Its
+versions and what changed in each are in `rust/connectors/<name>/CHANGELOG.md`.
+Any version that emits contract `v1` works with a Core that accepts `v1`.
+
 ## Air
 
 ### `ajar-asterix` (EUROCONTROL ASTERIX, CAT010 / CAT021 / CAT034 / CAT048 / CAT062)

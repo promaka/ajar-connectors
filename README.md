@@ -264,11 +264,13 @@ The manual steps below remain for operators who prefer them.
 cp rust/connectors/asterix/asterix.example.toml ./asterix.toml
 ```
 
-No repo checkout needed: the release tarball for your platform
-(`ajar-connectors-<version>-<target>.tar.gz` on the
-[releases page](https://github.com/promaka/ajar-connectors/releases)) carries
-every connector binary, `ajar-doctor`, and these example configs; verify it
-against the `.sha256` beside it, then start from the config inside.
+No repo checkout needed: each connector's release on the
+[releases page](https://github.com/promaka/ajar-connectors/releases) carries a
+tarball for your platform, `ajar-<name>-<version>-<target>.tar.gz`, with the
+binary, its example config, README and changelog; `ajar-doctor` is released the
+same way. Verify it against the `.sha256` beside it, then start from the config
+inside. Releases up to 0.6.5 shipped every connector in one
+`ajar-connectors-<version>-<target>.tar.gz`.
 
 **Step 3. Edit four values.**
 
@@ -487,9 +489,19 @@ docker run \
 
 Set `signing_key_path = "/etc/ajar/seed"` in the mounted config. Prebuilt
 images are also published, privately, at
-`ghcr.io/promaka/ajar-connector-<name>:<version>`; the packages page lists
-which connectors and versions, and your operator can grant a pull secret
-with `read:packages`.
+`ghcr.io/promaka/ajar-connector-<name>:<version>`, where `<version>` is that
+connector's own version (each connector is versioned on its own; its
+`CHANGELOG.md` lists them, e.g. [asterix](rust/connectors/asterix/CHANGELOG.md)).
+The packages page lists which connectors and versions exist, and your operator
+can grant a pull secret with `read:packages`. From each connector's first
+release after 0.6.5, its image names what it is and the wire contract it emits,
+so you can check it against what your Core accepts before you deploy it:
+
+```bash
+docker inspect --format '{{ index .Config.Labels "ajar.connector.version" }} {{ index .Config.Labels "ajar.contract" }}' \
+  ghcr.io/promaka/ajar-connector-asterix:<version>
+# <version> v1
+```
 
 ### 7c. On Kubernetes
 
@@ -503,7 +515,8 @@ helm install radar deploy/helm/connector \
   --set-file connector.config=./asterix.toml
 ```
 
-The chart renders your config into a ConfigMap, mounts the key from the Secret,
+`image.tag` is the asterix connector's own version, not the SDK's. The chart
+renders your config into a ConfigMap, mounts the key from the Secret,
 and can restrict egress to NATS only. Pull secrets, mTLS and health probes:
 [chart README](deploy/helm/connector).
 
@@ -804,7 +817,7 @@ job `quickstart stopwatch` publishes in its summary on every run of `main`.
 |---|---|
 | One connector binary, release build | about 10 MB |
 | One connector image, distroless, non-root | about 65 MB |
-| Release tarball, every connector plus the doctor and example configs | about 60 MB, Linux x86_64 and aarch64 |
+| Release tarball, one connector plus its example config | about 10 MB, Linux x86_64 and aarch64 |
 
 **Resources** (one connector, a 300,000-frame feed signed and published to
 a local bus)
@@ -864,6 +877,20 @@ those bytes. If it changes, only a deliberate rebuild is affected, never a
 running binary.
 
 Pin the released tag `v0.6.5`, not a branch.
+
+Three things carry a version, and each moves on its own:
+
+| What | Version | Released as | Where it is recorded |
+|------|---------|-------------|----------------------|
+| Wire contract | `v1` | nothing to install; frozen | [`vendor/contract/CONTRACT_VERSION`](vendor/contract/CONTRACT_VERSION) |
+| SDK (Rust, Go, Python, C++) | one semver for all four | tag `vX.Y.Z`; crates.io, PyPI, Go module, C++ tarball | [`CHANGELOG.md`](CHANGELOG.md) |
+| Each connector or tool | its own semver | tag `<name>-vX.Y.Z`; image `ajar-connector-<name>:X.Y.Z` and a tarball | `rust/connectors/<name>/CHANGELOG.md` |
+
+Compatibility with Core is decided by the contract, not by matching versions: a
+connector at any version that emits `v1` is accepted by a Core that accepts
+`v1`. A connector's version tells you what changed in it. The entity types and
+attributes it emits count as its public interface, so renaming or removing one
+is a major version.
 
 [COMPATIBILITY.md](COMPATIBILITY.md) states exactly what will and will not change
 within `contract-v1`. Report security issues per [SECURITY.md](SECURITY.md).

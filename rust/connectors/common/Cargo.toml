@@ -2,7 +2,7 @@
 [package]
 name = "ajar-connector-common"
 description = "Shared runtime for Ajar connectors: config, mTLS transport, seal-and-publish loop, health."
-version.workspace = true
+version = "0.6.5"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

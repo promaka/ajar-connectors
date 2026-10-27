@@ -114,9 +114,20 @@ the bytes are still `v1`-compatible, so a rebuild is safe.
 
 - **`contract-v<N>`** — the wire contract. Bumps only for a breaking shape, and
   old versions keep being accepted. Pinned in [`vendor/contract/CONTRACT_VERSION`](vendor/contract/CONTRACT_VERSION).
-- **SDK `vMAJOR.MINOR.PATCH`** — the library. Pre-`1.0`, the source API may see
-  small additive or renaming changes between minors; none of them change the
-  wire, and none affect an already-built binary.
+- **SDK `vMAJOR.MINOR.PATCH`** — the library, one version across Rust, Go,
+  Python and C++. Pre-`1.0`, the source API may see small additive or renaming
+  changes between minors; none of them change the wire, and none affect an
+  already-built binary.
+- **Connector `<name>-vMAJOR.MINOR.PATCH`** — each reference connector is
+  versioned and released on its own (image `ajar-connector-<name>:X.Y.Z`). Its
+  public interface is its config and the entity types and attributes it emits,
+  so renaming or removing one is a major version even when the wire is
+  unchanged. Each image is labelled with the contract it emits
+  (`ajar.contract`).
+
+Compatibility between a connector and Core is decided by the contract alone:
+Core states which contract versions it accepts, a connector states which one it
+emits, and no connector version is pinned to a Core version.
 
 Questions about a specific guarantee? See [SECURITY.md](SECURITY.md) to reach us,
 or [HOW_IT_WORKS.md](HOW_IT_WORKS.md) for the mechanics behind the frozen wire.
