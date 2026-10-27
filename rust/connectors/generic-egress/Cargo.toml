@@ -2,7 +2,7 @@
 [package]
 name = "ajar-generic-egress"
 description = "Governed events out of Ajar, delivered as consumer-shaped JSON over HTTP — verification before delivery, by field mapping rather than code."
-version = "0.6.5"
+version = "0.6.6"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -36,4 +36,4 @@ tempfile = "3"
 
 # See CONTRIBUTING.md, "Releases".
 [package.metadata.ajar]
-release = false
+release = true

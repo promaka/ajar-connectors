@@ -2,7 +2,7 @@
 [package]
 name = "ajar-ais-nmea"
 description = "Ajar ingress connector for AIS (maritime) position reports over NMEA 0183."
-version = "0.6.5"
+version = "0.6.6"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -40,4 +40,4 @@ uuid = "1"
 
 # See CONTRIBUTING.md, "Releases".
 [package.metadata.ajar]
-release = false
+release = true

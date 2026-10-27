@@ -13,8 +13,8 @@ type: application
 # this with deploy/helm/connector/CHANGELOG.md. It deploys any connector, each at
 # its own version, so the image is always named by image.tag or image.digest and
 # appVersion follows the chart rather than any one connector.
-version: 0.6.5
-appVersion: "0.6.5"
+version: 0.6.6
+appVersion: "0.6.6"
 keywords:
   - ajar
   - connector
@@ -26,4 +26,4 @@ maintainers:
   - name: Ajar connectors contributors
 annotations:
   # See CONTRIBUTING.md, "Releases".
-  ajar.release: "false"
+  ajar.release: "true"

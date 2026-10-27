@@ -9,6 +9,14 @@ CONTRIBUTING.md, "Releases").
 
 ## [Unreleased]
 
+## [0.6.6] - 2026-10-27
+
+### Changed
+
+- First release on its own, as the tag `tak-cot-v0.6.6`: its own image, tarball
+  and GitHub release. The image carries the `ajar.connector.version` and
+  `ajar.contract` labels. No functional change since 0.6.5.
+
 ## [0.6.5] - 2026-10-24
 
 The last release of the whole suite at one version. History up to here is in

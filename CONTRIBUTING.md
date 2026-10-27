@@ -82,10 +82,8 @@ the tag exists, a failed build is re-run with `release-connector` from the
 Actions tab. A version below one already released is refused, and nothing ships
 until it is fixed.
 
-To start releasing a connector, set `release = true` **and bump its version**
-in the same PR. Its current version was already published by the last suite
-release (the `<name>-v0.6.5` tags record that), and a version is never
-published twice.
+A new connector starts with `release = false` (the scaffold writes it); setting
+it to `true` releases the connector at its current version on the next merge.
 
 A change to a connector without a bump ships at its next bump. The advisory
 `bump-check` job (`scripts/check-bumps.sh`) points out changed packages that

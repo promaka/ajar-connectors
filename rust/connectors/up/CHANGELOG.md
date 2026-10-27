@@ -9,6 +9,13 @@ CONTRIBUTING.md, "Releases").
 
 ## [Unreleased]
 
+## [0.6.6] - 2026-10-27
+
+### Changed
+
+- First release on its own, as the tag `up-v0.6.6`: its own tarball and GitHub
+  release. No functional change since 0.6.5.
+
 ## [0.6.5] - 2026-10-24
 
 The last release of the whole suite at one version. History up to here is in

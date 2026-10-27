@@ -2,7 +2,7 @@
 [package]
 name = "ajar-sapient-egress"
 description = "Ajar egress connector for SAPIENT (BSI Flex 335): Ajar as a sensor node on a fusion node, carrying governed events as detection reports."
-version = "0.6.5"
+version = "0.6.6"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -38,4 +38,4 @@ ed25519-dalek.workspace = true
 
 # See CONTRIBUTING.md, "Releases".
 [package.metadata.ajar]
-release = false
+release = true

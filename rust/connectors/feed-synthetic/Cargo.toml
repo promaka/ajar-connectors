@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 [package]
 name = "ajar-feed-synthetic"
-version = "0.6.5"
+version = "0.6.6"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -42,4 +42,4 @@ toml.workspace = true
 
 # See CONTRIBUTING.md, "Releases".
 [package.metadata.ajar]
-release = false
+release = true

@@ -7,6 +7,13 @@ is based on Keep a Changelog (https://keepachangelog.com).
 
 ## [Unreleased]
 
+## [0.6.6] - 2026-10-27
+
+### Changed
+
+- First release on its own, as the tag `chart-v0.6.6`. No change to the
+  templates or values since 0.6.5.
+
 ## [0.6.5] - 2026-10-24
 
 The last release of the chart at the suite version. History up to here is in the

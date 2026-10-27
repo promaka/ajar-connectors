@@ -2,7 +2,7 @@
 [package]
 name = "synthetic-radar"
 description = "Example: stream synthetic mim:aircraft tracks into a local Ajar Core over NATS."
-version = "0.6.5"
+version = "0.6.6"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -31,4 +31,4 @@ hex = "0.4"
 
 # See CONTRIBUTING.md, "Releases".
 [package.metadata.ajar]
-release = false
+release = true

@@ -2,7 +2,7 @@
 [package]
 name = "ajar-adsb"
 description = "Ajar ingress connector for ADS-B aircraft reports (SBS-1 / BaseStation)."
-version = "0.6.5"
+version = "0.6.6"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -38,4 +38,4 @@ uuid = "1"
 
 # See CONTRIBUTING.md, "Releases".
 [package.metadata.ajar]
-release = false
+release = true

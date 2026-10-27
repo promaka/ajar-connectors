@@ -2,7 +2,7 @@
 [package]
 name = "ajar-tak-egress"
 description = "Ajar egress relay: governed CoT from Core's NATS egress to a TAK Server, verbatim."
-version = "0.6.5"
+version = "0.6.6"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -37,4 +37,4 @@ rcgen = { version = "0.14", default-features = false, features = ["ring", "pem"]
 
 # See CONTRIBUTING.md, "Releases".
 [package.metadata.ajar]
-release = false
+release = true
