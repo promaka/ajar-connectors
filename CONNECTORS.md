@@ -15,10 +15,34 @@ directory, stdin, an exec'd CLI, MQTT or an HTTP poll. A system that
 outputs ASTERIX over UDP multicast and one that sends it over a TCP stream use the
 same connector with a different four-line transport section.
 
-Each connector is versioned and released on its own, as the image
-`ghcr.io/promaka/ajar-connector-<name>:<version>` and a binaries tarball. Its
-versions and what changed in each are in `rust/connectors/<name>/CHANGELOG.md`.
-Any version that emits contract `v1` works with a Core that accepts `v1`.
+## Overview
+
+Each package is versioned and released on its own. Its latest version below links
+to its GitHub release (notes, tarball, checksums); its image is
+`ghcr.io/promaka/<image>:<version>`. Any version that emits contract `v1` works
+with a Core that accepts `v1`.
+
+| Package | Feed or role | Latest | Image |
+|---|---|---|---|
+| [`ajar-asterix`](rust/connectors/asterix) | Air: EUROCONTROL ASTERIX | [0.6.6](https://github.com/promaka/ajar-connectors/releases/tag/asterix-v0.6.6) | `ajar-connector-asterix` |
+| [`ajar-adsb`](rust/connectors/adsb) | Air: ADS-B, SBS-1 / BaseStation | [0.6.6](https://github.com/promaka/ajar-connectors/releases/tag/adsb-v0.6.6) | `ajar-connector-adsb` |
+| [`ajar-ais-nmea`](rust/connectors/ais-nmea) | Maritime: AIS over NMEA 0183 | [0.6.6](https://github.com/promaka/ajar-connectors/releases/tag/ais-nmea-v0.6.6) | `ajar-connector-ais-nmea` |
+| [`ajar-gmti`](rust/connectors/gmti) | Land: STANAG 4607 GMTI | [0.6.6](https://github.com/promaka/ajar-connectors/releases/tag/gmti-v0.6.6) | `ajar-connector-gmti` |
+| [`ajar-klv`](rust/connectors/klv) | ISR: STANAG 4609 / MISB ST 0601 | [0.6.6](https://github.com/promaka/ajar-connectors/releases/tag/klv-v0.6.6) | `ajar-connector-klv` |
+| [`ajar-stanag4676`](rust/connectors/stanag4676) | ISR: STANAG 4676 tracking | [0.6.6](https://github.com/promaka/ajar-connectors/releases/tag/stanag4676-v0.6.6) | `ajar-connector-stanag4676` |
+| [`ajar-mavlink`](rust/connectors/mavlink) | Unmanned: MAVLink | [0.6.6](https://github.com/promaka/ajar-connectors/releases/tag/mavlink-v0.6.6) | `ajar-connector-mavlink` |
+| [`ajar-stanag4586`](rust/connectors/stanag4586) | Unmanned: STANAG 4586 UAS control | [0.6.6](https://github.com/promaka/ajar-connectors/releases/tag/stanag4586-v0.6.6) | `ajar-connector-stanag4586` |
+| [`ajar-sapient`](rust/connectors/sapient) | Counter-UAS: SAPIENT ingress | [0.6.6](https://github.com/promaka/ajar-connectors/releases/tag/sapient-v0.6.6) | `ajar-connector-sapient` |
+| [`ajar-sapient-egress`](rust/connectors/sapient-egress) | Counter-UAS: SAPIENT egress | [0.6.6](https://github.com/promaka/ajar-connectors/releases/tag/sapient-egress-v0.6.6) | `ajar-connector-sapient-egress` |
+| [`ajar-tak-cot`](rust/connectors/tak-cot) | C2: TAK / Cursor-on-Target ingress | [0.6.6](https://github.com/promaka/ajar-connectors/releases/tag/tak-cot-v0.6.6) | `ajar-connector-tak-cot` |
+| [`ajar-tak-egress`](rust/connectors/tak-egress) | C2: CoT egress to a TAK Server | [0.6.6](https://github.com/promaka/ajar-connectors/releases/tag/tak-egress-v0.6.6) | `ajar-connector-tak-egress` |
+| [`ajar-generic`](rust/connectors/generic) | Any JSON, CSV or NMEA-like feed, by config | [0.6.6](https://github.com/promaka/ajar-connectors/releases/tag/generic-v0.6.6) | `ajar-connector-generic` |
+| [`ajar-generic-egress`](rust/connectors/generic-egress) | Governed events out as JSON over HTTP | [0.6.6](https://github.com/promaka/ajar-connectors/releases/tag/generic-egress-v0.6.6) | `ajar-connector-generic-egress` |
+| [`ajar-feed-synthetic`](rust/connectors/feed-synthetic) | Test feed: one scenario on every wire format | [0.6.6](https://github.com/promaka/ajar-connectors/releases/tag/feed-synthetic-v0.6.6) | `ajar-connector-feed-synthetic` |
+| [`synthetic-radar`](rust/examples/synthetic-radar) | Test feed: synthetic air tracks | [0.6.6](https://github.com/promaka/ajar-connectors/releases/tag/synthetic-radar-v0.6.6) | `ajar-connector-synthetic-radar` |
+| [`ajar-doctor`](rust/connectors/doctor) | Tool: preflight diagnostics | [0.6.6](https://github.com/promaka/ajar-connectors/releases/tag/doctor-v0.6.6) | `ajar-connector-doctor` |
+| [`ajar-up`](rust/connectors/up) | Tool: operator packet to flowing events | [0.6.6](https://github.com/promaka/ajar-connectors/releases/tag/up-v0.6.6) | tarball only |
+| [connector chart](deploy/helm/connector) | Helm chart for any connector | [0.6.6](https://github.com/promaka/ajar-connectors/releases/tag/chart-v0.6.6) | `charts/connector` (OCI) |
 
 ## Air
 

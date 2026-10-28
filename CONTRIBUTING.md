@@ -67,7 +67,8 @@ the review of that PR is the decision to ship.
 To release a connector:
 
 1. In your PR, bump `version` in `rust/connectors/<name>/Cargo.toml` and add a
-   `## [X.Y.Z] - <date>` entry to its `CHANGELOG.md`. Use semver: a fix is a
+   `## [X.Y.Z] - <date>` entry to its `CHANGELOG.md`, and update its row in the
+   table at the top of `CONNECTORS.md` (CI checks it). Use semver: a fix is a
    patch, a new field or option a minor, and renaming or removing an emitted
    entity type, attribute or config key a major, because that breaks a site's
    ontology and policy even though everything still compiles.

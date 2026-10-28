@@ -44,6 +44,8 @@ jobs:
           if grep -qE '^ +ajar\.release: *"?true"?' "$chart"; then
             ./scripts/release-target.sh "chart-v$(grep -m1 '^version:' "$chart" | awk '{print $2}')" >/dev/null
           fi
+      - name: The catalogue table names every released package's version
+        run: ./scripts/check-catalogue.sh
 
   # Each connector is released when a version bump merges. A change without a
   # bump is sometimes intended, so this advises the reviewer and never fails.
