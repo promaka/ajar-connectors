@@ -250,11 +250,14 @@ argument; the one call you add is shown in
 ./ajar-up your-id.packet.tar
 ```
 
-It verifies the packet's signature and checksums, places your credentials,
-writes the config, runs the doctor preflight, and starts the right connector
-(producer packets) or a verified tap on governed egress (consumer packets:
-add `--to-tak host:8089` or `--to-http <url>` for a real delivery target).
-The manual steps below remain for operators who prefer them.
+Download `ajar-up` once from the
+[releases page](https://github.com/promaka/ajar-connectors/releases), and put
+the connector your packet names beside it (step 2), or on `PATH`. `ajar-up`
+verifies the packet's signature and checksums, places your credentials, writes
+the config, runs the doctor preflight, and starts the right connector (producer
+packets) or a verified tap on governed egress (consumer packets: add
+`--to-tak host:8089` or `--to-http <url>` for a real delivery target). The
+manual steps below remain for operators who prefer them.
 
 **Step 1. Pick your connector** from the [table in section 10](#reference-connectors).
 
@@ -267,10 +270,10 @@ cp rust/connectors/asterix/asterix.example.toml ./asterix.toml
 No repo checkout needed: each connector's release on the
 [releases page](https://github.com/promaka/ajar-connectors/releases) carries a
 tarball for your platform, `ajar-<name>-<version>-<target>.tar.gz`, with the
-binary, its example config, README and changelog; `ajar-doctor` is released the
-same way. Verify it against the `.sha256` beside it, then start from the config
-inside. Releases up to 0.6.5 shipped every connector in one
-`ajar-connectors-<version>-<target>.tar.gz`.
+binary, its example config, README and changelog; `ajar-doctor` and `ajar-up`
+are released the same way. Verify it against the `.sha256` beside it, then
+start from the config inside. Releases up to 0.6.5 shipped every connector in
+one `ajar-connectors-<version>-<target>.tar.gz`.
 
 **Step 3. Edit four values.**
 
@@ -817,7 +820,6 @@ job `quickstart stopwatch` publishes in its summary on every run of `main`.
 |---|---|
 | One connector binary, release build | about 10 MB |
 | One connector image, distroless, non-root | about 65 MB |
-| Release tarball, one connector plus its example config | about 10 MB, Linux x86_64 and aarch64 |
 
 **Resources** (one connector, a 300,000-frame feed signed and published to
 a local bus)

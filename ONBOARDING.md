@@ -46,9 +46,15 @@ need, and nothing you have to create yourself:
 
 ### Three steps
 
-1. Download the release for your platform from
-   [GitHub releases](https://github.com/promaka/ajar-connectors/releases) and
-   unpack it. Every connector program is inside, including `ajar-up`.
+1. From [GitHub releases](https://github.com/promaka/ajar-connectors/releases),
+   download for your platform `ajar-up` (once) and the connector your packet
+   names (your data format, or the egress connector you deliver to). Unpack
+   both and put the connector beside `ajar-up`:
+   ```bash
+   tar xzf ajar-up-<version>-<platform>.tar.gz
+   tar xzf ajar-adsb-<version>-<platform>.tar.gz
+   cp ajar-adsb-*/ajar-adsb ajar-up-*/ && cd ajar-up-*/
+   ```
 2. Run one command:
    ```bash
    ./ajar-up <your-id>.packet.tar

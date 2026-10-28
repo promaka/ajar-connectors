@@ -14,7 +14,9 @@ CONTRIBUTING.md, "Releases").
 ### Changed
 
 - First release on its own, as the tag `up-v0.6.6`: its own tarball and GitHub
-  release. No functional change since 0.6.5.
+  release. Connectors are no longer in the same tarball: download `ajar-up` once
+  and the connector your packet names next to it. When that connector is
+  missing, the error now says which release to download.
 
 ## [0.6.5] - 2026-10-24
 
