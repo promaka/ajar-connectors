@@ -15,9 +15,7 @@ name = "ajar-stanag4676"
 path = "src/main.rs"
 
 [features]
-# DDS is compiled in so the shipped binary can read a topic on a ship's or a
-# ROS 2 platform's bus; it is inert unless a config says kind = "dds".
-# A lean build is one flag away: --no-default-features.
+# Inert unless a config sets kind = "dds"; --no-default-features drops it.
 default = ["dds"]
 dds = ["ajar-connector-common/dds"]
 
@@ -28,14 +26,14 @@ tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 anyhow.workspace = true
+thiserror.workspace = true
 quick-xml = "0.42"
-time = { version = "0.3", features = ["parsing", "formatting"] }
+time.workspace = true
 
 [dev-dependencies]
 ed25519-dalek.workspace = true
-sha2 = "0.11"
 hex.workspace = true
-serde_json = "1"
+serde_json.workspace = true
 proptest = "1"
 uuid = "1"
 

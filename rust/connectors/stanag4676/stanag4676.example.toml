@@ -1,50 +1,32 @@
 # SPDX-License-Identifier: Apache-2.0
 #
-# Example STANAG 4676 (NATO ISR Tracking) ingress config. Copy, adjust, and run:
-#   ajar-stanag4676 ./stanag4676.toml
-#
-# This connector decodes the fused TRACK layer (nitsRoot -> track -> segment -> tp)
-# into one canonical event per track point. It complements ajar-gmti, which ingests
-# the raw un-associated detections: GMTI gives dots, 4676 gives tracks with a stable
-# id for the same object over time.
+# STANAG 4676 (NATO ISR Tracking) ingress, one event per track point.
+# Run: ajar-stanag4676 ./stanag4676.toml
 
 source_id = "isr-tracker-1"
 nats_url = "nats://127.0.0.1:4222"
 subject_prefix = "ajar.ingest"
 signing_key_path = "/etc/ajar/isr-tracker-1.seed"
 
-# 4676 carries a STANAG 1241 identity, so hostility is derived from the wire
-# (FRIEND/HOSTILE/NEUTRAL). This default is only used when a track's identity is
-# absent or ambiguous (ASSUMED_FRIEND / SUSPECT / UNKNOWN).
+# Used only when a track's STANAG 1241 identity is absent or UNKNOWN.
 # default_hostility = "Unknown"
 
-# The security marking every event carries, stamped inside its signature.
-# Every field is optional; see README section 7f.
+# Security marking stamped into every event; all fields optional.
 # [marking]
 # classification = "restricted"
 # releasable_to = ["GBR", "ITA"]
 # caveats = ["EXERCISE"]
 
-# Every 4676 `environment` value is a domain, not a classification: AIR says a
-# track is in the air, not that it is an aircraft. So every track is emitted as
-# `mim:object` with the environment as an attribute, rather than asserting a type
-# the tracker never reported.
-#
-# If your deployment knows its feed better than that — a tracker that only ever
-# reports crewed aircraft, say — map the environment to a specific type here.
+# Tracks are mim:object by default; map an environment to a specific type.
 # [entity_map]
 # AIR = "mim:aircraft"
 
 [transport]
-# A 4676 message is a whole XML document, so the transport must deliver ONE
-# complete message per frame. Length-delimited framing (2-byte length prefix per
-# message) is the clean stream integration:
+# One whole XML message per frame.
 kind = "tcp-server"
 bind = "0.0.0.0:4676"
 framing = "length-delimited"
 
-# Alternatively, over a line transport when the producer emits one compact,
-# single-line message per line:
-# [transport]
-# kind = "file"
-# path = "/var/spool/isr/tracks.xml"
+# Or read a file of single-line messages:
+#   kind = "file"
+#   path = "/var/spool/isr/tracks.xml"
