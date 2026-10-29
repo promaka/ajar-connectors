@@ -1,112 +1,125 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
-# ajar-stanag4586
+# ajar-stanag4586: STANAG 4586 (NATO UAS Control) ingress
 
-Ingress connector for **STANAG 4586** (NATO UAS Control) — the coalition standard
-for military UAS interoperability. STANAG 4586 defines the full **UAS Control System
-(UCS)** interface across Levels of Interoperability 1–5, from telemetry receipt up to
-flight and payload control and control-station handover. **This connector ingests the
-telemetry** — the vehicle-state reports on the **Data Link Interface (DLI)**, sent
-from a vehicle-specific module (VSM) to the Core UCS (CUCS) — as canonical Ajar
-tracks, sealed with the connector's Ed25519 key. It is an *ingest* connector: it does
-not command or control vehicles.
+Ingress for the telemetry on the STANAG 4586 **Data Link Interface (DLI)**,
+the messages a vehicle-specific module (VSM) sends to the Core UAS Control
+System (CUCS). Vehicle-state reports become signed canonical Ajar tracks. The
+connector only reads; it does not command or control vehicles. It covers the
+larger tactical and MALE platforms and ground stations that speak 4586;
+[`mavlink`](../mavlink) covers small and commercial-derived UAS.
 
-Where `ajar-mavlink` ingests telemetry from small and commercial-derived UAS, this
-ingests it from the larger tactical / MALE platforms and ground stations that speak
-4586 for NATO interoperability.
+## Input
 
-## Model
+STANAG 4586 Edition 2 DLI messages, laid out from the NATO UNCLASSIFIED
+Edition 2 field tables. Each message is a 30-byte wrapper, the body and a
+4-byte checksum, big-endian throughout with IEEE 754 floats (§B.3.3.1):
 
-```
-STANAG 4586 DLI (UDP) ──▶ ajar-stanag4586 ──▶ canonical Event(s) ──▶ seal ──▶ NATS  ajar.ingest.<source_id>
-     untrusted edge        decode                (mim:aircraft)        (Ed25519)        (mTLS to Core)
-```
-
-A datagram may pack **several messages** back to back; each has its own checksum, so
-one datagram can produce several sealed events. The whole raw message (wrapper +
-body + checksum) is sealed verbatim into `Event.payload`. The connector holds no
-Core secrets — only its own signing key. See [HOW_IT_WORKS.md](../../../HOW_IT_WORKS.md).
-
-## The wire, exactly
-
-Every message is a fixed 30-byte header + body + 4-byte checksum footer, **big-endian
-throughout** with IEEE-754 singles/doubles:
-
-```
-IDD version    10 bytes  null-terminated ASCII (document edition)
+```text
+IDD version    10 bytes  null-terminated ASCII
 instance id     u32
-message type    u32       1..<2000 standard, >2000 vehicle-specific
-message length  u32       number of bytes in the body
+message type    u32      1..<2000 standard, >2000 vehicle-specific
+message length  u32      body bytes
 stream id       u32
-packet seq      u32       (unused, = -1)
-<body>          length bytes
-checksum        u32       byte-wise unsigned sum of all preceding bytes
+packet seq      u32      unused, -1
+<body>
+checksum        u32      byte-wise unsigned sum of all preceding bytes
 ```
 
-> **Byte order is the trap.** The most active open reference implementation packs
-> its structs in native (little-endian) order, contradicting the spec's mandated
-> big-endian. The decoder here follows the **published NATO UNCLASSIFIED Edition 2
-> field tables**, which are ground truth — not any one implementation.
+One frame may pack several messages back to back; each has its own checksum.
 
-## What it decodes
+- **Message #101 Inertial States** (§B.4.1.2.11, Table B1-25): decoded.
+- **Every other message type**: checksum-validated and skipped.
 
-v1 decodes **Message #101 Inertial States** — the vehicle's full kinematic state,
-sent regularly to the CUCS and exactly what populates a track:
+The wrapper's IDD version, instance id, stream id and packet sequence are not
+read.
 
-- **Position** — latitude/longitude (radians on the wire → degrees) + altitude, with
-  the altitude reference (pressure / baro / AGL / WGS-84) in metadata.
-- **Kinematics** — ground `speed` and `course` derived from the North/East/Down
-  velocity vector; `vertical_rate` (climb-positive) from the down component; native
-  components preserved. `heading` (where the platform points) comes from yaw and is
-  kept **distinct** from `course` (track over ground), per ADR-0019.
-- **Attitude** — roll/pitch as metadata; yaw as `heading`.
-- **Identity** — the vehicle id becomes `source_uid` (`s4586:vehicle:<id>`).
+Big-endian follows the published field tables. An open reference
+implementation packs its structs in native little-endian order; that order is
+not followed. The reference was consulted only to confirm the wrapper length,
+and no code was copied from it.
 
-Speeds are m/s, angles degrees. 4586 carries no hostility, so the operator asserts
-one in config (own-force UAS are typically `friendly`). Other message types are
-validated at the wrapper and skipped (not yet mapped) — a later pass extends coverage
-without touching the wire.
+Transport: `udp` on the VSM's DLI output, as in the example config, or
+`udp-multicast` if the VSM multicasts.
 
-## Configure & run
+## Output
 
-Copy [`stanag4586.example.toml`](stanag4586.example.toml). The DLI is usually UDP:
+Entity type `mim:aircraft` by default, one event per #101 message.
 
-```toml
-source_id = "uas-vsm-1"
-nats_url  = "nats://127.0.0.1:4222"
-signing_key_path = "/etc/ajar/uas-vsm-1.seed"
-default_hostility = "Friend"
+**Identity.** `source_uid` is `s4586:vehicle:<vehicle id>`, so each vehicle is
+its own track.
 
-[transport]
-kind = "udp"
-bind = "0.0.0.0:4586"
-```
+**Location.** Latitude and longitude, radians on the wire, in degrees. The
+altitude is the #101 altitude in metres as sent, whatever its reference; the
+`altitude_type` metadata says which reference that is.
 
-```bash
+**Time.** The #101 Time Stamp (UTC seconds since 1970, §B.1.7). A value that
+is not finite or out of range falls back to receipt time.
+
+| Attribute | Unit | Source |
+|---|---|---|
+| `speed` | m/s, two decimals | horizontal magnitude of the north and east velocity |
+| `course` | degrees true, one decimal, 0 to 360 | direction of the north and east velocity |
+| `heading` | degrees, one decimal, 0 to 360 | yaw (Psi) |
+| `vertical_rate` | m/s, two decimals, climb positive | the down velocity, negated |
+| `hostility` | MIM `HostilityCodeType` | `default_hostility`, only when configured |
+
+`heading` is where the airframe points, `course` is its track over the
+ground; they are not interchangeable.
+
+| Metadata | Content |
+|---|---|
+| `source_uid` | as above |
+| `cucs_id` | the CUCS id from the message |
+| `altitude_type` | `pressure`, `baro`, `agl`, `wgs84` or `unknown` |
+| `roll_deg`, `pitch_deg` | attitude, degrees, two decimals |
+| `magnetic_variation_deg` | degrees, three decimals |
+| `timestamp_s` | the native Time Stamp, seconds, three decimals |
+
+**Payload.** The whole message, wrapper and checksum included, verbatim. A
+frame with two #101 messages yields two events, each carrying its own message.
+
+## Configuration
+
+Start from [`stanag4586.example.toml`](stanag4586.example.toml). The
+connector has no `[options]`.
+
+- `default_hostility` sets the `hostility` attribute. 4586 carries none, and
+  with it unset none is emitted.
+- `[entity_map] default = "<type>"` replaces the entity type, default
+  `mim:aircraft`. MIM 5.3 has no uncrewed class, so a UAS is an aircraft.
+
+## Behaviour
+
+- Messages are independent; nothing is correlated across frames.
+- A checksum mismatch on any message rejects the whole frame, including
+  messages before it that decoded.
+- A #101 body shorter than 89 bytes rejects the whole frame.
+- Trailing bytes too short for a wrapper and checksum are ignored.
+- A frame holding only other message types yields no events and no error.
+
+## Limits
+
+- Only #101 Inertial States is decoded. Other DLI messages, such as #20
+  Vehicle ID, are not mapped.
+- The #101 accelerations and attitude rates are not decoded; they stay in the
+  payload.
+- Altitude is not converted between references, so a pressure or AGL altitude
+  becomes the event altitude unchanged.
+
+## Run
+
+```sh
+cp stanag4586.example.toml stanag4586.toml   # edit source_id, key path, [transport]
 ajar-stanag4586 ./stanag4586.toml
-# production mTLS + health as per the repo README
+ajar-stanag4586 --profile ./stanag4586.toml  # print the profile the operator registers
 ```
-
-## Security note
-
-4586 is an untrusted edge and the decoder walks attacker-influenced message-length
-and checksum fields across a multi-message datagram, so every length is bounds- and
-overflow-checked, each message's checksum is validated fail-closed, and a lying
-length halts the walk rather than reading out of bounds. The decoder never panics and
-never emits a misaligned or fabricated position. Trust is established downstream by
-the seal.
 
 ## Conformance
 
-`cargo test` decodes a hand-built #101 Inertial States message (big-endian, correct
-checksum) and checks position, derived kinematics, heading-vs-course, the Unix-epoch
-timestamp, and identity; verifies the event against Core's content contract and that
-the seal verifies under the published contract key; confirms two messages in one
-datagram yield two events, and that corrupt checksums, lying lengths, and short
-bodies are rejected without panicking; and fuzzes the walk against thousands of
-arbitrary and wrapper-shaped inputs.
-
-The message model is implemented from the public NATO UNCLASSIFIED STANAG 4586
-Edition 2 field tables. An open reference implementation was consulted **only** to
-disambiguate the message-wrapper length; no code was copied (it is GPL-licensed), and
-its native-endian packing was **not** followed — the big-endian field tables are
-ground truth.
+`cargo test -p ajar-stanag4586` decodes a hand-built #101 message and checks
+position, derived kinematics, heading against course, the timestamp and
+identity. It checks the event against Core's content contract and the seal
+against the published contract key. It confirms that two messages in one
+frame yield two events, that corrupt checksums, lying lengths and short bodies
+are handled without a panic, and fuzzes the walk with arbitrary and
+wrapper-shaped input.
