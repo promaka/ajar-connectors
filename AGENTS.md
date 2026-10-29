@@ -78,7 +78,7 @@ rust/connectors/<name>/
   src/main.rs           # ~20 lines of wiring; copy asterix/src/main.rs verbatim,
                         #   swap in your Parser type
   <name>.example.toml   # copy an existing one; set source_id, key path, transport
-  README.md             # what it decodes, what rides in payload, units
+  README.md             # the user-facing docs; sections per STYLE.md
   CHANGELOG.md          # one entry per version; the release notes come from it
 ```
 
@@ -133,9 +133,15 @@ the parser against those real bytes and iterate until the tests pass. Include at
 minimum: a happy-path decode, a checksum/validation-reject, a truncated-input
 reject (proves no panic), and a raw-preserved-in-payload assertion.
 
+## Code style
+
+Follow [STYLE.md](STYLE.md). In short: no comment the code already says, no
+module essays, no history in comments, no em-dashes or bold, no single-use
+helpers, and a shared copy of anything three crates need.
+
 ## Definition of done
 
-All four commands above pass, and a change to a released connector bumps its
+All four commands above pass, the code follows STYLE.md, and a change to a released connector bumps its
 version with a changelog entry; the connector seals raw into payload, emits decoded
 fields as attributes with canonical units, sets `source_uid`, and never panics on
 malformed input. That's a mergeable connector.
