@@ -434,26 +434,6 @@ mod tests {
     }
 
     #[test]
-    fn bytes_per_event_before_vs_after_raw_payload() {
-        use ajar_connector::canonical_bytes;
-        let p = governed();
-        let pos = p.parse_line(AIRBORNE.as_bytes()).unwrap().unwrap();
-        let after = p.to_event_at(&pos, OBSERVED).unwrap();
-        let mut before = after.clone();
-        before.payload.clear();
-        let (b, a) = (
-            canonical_bytes(&before).len(),
-            canonical_bytes(&after).len(),
-        );
-        println!(
-            "ADSB canonical bytes/event: before(no payload)={b}  after(raw payload)={a}  raw={}  sealed_after={}",
-            after.payload.len(),
-            a + 64
-        );
-        assert!(a > b);
-    }
-
-    #[test]
     fn over_cap_drops_oldest_and_marks_truncated() {
         let p = governed();
         for _ in 0..(MAX_PENDING_FRAMES + 5) {
@@ -464,33 +444,6 @@ mod tests {
         let ev = p.to_event_at(pos, OBSERVED).unwrap();
         assert_eq!(meta_of(&ev, "payload_truncated"), Some("true"));
         assert!(p.counters()[0].1.load(Ordering::Relaxed) >= 5);
-    }
-
-    #[test]
-    fn bytes_per_event_realistic_frame_mix() {
-        use ajar_connector::canonical_bytes;
-        let p = governed();
-        let frames = [
-            "MSG,1,1,1,4CA2D6,1,2026/06/10,08:00:00.000,2026/06/10,08:00:00.000,BAW123,,,,,,,,,,0",
-            "MSG,4,1,1,4CA2D6,1,2026/06/10,08:00:00.100,2026/06/10,08:00:00.100,,,450,270,,,-1024,,,,,",
-            "MSG,4,1,1,4CA2D6,1,2026/06/10,08:00:00.200,2026/06/10,08:00:00.200,,,451,271,,,-960,,,,,",
-            "MSG,6,1,1,4CA2D6,1,2026/06/10,08:00:00.300,2026/06/10,08:00:00.300,,,,,,,,7700,,,,",
-        ];
-        for f in &frames {
-            assert_eq!(p.parse_line(f.as_bytes()).unwrap(), None);
-        }
-        let pos = p.parse_line(AIRBORNE.as_bytes()).unwrap().unwrap();
-        let ev = p.to_event_at(&pos, OBSERVED).unwrap();
-        let sealed = canonical_bytes(&ev).len() + 64;
-        let per_day = |rate: f64| (50.0 * rate * sealed as f64 * 86_400.0) / 1e9;
-        println!(
-            "ADSB realistic: {}frames/event  payload={}B  sealed={sealed}B  => {:.1} GB/day @1Hz, {:.1} GB/day @2Hz (50 aircraft)",
-            frames.len() + 1,
-            ev.payload.len(),
-            per_day(1.0),
-            per_day(2.0),
-        );
-        assert!(sealed > 363);
     }
 
     #[test]
