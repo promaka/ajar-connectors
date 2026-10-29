@@ -72,7 +72,8 @@ Keep:
 ## Naming
 
 1. Names carry units: `_m`, `_ft`, `_kn`, `_mps`, `_deg`, `_s`, `_ms`,
-   `_ftmin`. A trailing `// volts` means the name is wrong.
+   `_ftmin`. A trailing `// volts` means the name is wrong. `lat` and `lon`
+   are WGS-84 degrees by convention and need no suffix.
 2. Short is fine, vague is not: `be_uint` over `be`, `crc_extra_and_len` over
    `spec`.
 3. One vocabulary for one role across crates and SDKs. The same concept has
@@ -170,7 +171,8 @@ relying on the optimiser. Readability still wins over micro-optimisation.
    `confidentiality_label_to_policy_tags`. Intent goes in assert messages
    (`assert!(ok, "{msg}")`), not in narrating comments.
 2. Test module docs are one line. No "what must hold" essays.
-3. Test behaviour that can break, not language semantics.
+3. Test behaviour that can break, not language semantics. Size or throughput
+   printouts are not tests.
 4. Shared scaffolding lives in one place: `tests/common/mod.rs`, a
    `conftest.py` fixture, or a shared dev crate. Temp dirs via `tempfile`.
 5. Imports first in a test module.
