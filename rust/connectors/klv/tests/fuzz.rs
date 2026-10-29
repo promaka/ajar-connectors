@@ -1,8 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! The KLV decoder walks attacker-influenced BER length fields, so its one
-//! absolute obligation is to never panic: random bytes, sets that lie about their
-//! length, and TLV runs that reference past the end must all return `Ok` or a
-//! typed error.
+//! Arbitrary and KLV-shaped input never panics the parser.
 
 use ajar_connector_common::Enrichment;
 use ajar_klv::KlvParser;
@@ -24,9 +21,6 @@ proptest! {
         let _ = parser().parse_set(&bytes);
     }
 
-    /// A valid UAS LS key followed by an arbitrary declared length and body —
-    /// exercises the BER-length read, the TLV walk, and the checksum path with
-    /// lengths that may run past the buffer. Must never panic.
     #[test]
     fn klv_shaped_input_never_panics(body in proptest::collection::vec(any::<u8>(), 0..400)) {
         let n = body.len();
