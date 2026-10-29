@@ -192,14 +192,14 @@ mod tests {
         assert_eq!(p.mmsi, Vessel::MMSI);
         assert!((p.lat.unwrap() - v.fix.lat).abs() < 2e-6, "{:?}", p.lat);
         assert!((p.lon.unwrap() - v.fix.lon).abs() < 2e-6, "{:?}", p.lon);
-        assert!((p.cog.unwrap() - Vessel::COURSE_DEG).abs() < 0.11);
-        assert!((p.heading.unwrap() - Vessel::COURSE_DEG).abs() < 0.5);
+        assert!((p.cog_deg.unwrap() - Vessel::COURSE_DEG).abs() < 0.11);
+        assert!((p.heading_deg.unwrap() - Vessel::COURSE_DEG).abs() < 0.5);
         // The decoder keeps the wire's knots on the position and converts to
         // the contract's metres per second only in the event.
         assert!(
-            (p.sog.unwrap() - Vessel::SPEED_MPS * MPS_TO_KN).abs() < 0.06,
+            (p.sog_kn.unwrap() - Vessel::SPEED_MPS * MPS_TO_KN).abs() < 0.06,
             "{:?}",
-            p.sog
+            p.sog_kn
         );
         assert_eq!(p.nav_status, Some("under-way-using-engine"));
         let ev = decoder().to_event_at(&p, "2026-06-10T08:00:00Z").unwrap();

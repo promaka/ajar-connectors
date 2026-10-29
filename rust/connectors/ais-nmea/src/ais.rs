@@ -1,231 +1,76 @@
 // SPDX-License-Identifier: Apache-2.0
-//! AIS (Automatic Identification System) over NMEA 0183 -> canonical Ajar event.
-//!
-//! AIS messages arrive as `!AIVDM`/`!AIVDO` sentences whose payload is a 6-bit
-//! ASCII-armored bit stream (ITU-R M.1371). This is an untrusted edge: sentences
-//! can be malformed, truncated, mis-checksummed, or hostile, so every step is
-//! checked and every failure is a typed error — it never panics and never
-//! fabricates a field.
-//!
-//! Scope (military operating picture):
-//!  - **Position reports** (types 1, 2, 3, 18, 19) → vessel track with position,
-//!    speed over ground, course, heading, rate of turn, and navigation status.
-//!  - **Static/voyage data** (types 5, 24, and the inline data in type 19) →
-//!    vessel name, call sign, ship type, IMO. These arrive in *separate* messages,
-//!    so the connector keeps a small per-MMSI identity cache and enriches each
-//!    position report with the latest known identity for that vessel.
-//!
-//! All field offsets below are verified against the `pyais` reference decoder.
+//! AIS over NMEA 0183 (`!--VDM`/`!--VDO`, ITU-R M.1371) to `mim:vessel` events.
+//! Position reports (types 1, 2, 3, 18, 19) emit an event; static data (types
+//! 5, 24 and the inline part of 19) is cached per MMSI and attached to the
+//! vessel's next position. Bit offsets match the pyais reference decoder.
+
+mod bits;
+mod cache;
 
 use std::collections::HashMap;
-use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use ajar_connector::{Event, EventBuilder};
+use ajar_connector::{BuildError, Event, EventBuilder};
 use ajar_connector_common::GovernedIdentity;
 use ajar_connector_common::{Enrichment, FrameParser, ParseError};
 
-/// 1 knot in metres/second. The governed `speed` attribute is m/s; AIS speed over
-/// ground is knots, so normalise (ADR-0019) and keep the native knots in metadata.
+use crate::ttm::TtmState;
+use bits::Bits;
+use cache::{Carry, Identity, MmsiCache};
+use Layout::{ClassA, ClassB};
+
 const KNOTS_TO_MPS: f64 = 0.514_444;
 
-/// Why an AIS sentence could not be turned into a position. Counted and logged
-/// with the reason; never silently swallowed.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, thiserror::Error)]
 pub enum AisError {
-    /// The frame was not valid ASCII/UTF-8.
+    #[error("AIS frame not ASCII")]
     NotAscii,
-    /// Not an NMEA sentence (no `!`/`$` talker).
+    #[error("not an NMEA sentence")]
     NotNmea,
-    /// The NMEA checksum was missing or did not match.
+    #[error("NMEA checksum missing or mismatched")]
     Checksum,
-    /// The sentence did not have the expected comma-separated fields.
+    #[error("malformed AIVDM fields")]
     Fields,
-    /// The 6-bit payload contained a character outside the armor alphabet.
+    #[error("bad 6-bit armor character {0:#04x}")]
     Armor(u8),
-    /// The payload was too short for the fields the message type requires.
+    #[error("AIS payload too short for message type")]
     Truncated,
-    /// The canonical event failed to build (a propagated invariant violation).
-    Build(String),
+    #[error("event build failed: {0}")]
+    Build(#[from] BuildError),
 }
 
-impl std::fmt::Display for AisError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            AisError::NotAscii => write!(f, "AIS frame not ASCII"),
-            AisError::NotNmea => write!(f, "not an NMEA sentence"),
-            AisError::Checksum => write!(f, "NMEA checksum missing or mismatched"),
-            AisError::Fields => write!(f, "malformed AIVDM fields"),
-            AisError::Armor(c) => write!(f, "bad 6-bit armor character {c:#04x}"),
-            AisError::Truncated => write!(f, "AIS payload too short for message type"),
-            AisError::Build(e) => write!(f, "event build failed: {e}"),
-        }
-    }
-}
-impl std::error::Error for AisError {}
-
-/// A decoded AIS position report enriched with the vessel's known identity — the
-/// wire facts plus cache, no clock. Deterministic given the same inputs.
+/// A position report with the vessel's cached identity.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AisPosition {
     pub msg_type: u8,
     pub mmsi: u32,
-    /// WGS-84 latitude, if the report carried a valid one.
     pub lat: Option<f64>,
-    /// WGS-84 longitude, if valid.
     pub lon: Option<f64>,
-    /// Course over ground, degrees.
-    pub cog: Option<f64>,
-    /// Speed over ground, knots.
-    pub sog: Option<f64>,
-    /// True heading, degrees.
-    pub heading: Option<f64>,
-    /// Rate of turn, degrees/minute (positive = turning right).
-    pub rot: Option<f64>,
-    /// Navigation status (under way, at anchor, fishing, …).
+    pub cog_deg: Option<f64>,
+    pub sog_kn: Option<f64>,
+    /// True heading.
+    pub heading_deg: Option<f64>,
+    /// Rate of turn in degrees per minute, positive to starboard.
+    pub rot_degmin: Option<f64>,
     pub nav_status: Option<&'static str>,
-    /// Ship-type category (cargo, tanker, fishing, military, …).
     pub ship_type: Option<&'static str>,
-    /// Vessel name, from static data.
     pub name: Option<String>,
-    /// Call sign, from static data.
     pub callsign: Option<String>,
-    /// IMO number, from static data.
     pub imo: Option<u32>,
-    /// Every raw NMEA sentence that contributed to this event — the position
-    /// sentence(s) plus any static/unmapped sentences for this MMSI that arrived
-    /// since the last emit — newline-delimited, carried verbatim into the signed
-    /// `payload` so nothing (including fields we do not yet decode) is lost.
+    /// Every sentence received for this vessel since its last event,
+    /// newline-joined, ending with the position's own.
     pub raw: Vec<u8>,
-    /// True if the per-MMSI carry-forward buffer dropped one or more sentences
-    /// before this emit (over the cap); the event marks itself `payload_truncated`.
+    /// Sentences were dropped from `raw` over the per-vessel cap.
     pub truncated: bool,
 }
 
-/// The identity a vessel advertises in its static messages, cached by MMSI.
-#[derive(Debug, Clone, Default, PartialEq)]
-struct Identity {
-    name: Option<String>,
-    callsign: Option<String>,
-    ship_type: Option<&'static str>,
-    imo: Option<u32>,
-}
-
-/// Upper bound on cached vessel identities. A dense coastal picture is a few
-/// thousand vessels; the bound exists because MMSI is attacker-controllable — a
-/// hostile feed spoofing millions of MMSIs must cost bounded memory. At capacity
-/// the oldest-inserted identity is evicted (FIFO); a live vessel's next static
-/// message simply re-caches it.
-const MAX_IDENTITIES: usize = 10_000;
-
-/// A bounded MMSI → [`Identity`] cache with FIFO eviction.
-#[derive(Default)]
-struct IdentityCache {
-    map: HashMap<u32, Identity>,
-    order: std::collections::VecDeque<u32>,
-}
-
-impl IdentityCache {
-    fn get(&self, mmsi: u32) -> Option<&Identity> {
-        self.map.get(&mmsi)
-    }
-
-    /// The entry for `mmsi`, inserting (and evicting the oldest, if at capacity)
-    /// when new.
-    fn entry(&mut self, mmsi: u32) -> &mut Identity {
-        if !self.map.contains_key(&mmsi) {
-            while self.map.len() >= MAX_IDENTITIES {
-                match self.order.pop_front() {
-                    Some(oldest) => {
-                        self.map.remove(&oldest);
-                    }
-                    None => break, // order drifted; never spin
-                }
-            }
-            self.order.push_back(mmsi);
-        }
-        self.map.entry(mmsi).or_default()
-    }
-}
-
-/// Per-MMSI cap on raw NMEA sentences carried forward before the next emit, and
-/// on their total bytes. A feed streaming static/unmapped sentences for a vessel
-/// that never reports a position must cost bounded memory: past the cap the oldest
-/// pending sentence is dropped (with a warning), never the whole event.
-const MAX_PENDING_FRAMES: usize = 64;
-const MAX_PENDING_BYTES: usize = 16 * 1024;
-
-/// One vessel's raw sentences received since its last emitted event — static
-/// (types 5/24) and unmapped messages carried forward so their bytes reach the
-/// signed payload of the next position for that MMSI.
-#[derive(Default)]
-struct Carry {
-    pending: VecDeque<Vec<u8>>,
-    pending_bytes: usize,
-    /// Set when a pending sentence was dropped over the cap since the last emit;
-    /// cleared on drain. Drives the event's `payload_truncated` marker.
-    dropped_since_emit: bool,
-}
-
-impl Carry {
-    /// Remember one raw sentence, dropping the oldest pending sentence(s) past the
-    /// cap. Returns how many were dropped (for the metric).
-    fn push_raw(&mut self, raw: &[u8]) -> u64 {
-        self.pending.push_back(raw.to_vec());
-        self.pending_bytes += raw.len();
-        let mut dropped = 0;
-        while self.pending.len() > MAX_PENDING_FRAMES || self.pending_bytes > MAX_PENDING_BYTES {
-            match self.pending.pop_front() {
-                Some(old) => {
-                    self.pending_bytes -= old.len();
-                    self.dropped_since_emit = true;
-                    dropped += 1;
-                }
-                None => break,
-            }
-        }
-        dropped
-    }
-}
-
-/// A bounded MMSI → [`Carry`] cache with FIFO eviction of whole vessels. Bounded
-/// for the same reason as the identity cache: MMSI is attacker-controllable.
-#[derive(Default)]
-struct CarryCache {
-    map: HashMap<u32, Carry>,
-    order: VecDeque<u32>,
-}
-
-impl CarryCache {
-    /// The carry buffer for `mmsi`, creating it (and evicting the oldest vessel if
-    /// at capacity) on first sight.
-    fn entry(&mut self, mmsi: u32) -> &mut Carry {
-        if !self.map.contains_key(&mmsi) {
-            if self.order.len() >= MAX_IDENTITIES {
-                if let Some(old) = self.order.pop_front() {
-                    self.map.remove(&old);
-                }
-            }
-            self.order.push_back(mmsi);
-        }
-        self.map.entry(mmsi).or_default()
-    }
-}
-
-/// Reassembly key for a multi-fragment sentence.
-///
-/// The AIS sequential message id (`seq`) is only 0–9 and is chosen per-transmitter,
-/// so it is **not** unique across vessels. Keying reassembly on `seq` alone lets an
-/// interleaved multipart message from another vessel splice its fragment into this
-/// one's payload — which, once the raw is sealed into a signed event, means another
-/// vessel's bytes in a provenance record. We therefore key on the talker/formatter
-/// (`fields[0]`, distinguishes receivers) and the radio channel (`fields[4]`) as
-/// well. This removes cross-receiver and cross-channel collisions; the residual —
-/// two vessels on the same receiver *and* channel that pick the same `seq` within
-/// the reassembly window — is inherent to AIS (fragments carry no vessel id) and is
-/// bounded by the TTL sweep below.
+/// Reassembly key for a multi-fragment sentence. The sequential message id is
+/// only 0-9 and chosen per transmitter, so the talker and radio channel are
+/// part of the key to keep another receiver's or channel's fragments out of a
+/// vessel's payload. Two vessels on one receiver and channel picking the same
+/// id within `REASM_TTL` can still collide; fragments carry no vessel id.
 #[derive(Clone, PartialEq, Eq, Hash)]
 struct ReasmKey {
     talker: String,
@@ -233,38 +78,41 @@ struct ReasmKey {
     seq: u8,
 }
 
-/// How long a partial reassembly may sit before it is discarded. AIS fragments of
-/// one message arrive milliseconds apart, so anything older is an orphan (a lost
-/// fragment); dropping it stops a much-later, unrelated fragment from completing
-/// it. Deterministic decode is unaffected — only orphan eviction is time-based.
+// Fragments of one message arrive milliseconds apart; an older partial is an
+// orphan and is discarded so an unrelated later fragment cannot complete it.
 const REASM_TTL: Duration = Duration::from_secs(10);
 
-/// One in-progress multi-fragment sentence.
 struct Pending {
     total: u8,
-    next: u8,
     payload: String,
-    /// The raw sentence bytes of each fragment seen so far, so every contributing
-    /// fragment reaches the payload once the message is reassembled and routed.
     raws: Vec<Vec<u8>>,
-    /// When the first fragment arrived — drives the TTL sweep.
     first_seen: Instant,
 }
 
-/// Normalizes AIS for one connector identity. Holds the fragment-reassembly buffer
-/// and the per-MMSI identity cache; a `Mutex` because the [`FrameParser`] contract
-/// is `&self` and the single-consumer loop never contends them.
+impl Pending {
+    fn new(total: u8, now: Instant) -> Self {
+        Self {
+            total,
+            payload: String::new(),
+            raws: Vec::new(),
+            first_seen: now,
+        }
+    }
+
+    /// Fragment `frag_num` of `frag_count` is the next one this message needs.
+    fn continues(&self, frag_count: u8, frag_num: u8) -> bool {
+        self.total == frag_count && self.raws.len() + 1 == frag_num as usize
+    }
+}
+
 pub struct AisParser {
     source_id: String,
     enrichment: Enrichment,
     pending: Mutex<HashMap<ReasmKey, Pending>>,
-    identities: Mutex<IdentityCache>,
-    /// Per-MMSI raw sentences awaiting the vessel's next position emit.
-    carry: Mutex<CarryCache>,
-    /// Carry-forward sentences dropped over the per-MMSI cap, since start.
+    identities: Mutex<MmsiCache<Identity>>,
+    carry: Mutex<MmsiCache<Carry>>,
     dropped: Arc<AtomicU64>,
-    /// ARPA radar targets and the own-ship fix they are measured from.
-    radar: crate::ttm::TtmState,
+    radar: TtmState,
 }
 
 impl AisParser {
@@ -273,24 +121,22 @@ impl AisParser {
             source_id: source_id.into(),
             enrichment,
             pending: Mutex::new(HashMap::new()),
-            identities: Mutex::new(IdentityCache::default()),
-            carry: Mutex::new(CarryCache::default()),
+            identities: Mutex::new(MmsiCache::default()),
+            carry: Mutex::new(MmsiCache::default()),
             dropped: Arc::new(AtomicU64::new(0)),
-            radar: crate::ttm::TtmState::new(None),
+            radar: TtmState::new(None),
         }
     }
 
-    /// A fixed observer site for the radar targets, for a shore-mounted ARPA —
-    /// the same convention as the ASTERIX CAT048 connector. A live GPS fix on
-    /// the feed always wins over this.
+    /// A fixed observer site for TTM targets from a shore-mounted radar. A
+    /// live GGA/RMC fix on the feed takes precedence.
     pub fn with_site(mut self, lat: f64, lon: f64) -> Self {
-        self.radar = crate::ttm::TtmState::new(Some((lat, lon)));
+        self.radar = TtmState::new(Some((lat, lon)));
         self
     }
 
-    /// Parse one NMEA sentence. Returns an enriched position for a position report;
-    /// `Ok(None)` for a static message (which updates the identity cache), an
-    /// unmapped type, or a buffered fragment.
+    /// `Some` for a position report; `None` for a static or unmapped message,
+    /// a buffered fragment, or an NMEA sentence that is not AIS.
     pub fn parse_sentence(&self, frame: &[u8]) -> Result<Option<AisPosition>, AisError> {
         let s = std::str::from_utf8(frame).map_err(|_| AisError::NotAscii)?;
         let original = s.trim();
@@ -299,18 +145,13 @@ impl AisParser {
             return Err(AisError::NotNmea);
         }
         verify_checksum(s)?;
-        // The verbatim (whitespace-trimmed) frame, tag block included when one
-        // was present — the payload preserves the wire, not our parse of it.
-        let raw = original.as_bytes().to_vec();
 
         let star = s.find('*').unwrap_or(s.len());
         let fields: Vec<&str> = s[1..star].split(',').collect();
-        // Sentence-type first, field count second: a real bridge bus carries
-        // heading, depth, wind and dozens of other short sentences alongside
-        // AIS, and none of them is an ERROR - they are simply not ours. Only
-        // a sentence that claims to be AIVDM/AIVDO is held to AIVDM shape.
+        // A bridge bus carries heading, depth, wind and other sentences
+        // alongside AIS; only one that claims to be VDM/VDO is held to its shape.
         if !(fields[0].ends_with("VDM") || fields[0].ends_with("VDO")) {
-            return Ok(None); // an NMEA sentence, just not AIS
+            return Ok(None);
         }
         if fields.len() < 7 {
             return Err(AisError::Fields);
@@ -319,20 +160,18 @@ impl AisParser {
         let frag_num: u8 = fields[2].parse().map_err(|_| AisError::Fields)?;
         let seq: u8 = fields[3].parse().unwrap_or(0);
         let payload = fields[5];
+        // The fill bits belong to the final fragment.
         let fill: u8 = fields[6].parse().unwrap_or(0);
         if frag_count == 0 || frag_num == 0 || frag_num > frag_count {
             return Err(AisError::Fields);
         }
 
+        let raw = original.as_bytes().to_vec();
         if frag_count == 1 {
             let bits = Bits::from_payload(payload, fill)?;
             return self.decode(&bits, vec![raw]);
         }
 
-        // Multi-fragment: accumulate in order, decode when the last arrives. The
-        // fill bits belong to the final fragment. Keyed on (talker, channel, seq)
-        // so an interleaved multipart message from another vessel cannot splice its
-        // fragment into this one's (and thus into a signed payload).
         let key = ReasmKey {
             talker: fields[0].to_string(),
             channel: fields[4].to_string(),
@@ -340,45 +179,28 @@ impl AisParser {
         };
         let now = Instant::now();
         let mut pending = self.pending.lock().expect("reassembly mutex");
-        // Discard orphaned partials so a lost fragment can never be completed later
-        // by an unrelated vessel that reuses the same key. This also bounds memory.
         pending.retain(|_, p| now.duration_since(p.first_seen) < REASM_TTL);
-        if frag_num == 1 {
-            pending.insert(
-                key.clone(),
-                Pending {
-                    total: frag_count,
-                    next: 1,
-                    payload: String::new(),
-                    raws: Vec::new(),
-                    first_seen: now,
-                },
-            );
-        }
-        let done = {
-            let entry = match pending.get_mut(&key) {
-                Some(e) if e.total == frag_count && e.next == frag_num => e,
-                _ => {
-                    pending.remove(&key);
-                    return Ok(None);
-                }
-            };
-            entry.payload.push_str(payload);
-            entry.raws.push(raw);
-            entry.next += 1;
-            frag_num == frag_count
+        let mut entry = if frag_num == 1 {
+            Pending::new(frag_count, now)
+        } else {
+            match pending.remove(&key) {
+                Some(e) if e.continues(frag_count, frag_num) => e,
+                _ => return Ok(None),
+            }
         };
-        if done {
-            let full = pending.remove(&key).expect("entry present");
-            drop(pending);
-            let bits = Bits::from_payload(&full.payload, fill)?;
-            return self.decode(&bits, full.raws);
+        entry.payload.push_str(payload);
+        entry.raws.push(raw);
+        if frag_num < frag_count {
+            pending.insert(key, entry);
+            return Ok(None);
         }
-        Ok(None)
+        drop(pending);
+        let bits = Bits::from_payload(&entry.payload, fill)?;
+        self.decode(&bits, entry.raws)
     }
 
     fn decode(&self, bits: &Bits, raws: Vec<Vec<u8>>) -> Result<Option<AisPosition>, AisError> {
-        if bits.total() < 38 {
+        if bits.valid_bits < 38 {
             return Err(AisError::Truncated);
         }
         let msg_type = bits.u(0, 6) as u8;
@@ -396,70 +218,35 @@ impl AisParser {
                 self.static_class_b(bits, mmsi);
                 None
             }
-            _ => None, // a valid AIS message, just not one we map
+            _ => None,
         };
 
-        match layout {
-            Some(layout) => {
-                // A position emits: drain every sentence carried for this MMSI
-                // since its last emit and append this message's own sentence(s),
-                // so the signed payload holds all contributing frames verbatim.
-                let mut pos = self.position(bits, msg_type, mmsi, layout);
-                let (raw, truncated) = self.carry_drain(mmsi, raws);
-                pos.raw = raw;
-                pos.truncated = truncated;
-                Ok(Some(pos))
+        let mut carry = self.carry.lock().expect("carry mutex");
+        let entry = carry.entry(mmsi);
+        let Some(layout) = layout else {
+            for raw in raws {
+                let dropped = entry.push_raw(raw);
+                if dropped > 0 {
+                    self.dropped.fetch_add(dropped, Ordering::Relaxed);
+                    tracing::warn!(dropped, mmsi, "ais: carry-forward buffer over cap");
+                }
             }
-            // Static/unmapped: no event, but carry the raw sentence(s) forward so
-            // their bytes reach the next position event for this vessel.
-            None => {
-                self.carry_push(mmsi, &raws);
-                Ok(None)
-            }
-        }
+            return Ok(None);
+        };
+        let (raw, truncated) = entry.drain_with(raws);
+        drop(carry);
+        let mut pos = self.position(bits, msg_type, mmsi, layout);
+        pos.raw = raw;
+        pos.truncated = truncated;
+        Ok(Some(pos))
     }
 
-    /// Buffer raw sentences for a vessel that produced no event, bounding the
-    /// per-MMSI buffer and counting any dropped over the cap.
-    fn carry_push(&self, mmsi: u32, raws: &[Vec<u8>]) {
-        let mut cache = self.carry.lock().expect("carry mutex");
-        let entry = cache.entry(mmsi);
-        for raw in raws {
-            let dropped = entry.push_raw(raw);
-            if dropped > 0 {
-                self.dropped.fetch_add(dropped, Ordering::Relaxed);
-                tracing::warn!(dropped, mmsi, "ais: carry-forward buffer over cap");
-            }
-        }
-    }
-
-    /// Drain the carried sentences for `mmsi`, append this position's own
-    /// sentence(s), and newline-join them into the payload (a re-parse splits on
-    /// `\n`). Also reports whether any carried sentence was dropped over the cap.
-    fn carry_drain(&self, mmsi: u32, position_raws: Vec<Vec<u8>>) -> (Vec<u8>, bool) {
-        let mut cache = self.carry.lock().expect("carry mutex");
-        let entry = cache.entry(mmsi);
-        let mut frames: Vec<Vec<u8>> = entry.pending.drain(..).collect();
-        entry.pending_bytes = 0;
-        let truncated = std::mem::take(&mut entry.dropped_since_emit);
-        frames.extend(position_raws);
-        let mut out = Vec::new();
-        for (i, f) in frames.iter().enumerate() {
-            if i > 0 {
-                out.push(b'\n');
-            }
-            out.extend_from_slice(f);
-        }
-        (out, truncated)
-    }
-
-    /// Decode a position report of the given layout and enrich it with the
-    /// vessel's cached identity.
+    /// A position report, with the vessel's cached identity.
     fn position(&self, bits: &Bits, msg_type: u8, mmsi: u32, layout: Layout) -> AisPosition {
         let (sog_off, lon_off, lat_off, cog_off, hdg_off) = layout.offsets();
 
-        // Class A carries navigation status and rate of turn; class B does not.
-        let (nav_status, rot) = match layout {
+        // Only class A carries navigation status and rate of turn.
+        let (nav_status, rot_degmin) = match layout {
             ClassA => (
                 bits.opt_u(38, 4).and_then(nav_status),
                 bits.opt_i(42, 8).and_then(decode_rot),
@@ -467,7 +254,20 @@ impl AisParser {
             ClassB { .. } => (None, None),
         };
 
-        let mut pos = AisPosition {
+        if matches!(layout, ClassB { extended: true }) {
+            let name = bits.opt_text(143, 120);
+            let ship_type = bits.opt_u(263, 8).and_then(|c| ship_type(c as u8));
+            self.merge_identity(mmsi, name, None, ship_type, None);
+        }
+        let id = self
+            .identities
+            .lock()
+            .expect("identity mutex")
+            .get(mmsi)
+            .cloned()
+            .unwrap_or_default();
+
+        AisPosition {
             msg_type,
             mmsi,
             lat: bits
@@ -478,52 +278,33 @@ impl AisParser {
                 .opt_i(lon_off, 28)
                 .map(|v| v as f64 / 600_000.0)
                 .filter(|d| (-180.0..=180.0).contains(d)),
-            sog: bits
+            // 1023 = not available
+            sog_kn: bits
                 .opt_u(sog_off, 10)
                 .filter(|&v| v != 1023)
                 .map(|v| v as f64 / 10.0),
-            cog: bits
+            // 3600 = not available
+            cog_deg: bits
                 .opt_u(cog_off, 12)
                 .filter(|&v| v != 3600)
                 .map(|v| v as f64 / 10.0),
-            heading: bits
+            // 511 = not available
+            heading_deg: bits
                 .opt_u(hdg_off, 9)
                 .filter(|&v| v != 511)
                 .map(|v| v as f64),
-            rot,
+            rot_degmin,
             nav_status,
-            ship_type: None,
-            name: None,
-            callsign: None,
-            imo: None,
-            // Filled by `decode` once the carry-forward buffer is drained.
+            ship_type: id.ship_type,
+            name: id.name,
+            callsign: id.callsign,
+            imo: id.imo,
             raw: Vec::new(),
             truncated: false,
-        };
-
-        // Type 19 carries identity inline; fold it into the cache too.
-        if matches!(layout, ClassB { extended: true }) {
-            let name = bits.opt_text(143, 120);
-            let ship_type = bits.opt_u(263, 8).and_then(|c| ship_type(c as u8));
-            self.merge_identity(mmsi, name, None, ship_type, None);
         }
-
-        let id = self
-            .identities
-            .lock()
-            .expect("identity mutex")
-            .get(mmsi)
-            .cloned();
-        if let Some(id) = id {
-            pos.name = id.name;
-            pos.callsign = id.callsign;
-            pos.ship_type = id.ship_type;
-            pos.imo = id.imo;
-        }
-        pos
     }
 
-    /// Type 5: class A static and voyage data (IMO, call sign, name, ship type).
+    /// Type 5: class A static and voyage data.
     fn static_class_a(&self, bits: &Bits, mmsi: u32) {
         let imo = bits.opt_u(40, 30).map(|v| v as u32).filter(|&v| v != 0);
         let callsign = bits.opt_text(70, 42);
@@ -532,8 +313,8 @@ impl AisParser {
         self.merge_identity(mmsi, name, callsign, ship_type, imo);
     }
 
-    /// Type 24: class B static, in two parts — A carries the name, B the ship type
-    /// and call sign.
+    /// Type 24: class B static data. Part A carries the name, part B the ship
+    /// type and call sign.
     fn static_class_b(&self, bits: &Bits, mmsi: u32) {
         match bits.opt_u(38, 2) {
             Some(0) => {
@@ -549,8 +330,7 @@ impl AisParser {
         }
     }
 
-    /// Merge newly-seen identity fields into the cache (never overwrite a known
-    /// field with an empty one).
+    /// Fold newly seen fields into the cache; an empty field never overwrites.
     fn merge_identity(
         &self,
         mmsi: u32,
@@ -561,15 +341,11 @@ impl AisParser {
     ) {
         let mut cache = self.identities.lock().expect("identity mutex");
         let e = cache.entry(mmsi);
-        if let Some(v) = name {
-            if !v.is_empty() {
-                e.name = Some(v);
-            }
+        if let Some(v) = name.filter(|v| !v.is_empty()) {
+            e.name = Some(v);
         }
-        if let Some(v) = callsign {
-            if !v.is_empty() {
-                e.callsign = Some(v);
-            }
+        if let Some(v) = callsign.filter(|v| !v.is_empty()) {
+            e.callsign = Some(v);
         }
         if ship_type.is_some() {
             e.ship_type = ship_type;
@@ -579,20 +355,14 @@ impl AisParser {
         }
     }
 
-    fn base_builder(&self, p: &AisPosition) -> EventBuilder {
-        // Every raw sentence that produced this event is preserved verbatim in the
-        // signed payload (newline-delimited) — nothing the parser does not yet map
-        // is lost. MMSI is the stable identity (source_uid = track key; `mmsi` =
-        // native); IMO stays a native identifier in metadata.
+    fn base_builder(&self, p: AisPosition) -> EventBuilder {
         let mut b = EventBuilder::new(self.source_id.clone(), "mim:vessel")
             .new_id()
-            .payload(p.raw.clone())
+            .payload(p.raw)
             .metadata("source_uid", p.mmsi.to_string())
             .metadata("mmsi", p.mmsi.to_string());
-        // Governed identity: the MMSI under its standard code, in its canonical
-        // nine digits so a coast station's leading zeros match what any other
-        // producer emits. An unconfigured transponder sends 0 and a corrupt
-        // frame can decode past nine digits; neither is an identity.
+        // The governed MMSI is nine digits with leading zeros. An unconfigured
+        // transponder sends 0 and a corrupt frame can exceed nine digits.
         if (1..=999_999_999).contains(&p.mmsi) {
             b = b.identity("AIS", format!("{:09}", p.mmsi));
         }
@@ -602,34 +372,24 @@ impl AisParser {
         if let Some(imo) = p.imo {
             b = b.metadata("imo", imo.to_string());
         }
-
-        // If the carry-forward buffer dropped sentences, the payload is incomplete
-        // — say so, so a re-parser never mistakes it for the full set of frames.
         if p.truncated {
             b = b.metadata("payload_truncated", "true");
         }
-
-        // Parse every field into attributes; Core auto-demotes undeclared keys.
-        // Affiliation is only ever the operator's explicit assertion — never a
-        // connector-invented default (AIS carries none of its own).
         if let Some(aff) = self.enrichment.hostility.as_deref() {
             b = b.attribute("hostility", aff);
         }
-        // Governed `speed` is m/s; keep the native knots in metadata (ADR-0019).
-        if let Some(kn) = p.sog {
+        if let Some(kn) = p.sog_kn {
             b = b.attribute("speed", format!("{:.2}", kn * KNOTS_TO_MPS));
             b = b.metadata("speed_kn", format!("{kn:.1}"));
         }
-        // course (track over ground) and heading (where the bow points) are
-        // distinct — do not cross them.
-        if let Some(cog) = p.cog {
-            b = b.attribute("course", format!("{cog:.1}")); // degrees
+        if let Some(deg) = p.cog_deg {
+            b = b.attribute("course", format!("{deg:.1}"));
         }
-        if let Some(h) = p.heading {
-            b = b.attribute("heading", format!("{h:.0}")); // degrees true
+        if let Some(deg) = p.heading_deg {
+            b = b.attribute("heading", format!("{deg:.0}"));
         }
-        if let Some(rot) = p.rot {
-            b = b.attribute("rate_of_turn", format!("{rot:.1}")); // deg/min
+        if let Some(rot) = p.rot_degmin {
+            b = b.attribute("rate_of_turn", format!("{rot:.1}"));
         }
         if let Some(ns) = p.nav_status {
             b = b.attribute("nav_status", ns);
@@ -637,63 +397,48 @@ impl AisParser {
         if let Some(vt) = p.ship_type {
             b = b.attribute("vessel_type", vt);
         }
-        if let Some(name) = &p.name {
-            b = b.attribute("vessel_name", name.clone());
+        if let Some(name) = p.name {
+            b = b.attribute("vessel_name", name);
         }
-        if let Some(cs) = &p.callsign {
-            b = b.attribute("callsign", cs.clone());
+        if let Some(cs) = p.callsign {
+            b = b.attribute("callsign", cs);
         }
         b
     }
 
-    /// Build a canonical event with an explicit observation timestamp (tests pin
-    /// this path for determinism).
-    pub fn to_event_at(&self, p: &AisPosition, observed: &str) -> Result<Event, AisError> {
-        self.base_builder(p)
-            .timestamp(observed)
-            .build()
-            .map_err(|e| AisError::Build(e.to_string()))
-    }
-
-    /// Build a canonical event stamped with receipt time — AIS position reports
-    /// carry no absolute timestamp, so observation time is when we saw it.
-    fn to_event_now(&self, p: &AisPosition) -> Result<Event, AisError> {
-        self.base_builder(p)
-            .now()
-            .build()
-            .map_err(|e| AisError::Build(e.to_string()))
+    pub fn to_event_at(&self, p: AisPosition, observed: &str) -> Result<Event, AisError> {
+        Ok(self.base_builder(p).timestamp(observed).build()?)
     }
 }
 
 impl FrameParser for AisParser {
     fn parse(&self, frame: &[u8]) -> Result<Vec<Event>, ParseError> {
-        // Radar family first: TTM targets plus the GGA/RMC own-ship fixes that
-        // geolocate them share the bus with AIS and are checksummed the same.
+        // TTM targets and the GGA/RMC own-ship fixes that place them share the
+        // bus with AIS.
         if let Ok(s) = std::str::from_utf8(frame) {
             let s = strip_tag_block(s.trim());
-            if (s.starts_with('$') || s.starts_with('!')) && crate::ttm::TtmState::wants(&s[1..]) {
-                verify_checksum(s).map_err(box_err)?;
+            if (s.starts_with('$') || s.starts_with('!')) && TtmState::wants(&s[1..]) {
+                verify_checksum(s)?;
                 let star = s.find('*').unwrap_or(s.len());
                 let fields: Vec<&str> = s[1..star].split(',').collect();
-                return match self
-                    .radar
-                    .handle(&fields, s.as_bytes().to_vec())
-                    .map_err(box_err)?
-                {
-                    Some(target) => {
-                        let event =
-                            crate::ttm::to_event(&self.source_id, &self.enrichment, &target)
-                                .map_err(|e| Box::new(AisError::Build(e)) as ParseError)?;
-                        Ok(vec![event])
-                    }
-                    None => Ok(Vec::new()),
+                let Some(target) = self.radar.handle(&fields, s.as_bytes().to_vec())? else {
+                    return Ok(Vec::new());
                 };
+                let event = crate::ttm::to_event(&self.source_id, &self.enrichment, target)
+                    .map_err(AisError::from)?;
+                return Ok(vec![event]);
             }
         }
-        match self.parse_sentence(frame).map_err(box_err)? {
-            Some(pos) => Ok(vec![self.to_event_now(&pos).map_err(box_err)?]),
-            None => Ok(Vec::new()),
-        }
+        let Some(pos) = self.parse_sentence(frame)? else {
+            return Ok(Vec::new());
+        };
+        // AIS position reports carry no absolute time, so stamp the time of receipt.
+        let event = self
+            .base_builder(pos)
+            .now()
+            .build()
+            .map_err(AisError::from)?;
+        Ok(vec![event])
     }
 
     fn counters(&self) -> Vec<(&'static str, Arc<AtomicU64>)> {
@@ -704,11 +449,8 @@ impl FrameParser for AisParser {
     }
 }
 
-/// Strip an NMEA 4.0 TAG block (`\...\` before the sentence), which live
-/// aggregated feeds prepend for source and timestamp routing. The block has its
-/// own checksum covering only itself; the sentence keeps its own, which is the
-/// one this parser verifies. The verbatim frame INCLUDING the tag block is what
-/// lands in the signed payload, so the routing context is preserved.
+/// Strip an NMEA 4.0 TAG block (`\...\` before the sentence). The block's own
+/// checksum covers only the block; the payload keeps the frame with it.
 fn strip_tag_block(s: &str) -> &str {
     if let Some(rest) = s.strip_prefix('\\') {
         if let Some(end) = rest.find('\\') {
@@ -718,18 +460,13 @@ fn strip_tag_block(s: &str) -> &str {
     s
 }
 
-fn box_err(e: AisError) -> ParseError {
-    Box::new(e) as ParseError
-}
-
-/// Position-report field layout: class A (types 1/2/3) and class B (18/19) place
-/// speed/lon/lat/course/heading at different bit offsets.
+/// Class A (types 1-3) and class B (18, 19) place the kinematic fields at
+/// different bit offsets.
 #[derive(Clone, Copy, PartialEq)]
 enum Layout {
     ClassA,
     ClassB { extended: bool },
 }
-use Layout::{ClassA, ClassB};
 
 impl Layout {
     /// `(sog, lon, lat, cog, heading)` bit offsets.
@@ -741,7 +478,7 @@ impl Layout {
     }
 }
 
-/// AIS navigation status (ITU-R M.1371 table). 15 (undefined) → `None`.
+/// ITU-R M.1371 navigation status; 15 is undefined.
 fn nav_status(code: u64) -> Option<&'static str> {
     Some(match code {
         0 => "under-way-using-engine",
@@ -759,7 +496,7 @@ fn nav_status(code: u64) -> Option<&'static str> {
     })
 }
 
-/// Ship-type code (0–99) → operational category. 0 / unknown → `None`.
+/// Ship-type code (0-99) to category; 0 is not available.
 fn ship_type(code: u8) -> Option<&'static str> {
     Some(match code {
         20..=29 => "wing-in-ground",
@@ -786,8 +523,7 @@ fn ship_type(code: u8) -> Option<&'static str> {
     })
 }
 
-/// Decode the AIS rate-of-turn indicator to degrees/minute. `-128` (not
-/// available) and out-of-range values → `None`.
+/// Rate-of-turn indicator to degrees per minute; -128 is not available.
 fn decode_rot(raw: i64) -> Option<f64> {
     if raw <= -128 || raw > 127 {
         return None;
@@ -796,8 +532,7 @@ fn decode_rot(raw: i64) -> Option<f64> {
     Some((s * s) * (raw.signum() as f64))
 }
 
-/// Verify the trailing `*HH` NMEA checksum: XOR of every byte between the `!`/`$`
-/// talker and the `*`.
+/// The trailing `*HH` is the XOR of every byte between the `!`/`$` and the `*`.
 fn verify_checksum(s: &str) -> Result<(), AisError> {
     let star = s.rfind('*').ok_or(AisError::Checksum)?;
     let given = s.get(star + 1..star + 3).ok_or(AisError::Checksum)?;
@@ -810,136 +545,37 @@ fn verify_checksum(s: &str) -> Result<(), AisError> {
     }
 }
 
-/// The AIS 6-bit character set (value 0–63), used for names, call signs, etc.
-const SIXBIT_ASCII: &[u8; 64] =
-    b"@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_ !\"#$%&'()*+,-./0123456789:;<=>?";
-
-/// A view over the 6-bit-armored payload, indexable by absolute bit position
-/// (MSB-first within each 6-bit group).
-struct Bits {
-    six: Vec<u8>,
-    valid_bits: usize,
-}
-
-impl Bits {
-    fn from_payload(payload: &str, fill: u8) -> Result<Bits, AisError> {
-        let mut six = Vec::with_capacity(payload.len());
-        for c in payload.bytes() {
-            let mut v = c as i16 - 48;
-            if v > 40 {
-                v -= 8;
-            }
-            if !(0..=63).contains(&v) {
-                return Err(AisError::Armor(c));
-            }
-            six.push(v as u8);
-        }
-        let valid_bits = (six.len() * 6).saturating_sub(fill as usize);
-        Ok(Bits { six, valid_bits })
-    }
-
-    fn total(&self) -> usize {
-        self.valid_bits
-    }
-
-    fn u(&self, start: usize, n: usize) -> u64 {
-        let mut val = 0u64;
-        for i in 0..n {
-            let bit = start + i;
-            let b = (self.six[bit / 6] >> (5 - (bit % 6))) & 1;
-            val = (val << 1) | b as u64;
-        }
-        val
-    }
-
-    fn i(&self, start: usize, n: usize) -> i64 {
-        let u = self.u(start, n);
-        if u & (1 << (n - 1)) != 0 {
-            u as i64 - (1i64 << n)
-        } else {
-            u as i64
-        }
-    }
-
-    /// Read `n` bits as unsigned, or `None` if they run past the valid payload.
-    fn opt_u(&self, start: usize, n: usize) -> Option<u64> {
-        (start + n <= self.valid_bits).then(|| self.u(start, n))
-    }
-
-    /// Read `n` bits as signed, or `None` if they run past the valid payload.
-    fn opt_i(&self, start: usize, n: usize) -> Option<i64> {
-        (start + n <= self.valid_bits).then(|| self.i(start, n))
-    }
-
-    /// Read a `bits`-long 6-bit ASCII string, trimmed of `@` padding and
-    /// whitespace. `None` if it runs past the payload or is empty.
-    fn opt_text(&self, start: usize, bits: usize) -> Option<String> {
-        if start + bits > self.valid_bits {
-            return None;
-        }
-        let mut s = String::with_capacity(bits / 6);
-        for i in 0..(bits / 6) {
-            let v = self.u(start + i * 6, 6) as usize;
-            s.push(SIXBIT_ASCII[v] as char);
-        }
-        let s = s.trim_end_matches('@').trim().to_string();
-        (!s.is_empty()).then_some(s)
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn a_mixed_bridge_bus_is_ignored_not_rejected() {
-        // Real RS-422 bridge wiring carries heading, depth, wind, rate-of-turn
-        // and more alongside AIS. Every one of these short sentences must be
-        // "not ours", never an error - at 38400 baud an error per sentence is
-        // a rejection storm in the operator's metrics.
-        let cs = |body: &str| -> String {
-            let x = body.bytes().fold(0u8, |a, b| a ^ b);
-            format!("${body}*{x:02X}")
-        };
-        let parser = parser();
-        for body in [
-            "HEHDT,274.07,T",
-            "TIROT,-2.5,A",
-            "SDDPT,23.9,0.0",
-            "WIMWV,214.0,R,4.2,N,A",
-            "HCHDG,271.1,,,5.1,W",
-            "GPGLL,5432.11,N,01832.15,E,102834,A",
-        ] {
-            let out = parser
-                .parse(cs(body).as_bytes())
-                .unwrap_or_else(|e| panic!("{body}: must be ignored, got error {e}"));
-            assert!(out.is_empty(), "{body}: ignored means no events");
-        }
-        // A sentence that CLAIMS to be AIVDM is still held to AIVDM shape.
-        assert!(parser.parse(cs("AIVDM,1,1").as_bytes()).is_err());
-    }
-
     use super::*;
 
-    // Real, pyais-verified sentences (see the connector's verification notes):
-    // type 1, MMSI 227006760, 49.475577 N 0.131380 E, COG 36.7, nav under-way.
+    // pyais-verified. Type 1, MMSI 227006760, 49.475577 N 0.131380 E, COG 36.7,
+    // under way using engine.
     const T1: &[u8] = b"!AIVDM,1,1,,A,13HOI:0P0000VOHLCnHQKwvL05Ip,0*23";
-    // type 5 static for MMSI 603916439: IMO 439303422, callsign ZA83R, name
-    // ARCO AVON, ship type 69 (passenger). Regenerated with pyais (valid checksums).
+    // Type 5 for MMSI 603916439: IMO 439303422, call sign ZA83R, ARCO AVON,
+    // ship type 69 (passenger).
     const T5A: &[u8] =
         b"!AIVDO,2,1,0,A,58wt8Ui`g??q`7S=80058<v05Htp00000000001500000000000000000000,0*60";
     const T5B: &[u8] = b"!AIVDO,2,2,0,A,00000000000,2*26";
-    // type 1 position for the SAME MMSI 603916439 (SOG 10.0, COG 90, hdg 90).
+    // Type 1 for MMSI 603916439: SOG 10.0, COG 90, heading 90.
     const POS_ARCO: &[u8] = b"!AIVDO,1,1,,A,18wt8UhP1T04Tv0LW3P3Q2l1P000,0*1D";
+    const OBSERVED: &str = "2026-06-10T08:00:00Z";
 
     fn parser() -> AisParser {
         AisParser::new("ais-coast-1", Enrichment::default())
     }
 
-    /// A parser with an operator-asserted affiliation (own the COP's neutral fill).
     fn configured() -> AisParser {
         AisParser::new(
             "ais-coast-1",
             Enrichment::default().with_hostility("Neutral"),
         )
+    }
+
+    /// `body` with its leading `!`/`$`, followed by the computed `*HH`.
+    fn with_checksum(body: &str) -> Vec<u8> {
+        let cs = body[1..].bytes().fold(0u8, |a, b| a ^ b);
+        format!("{body}*{cs:02X}").into_bytes()
     }
 
     fn attr_of<'a>(ev: &'a Event, k: &str) -> Option<&'a str> {
@@ -948,6 +584,7 @@ mod tests {
             .find(|a| a.key == k)
             .map(|a| a.value.as_str())
     }
+
     fn meta_of<'a>(ev: &'a Event, k: &str) -> Option<&'a str> {
         ev.metadata
             .iter()
@@ -956,181 +593,165 @@ mod tests {
     }
 
     #[test]
+    fn other_bridge_sentences_are_ignored() {
+        let parser = parser();
+        for body in [
+            "$HEHDT,274.07,T",
+            "$TIROT,-2.5,A",
+            "$SDDPT,23.9,0.0",
+            "$WIMWV,214.0,R,4.2,N,A",
+            "$HCHDG,271.1,,,5.1,W",
+            "$GPGLL,5432.11,N,01832.15,E,102834,A",
+        ] {
+            let out = parser
+                .parse(&with_checksum(body))
+                .unwrap_or_else(|e| panic!("{body}: must be ignored, got error {e}"));
+            assert!(out.is_empty(), "{body}: ignored means no events");
+        }
+        assert!(
+            parser.parse(&with_checksum("$AIVDM,1,1")).is_err(),
+            "a sentence claiming AIVDM is held to its shape"
+        );
+    }
+
+    #[test]
     fn decodes_position_and_kinematics() {
         let p = parser().parse_sentence(T1).unwrap().unwrap();
         assert_eq!(p.mmsi, 227006760);
         assert!((p.lat.unwrap() - 49.475577).abs() < 1e-5);
-        assert!((p.cog.unwrap() - 36.7).abs() < 1e-6);
-        assert_eq!(p.sog, Some(0.0));
+        assert!((p.cog_deg.unwrap() - 36.7).abs() < 1e-6);
+        assert_eq!(p.sog_kn, Some(0.0));
         assert_eq!(p.nav_status, Some("under-way-using-engine"));
-        assert_eq!(p.heading, None); // 511 = not available
-        assert_eq!(p.rot, None); // -128 = not available
+        assert_eq!(p.heading_deg, None, "511 is not available");
+        assert_eq!(p.rot_degmin, None, "-128 is not available");
     }
 
     #[test]
-    fn static_data_correlates_into_later_positions() {
+    fn static_data_joins_later_positions() {
         let p = parser();
-        // Static message arrives first (two fragments) — no event, cached.
         assert_eq!(p.parse_sentence(T5A).unwrap(), None);
         assert_eq!(p.parse_sentence(T5B).unwrap(), None);
-        // A later position for the same MMSI is enriched with the identity.
         let pos = p.parse_sentence(POS_ARCO).unwrap().unwrap();
         assert_eq!(pos.mmsi, 603916439);
         assert_eq!(pos.name.as_deref(), Some("ARCO AVON"));
         assert_eq!(pos.callsign.as_deref(), Some("ZA83R"));
         assert_eq!(pos.ship_type, Some("passenger"));
         assert_eq!(pos.imo, Some(439303422));
-        assert!((pos.sog.unwrap() - 10.0).abs() < 1e-6);
-    }
-
-    /// Append the correct NMEA `*HH` checksum to a sentence body (for crafting
-    /// interleaving fixtures).
-    fn with_checksum(body: &str) -> Vec<u8> {
-        let cs = body[1..].bytes().fold(0u8, |a, b| a ^ b);
-        format!("{body}*{cs:02X}").into_bytes()
+        assert!((pos.sog_kn.unwrap() - 10.0).abs() < 1e-6);
     }
 
     #[test]
-    fn interleaved_multipart_on_same_seq_do_not_contaminate() {
-        // MMSI 603916439's type-5 static arrives as two fragments on channel A,
-        // seq 0. Between them, an UNRELATED multipart from another transmission
-        // arrives with the SAME seq 0 but on channel B. Keyed on seq alone, the
-        // decoy would overwrite the partial and be completed by T5B, splicing the
-        // wrong bytes into the reassembly (and, post-payload, into a signed event).
-        // Keyed on (talker, channel, seq) the two stay separate.
+    fn interleaved_fragments_on_other_channel_stay_apart() {
         let p = parser();
         let decoy = with_checksum("!AIVDO,2,1,0,B,1234567890,0");
-        assert_eq!(p.parse_sentence(T5A).unwrap(), None); // A frag 1/2 -> key (AIVDO,A,0)
-        assert_eq!(p.parse_sentence(&decoy).unwrap(), None); // B frag 1/2 -> key (AIVDO,B,0)
-        assert_eq!(p.parse_sentence(T5B).unwrap(), None); // A frag 2/2 -> completes T5A
-                                                          // The static identity for 603916439 was reassembled correctly (not spliced
-                                                          // from the decoy), so a later position for that MMSI is enriched as expected.
+        assert_eq!(p.parse_sentence(T5A).unwrap(), None);
+        assert_eq!(p.parse_sentence(&decoy).unwrap(), None);
+        assert_eq!(p.parse_sentence(T5B).unwrap(), None);
         let pos = p.parse_sentence(POS_ARCO).unwrap().unwrap();
         assert_eq!(pos.mmsi, 603916439);
-        assert_eq!(pos.name.as_deref(), Some("ARCO AVON"));
+        assert_eq!(pos.name.as_deref(), Some("ARCO AVON"), "not spliced");
         assert_eq!(pos.callsign.as_deref(), Some("ZA83R"));
     }
 
     #[test]
-    fn event_carries_canonical_attributes_and_native_units() {
+    fn event_has_canonical_attributes_and_native_units() {
         let p = configured();
         p.parse_sentence(T5A).unwrap();
         p.parse_sentence(T5B).unwrap();
         let pos = p.parse_sentence(POS_ARCO).unwrap().unwrap();
-        let ev = p.to_event_at(&pos, "2026-06-10T08:00:00Z").unwrap();
+        let ev = p.to_event_at(pos, OBSERVED).unwrap();
         assert_eq!(attr_of(&ev, "hostility"), Some("Neutral"));
-        // Governed `speed` is m/s (10 kn * 0.514444); native knots kept in metadata.
         assert_eq!(attr_of(&ev, "speed"), Some("5.14"));
         assert_eq!(meta_of(&ev, "speed_kn"), Some("10.0"));
         assert_eq!(attr_of(&ev, "vessel_name"), Some("ARCO AVON"));
         assert_eq!(attr_of(&ev, "vessel_type"), Some("passenger"));
-        // MMSI is the stable track identity (source_uid) and native id; IMO native.
         assert_eq!(meta_of(&ev, "source_uid"), Some("603916439"));
         assert_eq!(meta_of(&ev, "mmsi"), Some("603916439"));
-        assert!(ev.metadata.iter().any(|m| m.key == "imo"));
+        assert!(meta_of(&ev, "imo").is_some());
         assert_eq!(attr_of(&ev, "alt_id"), Some("603916439"));
         assert_eq!(attr_of(&ev, "alt_id_standard"), Some("AIS"));
-        // A coast station's MMSI keeps its leading zeros in the governed form,
-        // and an unconfigured transponder's MMSI 0 is not an identity at all.
-        let mut coast = pos.clone();
-        coast.mmsi = 2_320_001;
-        let ev = p.to_event_at(&coast, "2026-06-10T08:00:00Z").unwrap();
+    }
+
+    #[test]
+    fn governed_mmsi_is_nine_digits_and_nonzero() {
+        let p = configured();
+        let pos = p.parse_sentence(POS_ARCO).unwrap().unwrap();
+        let coast = AisPosition {
+            mmsi: 2_320_001,
+            ..pos.clone()
+        };
+        let ev = p.to_event_at(coast, OBSERVED).unwrap();
         assert_eq!(attr_of(&ev, "alt_id"), Some("002320001"));
-        let mut blank = pos.clone();
-        blank.mmsi = 0;
-        let ev = p.to_event_at(&blank, "2026-06-10T08:00:00Z").unwrap();
+        let blank = AisPosition { mmsi: 0, ..pos };
+        let ev = p.to_event_at(blank, OBSERVED).unwrap();
         assert_eq!(attr_of(&ev, "alt_id"), None);
         assert_eq!(meta_of(&ev, "mmsi"), Some("0"));
     }
 
     #[test]
-    fn absent_affiliation_is_not_invented_and_raw_is_preserved() {
-        // Default mode: no operator affiliation -> none is invented (absent stays
-        // absent), and the raw sentence is preserved verbatim in the signed payload.
+    fn hostility_absent_without_config() {
         let p = parser();
         let pos = p.parse_sentence(T1).unwrap().unwrap();
-        let ev = p.to_event_at(&pos, "2026-06-10T08:00:00Z").unwrap();
-        assert!(!ev.attributes.iter().any(|a| a.key == "hostility"));
-        assert!(!ev.metadata.iter().any(|m| m.key == "hostility"));
+        let ev = p.to_event_at(pos, OBSERVED).unwrap();
+        assert_eq!(attr_of(&ev, "hostility"), None);
+        assert_eq!(meta_of(&ev, "hostility"), None);
+    }
+
+    #[test]
+    fn raw_sentence_sealed_in_payload() {
+        let p = parser();
+        let pos = p.parse_sentence(T1).unwrap().unwrap();
+        let ev = p.to_event_at(pos, OBSERVED).unwrap();
         assert_eq!(ev.payload.as_slice(), T1);
     }
 
     #[test]
-    fn carries_static_frames_forward_into_payload() {
-        // The two static fragments (types 5) do not emit; their raw must ride into
-        // the next position event's payload, newline-joined with the position line.
+    fn static_sentences_ride_into_payload() {
         let p = configured();
         assert_eq!(p.parse_sentence(T5A).unwrap(), None);
         assert_eq!(p.parse_sentence(T5B).unwrap(), None);
         let pos = p.parse_sentence(POS_ARCO).unwrap().unwrap();
         assert!(!pos.truncated);
-        let ev = p.to_event_at(&pos, "2026-06-10T08:00:00Z").unwrap();
-        let t5a = std::str::from_utf8(T5A).unwrap();
-        let t5b = std::str::from_utf8(T5B).unwrap();
-        let arco = std::str::from_utf8(POS_ARCO).unwrap();
-        assert_eq!(
-            ev.payload.as_slice(),
-            format!("{t5a}\n{t5b}\n{arco}").as_bytes()
-        );
-        // Attached once: the NEXT position for this MMSI carries only its own line.
+        let ev = p.to_event_at(pos, OBSERVED).unwrap();
+        let want = [T5A, T5B, POS_ARCO].join(&b'\n');
+        assert_eq!(ev.payload, want);
+
         let pos2 = p.parse_sentence(POS_ARCO).unwrap().unwrap();
-        let ev2 = p.to_event_at(&pos2, "2026-06-10T08:00:00Z").unwrap();
-        assert_eq!(ev2.payload.as_slice(), POS_ARCO);
+        let ev2 = p.to_event_at(pos2, OBSERVED).unwrap();
+        assert_eq!(
+            ev2.payload.as_slice(),
+            POS_ARCO,
+            "carried sentences attach to one event only"
+        );
     }
 
     #[test]
-    fn over_cap_drops_oldest_and_marks_payload_truncated() {
-        // Flood one MMSI's carry buffer with complete static messages (2 raws each)
-        // past the frame cap, then emit a position for that MMSI.
+    fn over_cap_drops_oldest_and_marks_truncated() {
         let p = configured();
-        for _ in 0..(MAX_PENDING_FRAMES) {
+        for _ in 0..cache::MAX_PENDING_FRAMES {
             p.parse_sentence(T5A).unwrap();
-            p.parse_sentence(T5B).unwrap(); // completes -> carries T5A,T5B (2 raws)
+            p.parse_sentence(T5B).unwrap();
         }
         let pos = p.parse_sentence(POS_ARCO).unwrap().unwrap();
         assert!(pos.truncated);
-        let ev = p.to_event_at(&pos, "2026-06-10T08:00:00Z").unwrap();
+        let ev = p.to_event_at(pos, OBSERVED).unwrap();
         assert_eq!(meta_of(&ev, "payload_truncated"), Some("true"));
         assert!(p.counters()[0].1.load(Ordering::Relaxed) >= 1);
     }
 
     #[test]
-    fn type24_provides_a_name() {
+    fn type24_part_a_caches_the_name() {
         let p = parser();
-        // Part A carries the name for MMSI 271041815 ("PROGUY").
-        assert_eq!(
-            p.parse_sentence(b"!AIVDO,1,1,,A,H42O55i18tMET000000000000000,0*5D")
-                .unwrap(),
-            None
-        );
-        assert_eq!(
-            p.identities
-                .lock()
-                .unwrap()
-                .get(271041815)
-                .unwrap()
-                .name
-                .as_deref(),
-            Some("PROGUY")
-        );
-    }
-
-    #[test]
-    fn identity_cache_is_bounded_with_fifo_eviction() {
-        let mut cache = IdentityCache::default();
-        for mmsi in 0..(MAX_IDENTITIES as u32 + 100) {
-            cache.entry(mmsi).name = Some(format!("V{mmsi}"));
-        }
-        assert_eq!(cache.map.len(), MAX_IDENTITIES, "cache must stay bounded");
-        assert!(cache.get(0).is_none(), "oldest entries evicted first");
-        assert!(
-            cache.get(MAX_IDENTITIES as u32 + 99).is_some(),
-            "newest kept"
-        );
-        // Re-touching an existing key must not grow the cache or duplicate order.
-        cache.entry(MAX_IDENTITIES as u32 + 99).imo = Some(1);
-        assert_eq!(cache.map.len(), MAX_IDENTITIES);
-        assert_eq!(cache.order.len(), MAX_IDENTITIES);
+        // Part A for MMSI 271041815, name PROGUY.
+        let part_a = b"!AIVDO,1,1,,A,H42O55i18tMET000000000000000,0*5D";
+        assert_eq!(p.parse_sentence(part_a).unwrap(), None);
+        let name = p
+            .identities
+            .lock()
+            .unwrap()
+            .get(271041815)
+            .and_then(|id| id.name.clone());
+        assert_eq!(name.as_deref(), Some("PROGUY"));
     }
 
     #[test]
@@ -1140,25 +761,25 @@ mod tests {
     }
 
     #[test]
-    fn non_ais_talker_is_ignored_not_errored() {
+    fn non_ais_talker_is_ignored() {
         let gga = b"$GPGGA,123519,4807.038,N,01131.000,E,1,08,0.9,545.4,M,46.9,M,,*47";
         assert_eq!(parser().parse_sentence(gga).unwrap(), None);
     }
 
     #[test]
-    fn garbage_never_panics_and_is_rejected() {
-        assert!(parser().parse_sentence(b"\xff\x00not nmea").is_err());
+    fn garbage_never_panics() {
+        assert_eq!(
+            parser().parse_sentence(b"\xff\x00not nmea"),
+            Err(AisError::NotAscii)
+        );
     }
 
     #[test]
-    fn a_tag_blocked_sentence_from_a_live_feed_parses_and_keeps_the_block() {
-        // Captured verbatim from the Norwegian coastal administration's public
-        // feed: an NMEA 4.0 TAG block (source id + unix time) before the
-        // sentence. The block must not break parsing, and the signed payload
-        // must carry the frame as it arrived, block included.
+    fn tag_block_parses_and_stays_in_payload() {
+        // Captured from the Norwegian coastal administration's public feed.
         let framed = br"\s:2573335,c:1787847115*0D\!BSVDM,1,1,,A,13n2@S00000kU7DU6k09vVad08PC,0*30";
         let pos = parser().parse_sentence(framed).unwrap().unwrap();
-        let ev = parser().to_event_at(&pos, "2026-08-27T12:00:00Z").unwrap();
+        let ev = parser().to_event_at(pos, "2026-08-27T12:00:00Z").unwrap();
         assert_eq!(ev.payload, framed.to_vec());
     }
 }

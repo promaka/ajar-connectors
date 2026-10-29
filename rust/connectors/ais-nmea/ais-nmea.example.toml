@@ -1,53 +1,38 @@
 # SPDX-License-Identifier: Apache-2.0
 #
-# Example AIS / NMEA ingress config. Copy, adjust, and run:
-#   ajar-ais-nmea ./ais-nmea.toml
-#
-# A second AIS feed is a second copy of this file with a different source_id,
-# key, and endpoint — no rebuild.
+# AIS and ARPA radar (TTM) ingress from an NMEA 0183 feed.
+# Run: ajar-ais-nmea ./ais-nmea.toml
 
-# This connector's Ajar identity; its signing key is registered in Core here.
 source_id = "ais-coast-1"
-
-# Core's NATS endpoint (tls://host:443 with AJAR_TLS_* in production).
 nats_url = "nats://127.0.0.1:4222"
-
 subject_prefix = "ajar.ingest"
-
-# The connector's Ed25519 signing seed (32 raw bytes or 64-char hex). Secret.
 signing_key_path = "/etc/ajar/ais-coast-1.seed"
 
-# Coastal AIS is overwhelmingly civil traffic.
+# AIS carries no hostility; set the one the picture should show.
 default_hostility = "Neutral"
 
-# The security marking every event carries, stamped inside its signature.
-# Every field is optional; see README section 7f.
+# Security marking stamped into every event; all fields optional.
 # [marking]
 # classification = "restricted"
 # releasable_to = ["GBR", "ITA"]
 # caveats = ["EXERCISE"]
 
 [transport]
-# AIS aggregators and ship-network NMEA servers usually expose a TCP port that
-# streams one sentence per line — connect out to it:
+# An AIS aggregator or ship-network NMEA server streaming one sentence per line.
 kind = "tcp-client"
 connect = "ais-feed.example.mil:5631"
 
-# ...or a local receiver that UDP-broadcasts sentences (one per datagram):
+# Or a receiver that sends one sentence per UDP datagram:
 #   kind = "udp"
 #   bind = "0.0.0.0:10110"
 
-# ...or straight off the bridge wiring: NMEA over RS-422/RS-232 serial. The
-# shipped binary reads serial out of the box. If the port opens Permission
-# denied, add the service user to the port's group (usually dialout).
+# Or the bridge's RS-422/RS-232 wiring; the service user needs the port's group:
 #   kind = "serial"
 #   device = "/dev/ttyUSB0"
-#   baud = 38400            # AIS is 38400; classic NMEA instruments are 4800
+#   # AIS runs at 38400; classic NMEA instruments at 4800.
+#   baud = 38400
 
-# ARPA radar targets ($--TTM) on the same feed are decoded too: geolocated from
-# own-ship GGA/RMC fixes on the bus, or from this fixed site for a shore-mounted
-# radar. Without either, range/bearing ride as metadata and no position is
-# guessed.
+# Fixed site for a shore radar's TTM targets; a GGA/RMC fix on the feed wins.
 # [sensor]
 # lat = 60.39
 # lon = 5.32

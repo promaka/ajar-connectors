@@ -15,9 +15,7 @@ name = "ajar-ais-nmea"
 path = "src/main.rs"
 
 [features]
-# Real bridges deliver NMEA over RS-422/RS-232, so the shipped binary reads a
-# serial port out of the box; a lean no-serial build remains one flag away
-# (--no-default-features).
+# Inert unless a config sets kind = "serial" or "dds"; --no-default-features drops them.
 default = ["serial", "dds"]
 serial = ["ajar-connector-common/serial"]
 dds = ["ajar-connector-common/dds"]
@@ -29,6 +27,7 @@ tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 anyhow.workspace = true
+thiserror.workspace = true
 
 [dev-dependencies]
 ed25519-dalek.workspace = true
@@ -37,6 +36,7 @@ hex.workspace = true
 serde_json = "1"
 proptest = "1"
 uuid = "1"
+tempfile.workspace = true
 
 # See CONTRIBUTING.md, "Releases".
 [package.metadata.ajar]

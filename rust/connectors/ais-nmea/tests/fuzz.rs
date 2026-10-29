@@ -1,10 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
-//! The parser sits on an untrusted edge; its one absolute obligation is to never
-//! panic. Random bytes, hostile armor, absurd fragment counts — all must return
-//! `Ok` or a typed error, never abort.
+//! Arbitrary, AIVDM-shaped and radar-shaped input never panics the parser.
 
 use ajar_ais_nmea::AisParser;
-use ajar_connector_common::Enrichment;
+use ajar_connector_common::{Enrichment, FrameParser};
 use proptest::prelude::*;
 
 fn parser() -> AisParser {
@@ -19,7 +17,6 @@ proptest! {
         let _ = parser().parse_sentence(&bytes);
     }
 
-    /// AIVDM-shaped input with hostile fragment counts and armor must never panic.
     #[test]
     fn aivdm_shaped_input_never_panics(
         count in 0u16..300,
@@ -35,13 +32,8 @@ proptest! {
     }
 }
 
-use ajar_connector_common::FrameParser;
-
-proptest::proptest! {
-    /// The radar path (TTM/GGA/RMC dispatch, geolocation, tag-block stripping)
-    /// enters through FrameParser::parse, so it is fuzzed there: arbitrary
-    /// bytes and TTM-shaped sentences must never panic, whatever the field
-    /// soup and whether or not a tag block precedes it.
+// The radar path is only reachable through FrameParser::parse.
+proptest! {
     #[test]
     fn arbitrary_bytes_never_panic_the_full_parse(
         bytes in proptest::collection::vec(any::<u8>(), 0..1024)
