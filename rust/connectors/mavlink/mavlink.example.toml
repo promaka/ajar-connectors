@@ -1,43 +1,23 @@
 # SPDX-License-Identifier: Apache-2.0
 #
-# Example MAVLink ingress config. Copy, adjust, and run:
-#   ajar-mavlink ./mavlink.toml
-#
-# A second vehicle feed is a second copy of this file with a different source_id,
-# key, and bind — no rebuild. Multiple vehicles on one stream are kept distinct
-# by their MAVLink system id (carried as `mav_sysid` metadata on every event).
-#
-# IMPORTANT: vehicles sharing one stream must each have a UNIQUE MAVLink system id
-# (SYSID_THISMAV). ArduPilot and PX4 both default it to 1, so two airframes nobody
-# reconfigured will both report sysid 1 — they merge into a single track and their
-# raw frames mix in the payload, and the connector cannot tell them apart. On first
-# sight of each system id the connector logs it; check that count against how many
-# airframes you expect.
+# MAVLink (UAS autopilot) ingress. Run: ajar-mavlink ./mavlink.toml
 
 source_id = "uav-flight-1"
 nats_url = "nats://127.0.0.1:4222"
 subject_prefix = "ajar.ingest"
 signing_key_path = "/etc/ajar/uav-flight-1.seed"
 
-# Own-force UAS feed: stamp Friend on every track (MAVLink carries no
-# hostility of its own).
+# MAVLink carries no hostility; set the one the picture should show.
 default_hostility = "Friend"
 
-# The security marking every event carries, stamped inside its signature.
-# Every field is optional; see README section 7f.
+# Security marking stamped into every event; all fields optional.
 # [marking]
 # classification = "restricted"
 # releasable_to = ["GBR", "ITA"]
 # caveats = ["EXERCISE"]
 
-# The connector decodes full telemetry (position, attitude, airdata, power/health,
-# GPS quality, flight mode) and maps every field the drone reports; whatever it
-# omits stays absent. Each airframe is its own track (MAVLink system id -> stable
-# source_uid + mav_sysid metadata), so Core never collapses multiple UAS onto one.
-#
-# Decoded fields are emitted as attributes; Core's signed ontology governs which
-# are kept (see ../ATTRIBUTES.md and `ajar export-ontology`).
-
+# Vehicles sharing one stream need distinct SYSID_THISMAV (ArduPilot and PX4
+# default to 1); two with the same id merge into one track.
 [transport]
 # Autopilots and ground stations commonly forward MAVLink over UDP.
 kind = "udp"

@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! The frame decoder must never panic on hostile input — random bytes, frames
-//! that lie about their length, valid magic with garbage bodies.
+//! Arbitrary and length-lying framed input never panics the parser.
 
 use ajar_connector_common::Enrichment;
 use ajar_mavlink::MavParser;
@@ -18,8 +17,6 @@ proptest! {
         let _ = parser().parse_frame(&bytes);
     }
 
-    /// Frames that start with a real MAVLink magic byte but carry an arbitrary,
-    /// possibly length-lying body must never panic.
     #[test]
     fn framed_input_never_panics(
         magic in prop::sample::select(vec![0xFEu8, 0xFD, 0x00, 0xAB]),
