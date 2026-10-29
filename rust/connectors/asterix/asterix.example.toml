@@ -1,90 +1,53 @@
 # SPDX-License-Identifier: Apache-2.0
 #
-# Example ASTERIX ingress config. Copy, adjust, and run:
-#   ajar-asterix ./asterix.toml
-#
-# One connector decodes whatever surveillance categories arrive on its feed:
-#   CAT010 surface movement reports (airport surface; coastal and naval radars
-#          use it for sea-surface targets; WGS-84, polar or Cartesian position)
-#   CAT021 ADS-B target reports (cooperative traffic, WGS-84 position)
-#   CAT034 radar service messages: the radar's own heartbeat. Its status (NOGO,
-#          overloads, rotation period, position) is published once per antenna
-#          rotation as a mim:sensor event; jamming strobes are published too
-#   CAT048 monoradar target reports (primary + Mode S/SSR; range/azimuth position)
-#   CAT062 SDPS system tracks (the fused, recognised air picture; WGS-84 position)
-# Blocks of any other category ride past untouched. A second feed is a second copy
-# of this file with a different source_id, key, and group, no rebuild.
+# ASTERIX ingress: CAT010, CAT021, CAT048 and CAT062 tracks, CAT034 radar
+# heartbeats. Run: ajar-asterix ./asterix.toml
 
 source_id = "radar-adsb-1"
 nats_url = "nats://127.0.0.1:4222"
 subject_prefix = "ajar.ingest"
 signing_key_path = "/etc/ajar/radar-adsb-1.seed"
 
-# The air picture carries no hostility of its own; assign one for the COP.
+# ASTERIX carries no hostility; set the one the picture should show.
 # default_hostility = "Unknown"
 
-# The security marking every event carries, stamped inside its signature.
-# Every field is optional; see README section 7f.
+# Security marking stamped into every event; all fields optional.
 # [marking]
 # classification = "restricted"
 # releasable_to = ["GBR", "ITA"]
 # caveats = ["EXERCISE"]
 
-# CAT048 and CAT010: monoradar reports are range/azimuth (or x/y offsets)
-# RELATIVE to the radar, so the connector needs the radar's site to geolocate them
-# onto the map. Set it to this radar's position. Without it, the reports still
-# flow with the range/azimuth or offsets as metadata, but carry no absolute
-# location. CAT021/CAT062 ignore this (their positions are already WGS-84).
+# Radar site; without it CAT048 and CAT010 sensor-relative plots carry no location.
 # [sensor]
 # lat = 60.31
 # lon = 24.97
 # alt_m = 55.0
 
-# What a CAT010 surface report is, and which surface it is on.
-#
-# A bare radar plot is a domain, not an identification: it says something is on
-# the surface, not what that something is. The default is therefore the untyped
-# class with a domain, and a typed class only once the report identifies the
-# target (a Mode S address makes it an aircraft, a vehicle fleet id a land
-# vehicle). The wire cannot say whether this radar watches sea or apron, so the
-# operator says which with `cat010_domain` (SURFACE, LAND, SUBSURFACE or AIR).
-# Unset, no domain is claimed.
-#
-# `cat010` forces a type for every unidentified plot instead, for an operator who
-# knows the feed is all shipping. A typed class carries no
-# `environment`: the type is the domain, and the ontology governs `environment`
-# on the untyped class alone. `cat034` chooses the type the radar heartbeat
-# publishes as (default mim:sensor).
 # [entity_map]
+# Domain of an unidentified CAT010 plot: SURFACE, LAND, SUBSURFACE or AIR.
 # cat010_domain = "SURFACE"
+# Entity type for every CAT010 plot, instead of one implied by its content.
 # cat010 = "mim:vessel"
+# Entity type of the CAT034 heartbeat; default mim:sensor.
+# cat034 = "mim:sensor"
 
 [transport]
-# ASTERIX is usually distributed as UDP multicast on a surveillance LAN.
 kind = "udp-multicast"
 bind = "0.0.0.0:8600"
 group = "232.1.1.1"
 
-# Evaluating against a recording instead of a live radar? Replay a capture
-# with its original timing (a .pcapng converts with:
-#   tshark -F pcap -r in.pcapng -w out.pcap).
-# [transport]
-# kind = "pcap-replay"
-# path = "/data/radar-capture.pcap"
-# port = 8600        # only the feed, out of a busy capture
-# speed = 1.0        # 1.0 = as recorded; 10 = ten times faster
-# loop = true        # demo mode: replay forever
+# Or replay a pcap capture with its original timing (tshark -F pcap converts pcapng):
+#   kind = "pcap-replay"
+#   path = "/data/radar-capture.pcap"
+#   port = 8600         # only this UDP port
+#   speed = 1.0         # 1.0 = as recorded
+#   loop = true
 
-# Radar output on a DDS bus (a combat system's internal bus, or a ROS 2
-# platform)? Subscribe to the topic that carries the ASTERIX blocks. The
-# type name must be exactly what the publisher registered; the doctor names
-# the right one if it differs. `payload = "octets"` hands the parser the
-# bytes of the type's sequence<octet> field, without the length prefix.
-# [transport]
-# kind = "dds"
-# domain = 0
-# topic = "RadarAsterix"
-# type_name = "Radar::AsterixBlock"
-# payload = "octets"
-# reliability = "best-effort"   # pairs with any publisher; "reliable" asks for resends
-# interface_ip = "10.0.5.12"    # dual-NIC box: the NIC on the DDS network
+# Or subscribe to a DDS topic of ASTERIX blocks; type_name must match the publisher's:
+#   kind = "dds"
+#   domain = 0
+#   topic = "RadarAsterix"
+#   type_name = "Radar::AsterixBlock"
+#   payload = "octets"  # the sequence<octet> field, without its length
+#   reliability = "best-effort"  # pairs with any publisher
+#   interface_ip = "10.0.5.12"   # the NIC on the DDS network

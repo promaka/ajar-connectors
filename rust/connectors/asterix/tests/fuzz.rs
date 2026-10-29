@@ -1,8 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! The ASTERIX decoder walks attacker-influenced FSPEC bitmaps, compound primary
-//! bitmaps, and REP/Explicit length fields, so its one absolute obligation is to
-//! never panic: random bytes, blocks that lie about their length, and FSPECs that
-//! reference every UAP item must all return `Ok` or a typed error.
+//! Arbitrary and category-shaped input never panics the decoder.
 
 use ajar_asterix::AsterixParser;
 use ajar_connector_common::Enrichment;
@@ -20,9 +17,6 @@ proptest! {
         let _ = parser().parse_block(&bytes);
     }
 
-    /// A real category byte, an arbitrary declared length, and a random record
-    /// body — exercises the FSPEC walk, compound bitmaps, and every length model
-    /// across CAT010/021/034/048/062. Must never panic.
     #[test]
     fn category_shaped_input_never_panics(
         cat in prop::sample::select(vec![10u8, 21, 34, 48, 62]),

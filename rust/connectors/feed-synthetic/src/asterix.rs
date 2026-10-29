@@ -204,7 +204,7 @@ mod tests {
         assert_eq!(t.track, Some(4095));
         assert_eq!(t.squawk.as_deref(), Some("1234"));
         // 20:26:40 UTC as the radar's time of day.
-        assert!((t.time_of_day.unwrap() - 73_600.0).abs() < 0.01);
+        assert!((t.time_of_day_s.unwrap() - 73_600.0).abs() < 0.01);
         let ev = d.to_event_at(t, "2026-06-10T08:00:00Z").unwrap();
         assert_eq!(ev.entity_type, "mim:aircraft");
         let loc = ev.location.unwrap();

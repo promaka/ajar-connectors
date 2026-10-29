@@ -15,8 +15,7 @@ name = "ajar-asterix"
 path = "src/main.rs"
 
 [features]
-# DDS is compiled in so the shipped binary can read a topic on a ship's or a
-# ROS 2 platform's bus; it is inert unless a config says kind = "dds".
+# Inert unless a config sets kind = "dds"; --no-default-features drops it.
 default = ["dds"]
 dds = ["ajar-connector-common/dds"]
 
@@ -27,6 +26,7 @@ tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 anyhow.workspace = true
+thiserror.workspace = true
 
 [dev-dependencies]
 ed25519-dalek.workspace = true
