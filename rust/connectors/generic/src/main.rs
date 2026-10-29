@@ -1,11 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Config-driven ingress connector.
-//!
-//! Reads the connector config (identity, transport, key) and the `[mapping]`
-//! block from the same TOML file, builds a mapping parser, and runs it on the
-//! shared runtime. No source-specific code.
+//! Config-driven ingress connector; the config and `[mapping]` share one file.
 
-use ajar_connector_common::{open_source, run, Config};
+use ajar_connector_common::Config;
 use ajar_generic::{GenericParser, Mapping};
 use anyhow::Context;
 
@@ -19,8 +15,7 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let args: Vec<String> = std::env::args().collect();
-    // The first non-flag argument is the config path, so `--profile` may sit on
-    // either side of it.
+    // The config path is the first non-flag argument.
     let path = args
         .iter()
         .skip(1)
@@ -31,13 +26,10 @@ async fn main() -> anyhow::Result<()> {
 
     let mapping = Mapping::load(&path).with_context(|| format!("loading mapping from {path}"))?;
 
-    // A mapping that names something the ontology does not declare would have
-    // its events rejected or its fields quarantined by Core, so it stops the
-    // connector here instead of running healthily with nothing governed.
+    // Refuse to start on a mapping whose events Core would reject or quarantine.
     ajar_connector_common::ontology::enforce(&ajar_connector_common::ontology::Declared {
         entity_type: mapping.entity_type.clone(),
-        // The AJAR names (the mapping's values) are what the ontology governs;
-        // the native source-field names on the left are nobody's business.
+        // The ontology governs the Ajar keys, not the record field names.
         attributes: mapping.attributes.values().cloned().collect(),
         fixed_values: cfg
             .default_hostility
@@ -46,9 +38,7 @@ async fn main() -> anyhow::Result<()> {
             .unwrap_or_default(),
     })?;
 
-    // `--profile` prints the document the operator registers and exits, before
-    // any transport is opened. The no-code connector emits exactly the type its
-    // [mapping] declares, so that is the whole allowed set.
+    // Print the profile the operator registers, before any transport opens.
     if ajar_connector_common::profile::requested(&args) {
         println!(
             "{}",
@@ -58,9 +48,9 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let parser = GenericParser::new(cfg.source_id.clone(), mapping, cfg.enrichment());
-    let source = open_source(&cfg.transport)
+    let source = ajar_connector_common::open_source(&cfg.transport)
         .await
         .context("opening transport")?;
 
-    run(cfg, source, parser).await
+    ajar_connector_common::run(cfg, source, parser).await
 }

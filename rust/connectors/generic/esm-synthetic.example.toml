@@ -1,7 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 #
-# ESM intercepts as JSON lines, from an electronic support receiver or from the
-# synthetic feed (`ajar-feed-synthetic esm`). One record per line, shaped:
+# ESM intercepts as newline JSON, from a receiver or `ajar-feed-synthetic esm`:
 #
 #   {"time":"2026-06-10T08:00:00Z","emitter_id":"EM-NAV-1",
 #    "frequency_hz":9410000000,"bandwidth_hz":20000000,"power_dbm":-49.1,
@@ -11,14 +10,8 @@
 #    "carried_by":"235009870","carried_by_standard":"AIS",
 #    "observed_by":"25:10","observed_by_standard":"ASTERIX"}
 #
-# Every governed name below is declared on mim:equipment in the vendored
-# ontology (contract revision 4), so the connector starts. An emitter is
-# reported as equipment and names the platform it sits on with carried_by; a
-# platform event never carries the fingerprint. `scan_type` is governed free
-# text; `modulation` is a closed set, so a receiver's own word for it belongs
-# in metadata and the governed attribute is set only when it maps. An ESM
-# receiver gives a bearing, not a position, so there is no lat_field: the
-# event carries no location because the sensor produced none.
+# Every governed name is declared on mim:equipment in the vendored ontology.
+# A bearing-only sensor, so no lat_field and no location.
 
 source_id = "esm-1"
 nats_url = "nats://127.0.0.1:4222"
@@ -28,8 +21,7 @@ signing_key_path = "/etc/ajar/esm-1.seed"
 # An intercept is a measurement, not an identification.
 default_hostility = "Unknown"
 
-# A synthetic or training feed marks itself so every track it produces carries
-# the caveat inside its signature wherever it goes.
+# Security marking stamped into every event; a training feed sets EXERCISE.
 # [marking]
 # caveats = ["EXERCISE"]
 
@@ -44,7 +36,7 @@ entity_type = "mim:equipment"
 timestamp_field = "time"
 timestamp_format = "rfc3339"
 
-# The emitter fingerprint, contract revision 4.
+# The emitter fingerprint.
 [mapping.attributes]
 frequency_hz = "frequency_hz"
 bandwidth_hz = "bandwidth_hz"

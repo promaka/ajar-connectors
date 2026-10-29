@@ -1,16 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Every shipped example config must WORK when copied verbatim - an example
-//! is copied by definition, so it is the worst place for a value that does
-//! not parse, a key path the loader rejects, or a mapping the ontology would
-//! quarantine. This gate walks every *.example.toml in the workspace:
-//!
-//!  - configs on the shared schema must parse strictly (deny_unknown_fields
-//!    turns doc drift into a red build);
-//!  - signing_key_path must not point at a .key PEM (the loader takes the
-//!    32-byte .seed; the PEM is the mTLS key, a different key entirely);
-//!  - generic mappings must pass the same ontology gate the connector
-//!    enforces at boot, so a copied config cannot ship events Core rejects
-//!    or quarantines.
+//! Every `*.example.toml` in the workspace parses, points its signing key at a
+//! seed, and, for generic, passes the boot-time ontology gate.
 
 use ajar_connector_common as common;
 use ajar_generic::Mapping;
@@ -63,8 +53,7 @@ fn every_example_config_works_when_copied_verbatim() {
             .to_str()
             .unwrap();
 
-        // No example may point the signing seed at a PEM. (An mTLS tls_key
-        // is a different key and legitimately a .key file.)
+        // The .key PEM is the mTLS key; the signing key is the .seed.
         for line in text.lines() {
             if line.trim_start().starts_with("signing_key_path") {
                 assert!(
@@ -75,7 +64,6 @@ fn every_example_config_works_when_copied_verbatim() {
         }
 
         if OWN_SCHEMA.contains(&crate_name) {
-            // Own schema: at minimum the TOML must parse.
             text.parse::<toml::Table>()
                 .unwrap_or_else(|e| panic!("{name}: not valid TOML: {e}"));
             continue;
@@ -84,7 +72,6 @@ fn every_example_config_works_when_copied_verbatim() {
         let cfg: common::Config = toml::from_str(&text)
             .unwrap_or_else(|e| panic!("{name}: does not parse as a connector config: {e}"));
 
-        // Generic mappings get the exact boot-time ontology gate.
         if crate_name == "generic" {
             let mapping = Mapping::load(path.to_str().unwrap())
                 .unwrap_or_else(|e| panic!("{name}: mapping does not load: {e}"));
