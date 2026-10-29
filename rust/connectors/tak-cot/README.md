@@ -1,132 +1,139 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # ajar-tak-cot
 
-Ingress connector for **TAK / Cursor-on-Target (CoT)**. It listens for the CoT
-situational-awareness messages that ATAK, WinTAK, and TAK-aware sensors already
-broadcast, normalizes each track into a canonical Ajar `Event`, seals it with the
-connector's Ed25519 key, and publishes it to Core's ingest subject.
+Ingress connector for **Cursor-on-Target (CoT)**, the situational-awareness XML
+that ATAK, WinTAK and TAK-aware sensors broadcast. Each CoT `<event>` becomes one
+canonical Ajar event, sealed with the connector's Ed25519 key and published to
+`<subject_prefix>.<source_id>` on Core's NATS. Nothing on the TAK side changes.
+See [HOW_IT_WORKS.md](../../../HOW_IT_WORKS.md) for the seal and ingest path.
 
-Nothing on the TAK side changes. The connector speaks CoT as it is already spoken
-on the wire; the fielded kit does not know Ajar exists.
+## Input
 
-## Model
+One CoT `<event>` per frame, parsed with an XML reader. The connector reads:
 
-```
-CoT (UDP multicast) ──▶ ajar-tak-cot ──▶ canonical Event ──▶ seal ──▶ NATS  ajar.ingest.<source_id>
-     untrusted edge         parse            (SDK)          (Ed25519)         (mTLS to Core)
-```
+| Element | Fields |
+|---------|--------|
+| `<event>` | `uid`, `type`, `time` (all three required) |
+| `<point>` | `lat`, `lon`, `hae` |
+| `<detail><contact>` | `callsign` |
+| `<detail><track>` | `course`, `speed` |
+| `<confidence>` | `value` attribute or element text (not standard CoT) |
 
-The connector holds no Core secrets — only its own signing key. Core trusts the
-signature, not the pipe: it verifies the seal against the public key registered
-for `source_id` and drops anything that fails. See
-[HOW_IT_WORKS.md](../../../HOW_IT_WORKS.md).
+Every other element and attribute (`start`, `stale`, `ce`, `le`, `remarks`, ...)
+is not decoded and stays in the payload.
 
-## Configure
+The SA default transport is `udp-multicast` (ATAK and WinTAK use group
+`239.2.3.1`, port `6969`) or `udp`. One datagram is one frame. Any transport that
+delivers one `<event>` per frame works.
 
-Copy [`tak-cot.example.toml`](tak-cot.example.toml) and edit it. Everything an
-operator sets is data — a second feed is a second config file, not a rebuild.
+## Output
 
-| Key | Meaning |
-|-----|---------|
-| `source_id` | this connector's Ajar identity; its signing key is registered in Core against this id |
-| `nats_url` | Core's NATS endpoint (`tls://host:443` in production, `nats://…` for local dev) |
-| `subject_prefix` | ingest prefix; publishes to `<prefix>.<source_id>` (default `ajar.ingest`) |
-| `signing_key_path` | the connector's Ed25519 seed: 32 raw bytes or a 64-char hex file — secret |
-| `[transport]` | `kind` = `udp-multicast` (CoT default) or `udp`; `bind`; `group` (multicast only) |
-| `[entity_map]` | optional CoT-type → Ajar entity-type overrides |
+**Entity type**, in this order:
 
-CoT types map to Ajar entity types by battle dimension (air → `mim:aircraft`,
-sea surface → `mim:vessel`); anything else falls back to `x:cot:<type>` so no
-track is dropped for lack of a mapping. Override any specific code in
-`[entity_map]`. The final say on what Core accepts is the sovereign's ontology
-and the connector's registered namespaces.
+1. an exact match of the CoT `type` in `[entity_map]`;
+2. the battle dimension (third `type` field): `A` → `mim:aircraft`,
+   `S` → `mim:vessel`, `U` → `mim:subsurface-vessel`;
+3. otherwise `x:cot:<type>` with `-` replaced by `_` (`a-f-G-U-C` →
+   `x:cot:a_f_G_U_C`).
 
-## Tactical attributes (what a COP reads)
+No track is dropped for lack of a mapping. What Core accepts is set by the
+site's ontology and the entity-type prefixes registered for the connector.
 
-Beyond position, the connector extracts the attributes an operating picture needs:
+**Identity.** The event `id` is a fresh UUIDv7. The CoT `uid` is the
+`source_uid` metadata key and the governed identity: `alt_id` = the uid,
+`alt_id_standard` = `CoT`. A uid longer than 128 bytes sets no `alt_id`.
 
-| Attribute | From | Notes |
-|-----------|------|------------|
-| `hostility` | the type's 2nd field (table below) | always set — a track is never blank |
-| `callsign` | `<detail><contact callsign="…"/>` | if present |
-| confidence | `<detail><confidence>0.87</confidence>` or `<confidence value="87"/>` (percent accepted) | the event's `confidence` field (if present) |
+| Attribute | Unit | From |
+|-----------|------|------|
+| `hostility` | MIM `HostilityCodeType` | second `type` field, always set (table below) |
+| `callsign` | text | `<contact callsign>` |
+| `course` | degrees from true north, 1 decimal | `<track course>` |
+| `speed` | m/s, 2 decimals | `<track speed>` |
+| `alt_id`, `alt_id_standard` | text | `uid`, `CoT` |
 
-`hostility` carries the MIM 5.3 `HostilityCodeType` vocabulary. The values are
-case-sensitive, and Core does not govern an unrecognised one: on a graceful
-site the value is quarantined into metadata and a track keeps its position but
-loses its affiliation on the picture, and on a strict site the event is
-rejected. Neither raises an error at the connector:
+CoT already states course in degrees from true north and speed in m/s, so
+neither is converted.
 
 | CoT | `hostility` | CoT | `hostility` |
 |-----|-------------|-----|-------------|
 | `f` | `Friend` | `p` | `Pending` |
 | `a` | `AssumedFriend` | `j` | `Joker` |
 | `h` | `Hostile` | `k` | `Faker` |
-| `s` | `Suspect` | anything else | `Unknown` |
+| `s` | `Suspect` | anything else, or absent | `Unknown` |
 | `n` | `Neutral` | | |
 
-Routing is **per attribute**: a key listed in the config's `governed_attributes`
-rides as a governed attribute (type-validated by the ontology); every other key
-rides as metadata (always accepted). The safe default — an empty list — routes
-everything to metadata, so an undeclared key can never cost a track. Once the
-deployment's ontology declares them, set:
+`j` and `k` are the exercise codes and are passed through as such, so an
+exercise track does not reach a picture as a real threat. The values are
+case-sensitive MIM 5.3 terms. A site whose ontology does not govern
+`hostility` quarantines it into metadata (graceful) or rejects the event
+(strict).
 
-```toml
-governed_attributes = ["hostility", "callsign"]
-```
+**Location**: `lat`/`lon` in WGS-84 degrees and `hae` in metres. **Timestamp**:
+the event `time`, which must be RFC 3339. **Confidence**: from `<confidence>`,
+see Behaviour; 0 when absent.
 
-The full attribute reference (all connectors, semantics, units) is
+**Metadata**: `source_uid` (the CoT uid).
+
+**Payload**: the CoT frame, byte for byte.
+
+The attribute reference for all connectors is
 [ATTRIBUTES.md](../ATTRIBUTES.md).
+
+## Configuration
+
+Start from [`tak-cot.example.toml`](tak-cot.example.toml). The connector has no
+`[options]`. It uses the shared keys (`source_id`, `nats_url`, `subject_prefix`,
+`signing_key_path`, `[transport]`, `[marking]`, `spool`) and:
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `[entity_map]` | empty | CoT `type` → Ajar entity type, exact match, checked before the battle-dimension default |
+
+`ajar-tak-cot <config> --profile` prints the profile the operator registers in
+Core and exits. Its allowed entity types are `mim:`, `x:cot:` and any
+`[entity_map]` target outside those prefixes.
+
+## Behaviour
+
+- A frame is rejected, counted in `connector_rejected_total` and logged when it
+  is not well-formed XML, has no `<event>`, lacks `uid`, `type` or `time`, has a
+  non-numeric `lat` or `lon`, or fails to build (a `time` that is not RFC 3339,
+  a coordinate out of range).
+- A `<point>` with both `lat` and `lon` sets the location. Without either, the
+  event has no location.
+- A `course` or `speed` that is empty, not a number or not finite is skipped and
+  the track kept. A course outside 0 to 360 and a negative speed are skipped.
+  No `<track>` sets neither attribute.
+- Confidence comes from `<confidence value="..."/>` or
+  `<confidence>...</confidence>`; the attribute wins if both are present. A
+  value above 1 is read as a percentage (`87` → 0.87); the result is clamped to
+  0 to 1.
+
+## Limits
+
+- One event per frame. A TAK server's TCP stream of concatenated `<event>`s
+  without a delimiter is not split.
+- `start`, `stale`, `how`, `ce`, `le`, remarks and other `<detail>` children are
+  not decoded.
 
 ## Run
 
 ```bash
-# Local dev (plaintext NATS)
 ajar-tak-cot ./tak-cot.toml
-
-# Production: client cert is the connector's transport identity (CN = source_id)
-export AJAR_TLS_CA=/etc/ajar/ca.pem
-export AJAR_TLS_CERT=/etc/ajar/tak-field-1.crt
-export AJAR_TLS_KEY=/etc/ajar/tak-field-1.key
-export AJAR_HEALTH_ADDR=0.0.0.0:9090   # optional: /healthz and /metrics
-ajar-tak-cot /etc/ajar/tak-cot.toml
 ```
 
-`RUST_LOG=debug` raises log detail. Dropped frames are counted and logged with
-the reason; `/metrics` exposes `connector_received_total`,
-`connector_published_total`, `connector_rejected_total`.
-
-## Register the key
-
-The connector signs with its own key; Core must hold the matching public key
-against `source_id` before it will accept events. Generate a seed, register its
-public half with your operator, and keep the private seed safe (see
-[SECURITY.md](../../../SECURITY.md)). Rotating the key means re-registering the
-public half.
-
-## Security note
-
-CoT is an **untrusted edge**: field messages can be malformed, truncated, or
-hostile. The parser uses a real XML reader, never panics, and never fabricates a
-field — every failure is a typed error that is counted and logged, never silently
-swallowed. Trust is established downstream by the seal, which Core verifies.
+For production, `AJAR_TLS_CA`, `AJAR_TLS_CERT` and `AJAR_TLS_KEY` give the mTLS
+client identity (CN = `source_id`), and `AJAR_HEALTH_ADDR` serves `/healthz` and
+`/metrics`. `RUST_LOG=debug` raises log detail. Core must hold the public half of
+the signing key against `source_id`; see [SECURITY.md](../../../SECURITY.md).
 
 ## Conformance
 
-`cargo test` runs, alongside the unit tests:
+`cargo test -p ajar-tak-cot` runs, beside the unit tests:
 
-- **byte-identity to the SDK** — the connector emits exactly the bytes the SDK's
-  `EventBuilder` produces, adding no encoding of its own;
-- **seal verifies under the published contract key** — sealing with the contract
-  test seed yields an envelope that verifies under the published verifying key;
-- **a pinned canonical hash** — locking the CoT→event mapping against drift;
-- **fuzz** — thousands of arbitrary and CoT-shaped inputs, asserting the parser
-  never panics.
-
-## Adding another situational-awareness format
-
-This connector is a CoT `FrameParser` plugged into the shared
-[`ajar-connector-common`](../common) runtime; the binary in `src/main.rs` is only
-the wiring. Another UDP-broadcast format (ASTERIX, MAVLink, AIS/NMEA) is the same
-shape: implement `FrameParser` for that wire format and hand it, with a
-`FrameSource`, to `common::run`.
+- the event meets Core's content contract (UUIDv7 id, RFC 3339 timestamp,
+  sorted unique attributes and metadata);
+- the uid is `source_uid` metadata, not the id;
+- a seal with the contract test seed verifies under the published key;
+- a fuzz test over arbitrary and CoT-shaped input asserts the parser never
+  panics.

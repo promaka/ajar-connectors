@@ -1,26 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Contract conformance for the TAK/CoT connector.
-//!
-//! Two things Core relies on, checked here without importing Core (its rules are
-//! mirrored, not linked):
-//!  1. the produced event satisfies Core's **content** contract — the id is a
-//!     UUIDv7 and the timestamp is RFC 3339 (the two rules the encoding vectors do
-//!     not cover, and the ones that rejected real events in the field);
-//!  2. the seal verifies under the published contract key.
-//!
-//! Plus a mapping check: the native CoT uid is preserved as an attribute, never
-//! used as the id.
+//! Events meet Core's content contract and seal under the published contract key.
 
 use std::collections::HashMap;
 
-use ajar_connector::{canonical_bytes, seal, SEAL_SIGNATURE_LEN};
+use ajar_connector::SEAL_SIGNATURE_LEN;
 use ajar_connector_common::Enrichment;
 use ajar_tak_cot::CotParser;
 use ed25519_dalek::{Signature, SigningKey, Verifier, VerifyingKey};
 use uuid::Uuid;
 
-// A realistic native CoT uid (an ATAK endpoint id), deliberately NOT UUID-shaped —
-// the connector must not let it reach the event id field.
+// The uid is an ATAK endpoint id, not UUID-shaped.
 const SAMPLE: &str = r#"<event version="2.0" uid="ANDROID-a1b2c3d4" type="a-f-A-M-F-Q" time="2026-06-10T08:00:00Z" start="2026-06-10T08:00:00Z" stale="2026-06-10T08:00:30Z"><point lat="26.4" lon="50.9" hae="1200.0" ce="10" le="10"/></event>"#;
 
 fn contract() -> serde_json::Value {
@@ -39,10 +28,7 @@ fn hex32(v: &serde_json::Value, key: &str) -> [u8; 32] {
 }
 
 fn connector_event() -> ajar_connector::Event {
-    // Governed mode: a deployment that declared its ontology, so the tactical
-    // attributes ride as governed attributes (what the conformance below asserts).
-    let enrichment = Enrichment::default();
-    CotParser::new("tak-field-1", HashMap::new(), enrichment)
+    CotParser::new("tak-field-1", HashMap::new(), Enrichment::default())
         .to_event(SAMPLE.as_bytes())
         .expect("sample parses")
 }
@@ -60,10 +46,8 @@ fn event_satisfies_core_content_contract() {
 #[test]
 fn native_uid_is_preserved_as_metadata_not_id() {
     let ev = connector_event();
-    assert_eq!(ev.entity_type, "mim:aircraft"); // battle dimension A -> air
+    assert_eq!(ev.entity_type, "mim:aircraft");
     assert_ne!(ev.id, "ANDROID-a1b2c3d4");
-    // The uid stays in metadata and never becomes the id; it is also
-    // governed, as alt_id under the CoT standard code.
     assert!(
         ev.metadata
             .iter()
@@ -72,13 +56,11 @@ fn native_uid_is_preserved_as_metadata_not_id() {
     );
     assert!(!ev.attributes.iter().any(|a| a.key == "source_uid"));
     assert!(is_canonical(&ev.metadata), "metadata must be canonical");
-    // The tactical attributes a COP reads are governed (and canonical): the
-    // sample's a-f-… type is friendly.
     assert!(
         ev.attributes
             .iter()
             .any(|a| a.key == "hostility" && a.value == "Friend"),
-        "affiliation must be a governed attribute"
+        "hostility must be an attribute"
     );
     assert!(is_canonical(&ev.attributes), "attributes must be canonical");
     let loc = ev.location.as_ref().expect("located track has a location");
@@ -92,8 +74,8 @@ fn seal_verifies_under_the_published_contract_key() {
     let vk = VerifyingKey::from_bytes(&hex32(&contract, "verifyingKeyHex"))
         .expect("published verifying key is valid");
 
-    let canonical = canonical_bytes(&connector_event());
-    let sealed = seal(&canonical, &SigningKey::from_bytes(&seed));
+    let canonical = ajar_connector::canonical_bytes(&connector_event());
+    let sealed = ajar_connector::seal(&canonical, &SigningKey::from_bytes(&seed));
 
     assert_eq!(sealed.len(), SEAL_SIGNATURE_LEN + canonical.len());
     let (sig, body) = sealed.split_at(SEAL_SIGNATURE_LEN);
@@ -103,13 +85,12 @@ fn seal_verifies_under_the_published_contract_key() {
         .expect("seal signature must verify under the contract key");
 }
 
-/// Canonical repeated `Attribute`: keys strictly increasing (sorted + unique).
+/// Keys strictly increasing: sorted and unique.
 fn is_canonical(entries: &[ajar_connector::Attribute]) -> bool {
     entries.windows(2).all(|w| w[0].key < w[1].key)
 }
 
-/// Mirror Core's timestamp rule without importing it: RFC 3339, `Z` or numeric
-/// offset, optional fractional seconds.
+/// Core's timestamp rule: RFC 3339 with `Z` or a numeric offset.
 fn is_rfc3339(s: &str) -> bool {
     let b = s.as_bytes();
     if b.len() < 20 {

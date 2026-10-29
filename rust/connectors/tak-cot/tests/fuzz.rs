@@ -1,7 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! The parser sits on an untrusted edge, so its one absolute obligation is: never
-//! panic. Whatever arrives — random bytes, truncated XML, absurd numbers, gigabyte
-//! attribute names — it must return `Ok` or a typed error, never abort the process.
+//! Arbitrary and CoT-shaped input never panics the parser.
 
 use std::collections::HashMap;
 
@@ -16,14 +14,11 @@ fn parser() -> CotParser {
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(4096))]
 
-    /// Arbitrary bytes must never panic the parser.
     #[test]
     fn arbitrary_bytes_never_panic(bytes in proptest::collection::vec(any::<u8>(), 0..2048)) {
         let _ = parser().to_event(&bytes);
     }
 
-    /// Structurally CoT-shaped input with hostile field values must never panic —
-    /// the numeric and type paths are exercised, not just the XML reader.
     #[test]
     fn cot_shaped_input_never_panics(
         uid in "[\\x20-\\x7e]{0,64}",
