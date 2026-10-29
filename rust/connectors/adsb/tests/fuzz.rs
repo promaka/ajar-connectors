@@ -1,7 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! The parser sits on an untrusted edge; its one absolute obligation is to never
-//! panic. Random bytes, truncated lines, absurd field counts — all must return
-//! `Ok` or a typed error, never abort.
+//! Arbitrary and SBS-shaped input never panics the parser.
 
 use ajar_adsb::AdsbParser;
 use ajar_connector_common::Enrichment;
@@ -19,7 +17,6 @@ proptest! {
         let _ = parser().parse_line(&bytes);
     }
 
-    /// SBS-shaped input with hostile field values and counts must never panic.
     #[test]
     fn sbs_shaped_input_never_panics(
         tx in 0u16..300,

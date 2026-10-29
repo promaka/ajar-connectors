@@ -1,22 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Contract conformance for the ADS-B (SBS-1) connector.
-//!
-//! Two things Core relies on, checked here without importing Core (its rules are
-//! mirrored, not linked):
-//!  1. the produced event satisfies Core's **content** contract — the id is a
-//!     UUIDv7 and the timestamp is RFC 3339;
-//!  2. the seal verifies under the published contract key.
-//!
-//! Plus a mapping check: the native ICAO address is preserved as the stable
-//! `source_uid` (and `icao`) metadata, never used as the id.
+//! Events meet Core's content contract and seal under the published contract key.
 
 use ajar_adsb::AdsbParser;
-use ajar_connector::{canonical_bytes, seal, SEAL_SIGNATURE_LEN};
+use ajar_connector::SEAL_SIGNATURE_LEN;
 use ajar_connector_common::Enrichment;
 use ed25519_dalek::{Signature, SigningKey, Verifier, VerifyingKey};
 use uuid::Uuid;
 
-// A real airborne-position SBS-1 line: ICAO 4CA2D6, 51.5 N, -0.5 E, 38000 ft.
+// MSG,3 for ICAO 4CA2D6 at 51.5 N, 0.5 W, 38000 ft.
 const REAL: &[u8] =
     b"MSG,3,1,1,4CA2D6,1,2026/06/10,08:00:00.000,2026/06/10,08:00:00.000,,38000,,,51.50000,-0.50000,,,,,,0";
 const OBSERVED: &str = "2026-06-10T08:00:00Z";
@@ -49,7 +40,7 @@ fn connector_event() -> ajar_connector::Event {
         .parse_line(REAL)
         .expect("line parses")
         .expect("is a position report");
-    p.to_event_at(&pos, OBSERVED).expect("builds")
+    p.to_event_at(pos, OBSERVED).expect("builds")
 }
 
 #[test]
@@ -67,8 +58,6 @@ fn native_icao_is_preserved_as_source_uid_not_id() {
     let ev = connector_event();
     assert_eq!(ev.entity_type, "mim:aircraft");
     assert_ne!(ev.id, "4CA2D6");
-    // The native key names stay in metadata and never become the id; the
-    // ICAO address is also governed, as alt_id under the ICAO24 code.
     assert!(
         ev.metadata
             .iter()
@@ -95,8 +84,8 @@ fn seal_verifies_under_the_published_contract_key() {
     let vk = VerifyingKey::from_bytes(&hex32(&contract, "verifyingKeyHex"))
         .expect("published verifying key is valid");
 
-    let canonical = canonical_bytes(&connector_event());
-    let sealed = seal(&canonical, &SigningKey::from_bytes(&seed));
+    let canonical = ajar_connector::canonical_bytes(&connector_event());
+    let sealed = ajar_connector::seal(&canonical, &SigningKey::from_bytes(&seed));
 
     assert_eq!(sealed.len(), SEAL_SIGNATURE_LEN + canonical.len());
     let (sig, body) = sealed.split_at(SEAL_SIGNATURE_LEN);
@@ -106,13 +95,12 @@ fn seal_verifies_under_the_published_contract_key() {
         .expect("seal signature must verify under the contract key");
 }
 
-/// Canonical repeated `Attribute`: keys strictly increasing (sorted + unique).
+/// Keys strictly increasing: sorted and unique.
 fn is_canonical(entries: &[ajar_connector::Attribute]) -> bool {
     entries.windows(2).all(|w| w[0].key < w[1].key)
 }
 
-/// Mirror Core's timestamp rule without importing it: RFC 3339, `Z` or numeric
-/// offset, optional fractional seconds.
+/// Core's timestamp rule: RFC 3339 with `Z` or a numeric offset.
 fn is_rfc3339(s: &str) -> bool {
     let b = s.as_bytes();
     if b.len() < 20 {

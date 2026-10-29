@@ -64,6 +64,7 @@ toml = "1.1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 anyhow = "1"
+thiserror = "2"
 hex = "0.4"
 # The SAPIENT wire crate compiles the vendored BSI Flex 335 schema with the same
 # protobuf toolchain the SDK uses for the event contract: prost, and a vendored
