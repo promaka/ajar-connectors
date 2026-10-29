@@ -1,8 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! GMTI has no checksum and walks attacker-influenced packet/segment/existence-
-//! mask length fields, so its one absolute obligation is to never panic: random
-//! bytes, packets that lie about their size, dwell masks that reference every
-//! optional field — all must return `Ok` or a typed error.
+//! Arbitrary and GMTI-shaped input never panics the parser.
 
 use ajar_connector_common::Enrichment;
 use ajar_gmti::GmtiParser;
@@ -20,10 +17,6 @@ proptest! {
         let _ = parser().parse_packet(&bytes);
     }
 
-    /// GMTI-shaped input: edition byte 0x03, an arbitrary declared packet size,
-    /// and a body of random segments. Exercises the segment walk and, when a dwell
-    /// segment appears, the existence-mask-driven field/target reads. Must never
-    /// panic.
     #[test]
     fn gmti_shaped_input_never_panics(
         size in 0u32..4096,

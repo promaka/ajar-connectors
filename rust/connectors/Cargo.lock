@@ -213,6 +213,7 @@ dependencies = [
  "hex",
  "proptest",
  "serde_json",
+ "thiserror 2.0.20",
  "tokio",
  "tracing",
  "tracing-subscriber",
