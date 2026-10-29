@@ -194,7 +194,7 @@ jobs:
           subject-path: ajar-*.tar.gz
       - uses: actions/upload-artifact@v7
         with:
-          name: binaries-${{ matrix.target }}
+          name: binaries-${{ needs.resolve.outputs.tag }}-${{ matrix.target }}
           path: |
             ajar-*.tar.gz
             ajar-*.tar.gz.sha256
@@ -233,9 +233,10 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: refs/tags/${{ needs.resolve.outputs.tag }}
-      - uses: actions/download-artifact@v8
+      - if: needs.resolve.outputs.kind == 'crate'
+        uses: actions/download-artifact@v8
         with:
-          pattern: binaries-*
+          pattern: binaries-${{ needs.resolve.outputs.tag }}-*
           merge-multiple: true
           path: dist
       - name: notes for this version, from the package's CHANGELOG.md
