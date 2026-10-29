@@ -2,7 +2,7 @@
 [package]
 name = "ajar-doctor"
 description = "Preflight diagnostics for Ajar connectors: checks the config, key, registration, endpoint, TLS and clock, and says which onboarding step failed in plain words."
-version.workspace = true
+version = "0.6.6"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -42,3 +42,7 @@ x509-parser = "0.17"
 rcgen = { version = "0.14", default-features = false, features = ["ring", "pem"] }
 # Shifts certificate validity windows to fabricate the expired and postdated cases.
 time = "0.3"
+
+# See CONTRIBUTING.md, "Releases".
+[package.metadata.ajar]
+release = true

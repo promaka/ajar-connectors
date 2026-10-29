@@ -4,14 +4,28 @@
 All notable changes to this project are recorded here. The format is based on
 Keep a Changelog (https://keepachangelog.com).
 
-Two version lines are tracked independently (see COMPATIBILITY.md):
+Two version lines are tracked here (see COMPATIBILITY.md):
 
-- **SDK** — semantic versions (`v0.x` for now). The source API may change between
+- **SDK** — semantic versions (`v0.x` for now), one number across Rust, Go,
+  Python and C++, released as the tag `vX.Y.Z`. The source API may change between
   minor versions before `1.0`; none of those changes alter the wire bytes.
 - **Wire contract** — `contract-v1`, frozen and additive-only. A connector built
   against `v0.1.0` stays accepted without rebuilds.
 
+From 0.6.5 on, each connector is versioned and released on its own, and its
+changes are recorded in its own changelog, e.g.
+[`rust/connectors/adsb/CHANGELOG.md`](rust/connectors/adsb/CHANGELOG.md). The
+entries below 0.6.5 cover the whole suite as it was then released together.
+
 ## [Unreleased]
+
+### Changed
+
+- Each connector, tool and the connector Helm chart now carries its own version
+  and is released on its own tag (`<name>-vX.Y.Z`, `chart-vX.Y.Z`) when a bump
+  merges; a `vX.Y.Z` tag now releases the SDK only. Images are labelled with
+  the connector's version and the contract it emits (`ajar.contract`). See
+  CONTRIBUTING.md, "Releases".
 
 ## [0.6.5] - 2026-10-24
 

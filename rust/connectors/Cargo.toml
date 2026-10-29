@@ -33,8 +33,10 @@ members = [
     "sapient-egress",
 ]
 
+# No shared `version`: every crate carries its own, and a connector with
+# `[package.metadata.ajar] release = true` is released on its own tag. See
+# CONTRIBUTING.md, "Releases".
 [workspace.package]
-version = "0.6.5"
 edition = "2021"
 rust-version = "1.74"
 license = "Apache-2.0"

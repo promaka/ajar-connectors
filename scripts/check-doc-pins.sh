@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: Apache-2.0
 #
-# Every install instruction must pin the version being released. A vendor who
+# Every install instruction must pin the SDK version being released. A vendor who
 # follows a stale pin gets an SDK from an earlier ontology and their events are
 # silently discarded downstream, so this is checked before a release is cut.
 #
-# Usage:  scripts/check-doc-pins.sh [version]   (default: rust/connectors/Cargo.toml)
+# Usage:  scripts/check-doc-pins.sh [version]   (default: the SDK, rust/Cargo.toml)
 set -euo pipefail
-want="${1:-$(grep -m1 '^version' rust/connectors/Cargo.toml | cut -d'"' -f2)}"
+want="${1:-$(grep -m1 '^version' rust/Cargo.toml | cut -d'"' -f2)}"
 docs=(README.md ONBOARDING.md COMPATIBILITY.md CONNECTOR_BRIEF.md)
 
 bad=0

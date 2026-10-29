@@ -2,7 +2,7 @@
 [package]
 name = "ajar-sink"
 description = "Reference sink: verify sealed events, persist them, and prove the audit chain. For development and evaluation, not a governance plane."
-version.workspace = true
+version = "0.6.5"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

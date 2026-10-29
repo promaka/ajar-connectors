@@ -2,7 +2,7 @@
 [package]
 name = "synthetic-radar"
 description = "Example: stream synthetic mim:aircraft tracks into a local Ajar Core over NATS."
-version.workspace = true
+version = "0.6.6"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -28,3 +28,7 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
 bytes = "1"
 # Accept the 64-char hex seed `ajar keygen` writes, not just 32 raw bytes.
 hex = "0.4"
+
+# See CONTRIBUTING.md, "Releases".
+[package.metadata.ajar]
+release = true

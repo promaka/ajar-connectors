@@ -188,8 +188,7 @@ fn locate_binary(name: &str) -> anyhow::Result<PathBuf> {
         }
     }
     bail!(
-        "{name} is not beside ajar-up or on PATH. The release tarball carries every \
-         connector next to ajar-up; run from the unpacked tarball, or install the \
-         connectors on PATH."
+        "{name} is not beside ajar-up or on PATH. Download the {name} release for \
+         your platform and unpack it next to ajar-up, or put {name} on PATH."
     )
 }

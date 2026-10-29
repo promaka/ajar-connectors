@@ -2,6 +2,11 @@
 # Builds and pushes the REFERENCE connector image with SLSA build provenance +
 # SBOM attestations (mirrors Core's image.yml). The image is reference-only —
 # vendors build their own connector image from their code.
+#
+# A vX.Y.Z tag is an SDK release: the C++ tarball, the GitHub release and the
+# go/vX.Y.Z module tag (crates.io and PyPI publish from their own workflows).
+# The production connector images, their binaries and the chart are released
+# per package by release-connector.yml.
 name: image
 
 on:
@@ -60,57 +65,21 @@ jobs:
           subject-digest: ${{ steps.build.outputs.digest }}
           push-to-registry: true
 
-  # The PRODUCTION per-connector images a customer actually runs. Built ONLY on a
-  # v* tag so a tagged release is the single thing that produces them — with the
-  # git revision stamped in, and an SLSA build-provenance attestation so anyone
-  # can prove what a given image contains.
-  connectors:
-    name: build + push + attest (${{ matrix.name }})
+  # A vX.Y.Z tag is an SDK release (Rust, Go, Python, C++ at one version);
+  # connectors are released on their own tags by release-connector.yml. Checked
+  # before anything else publishes, so a tag that cannot produce an honest
+  # release fails first.
+  guard:
+    name: release-guard (SDK)
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { name: mavlink, wsdir: rust/connectors, pkg: ajar-mavlink }
-          - { name: generic, wsdir: rust/connectors, pkg: ajar-generic }
-          - { name: tak-egress, wsdir: rust/connectors, pkg: ajar-tak-egress }
-          - { name: adsb, wsdir: rust/connectors, pkg: ajar-adsb }
-          # AIS is the only decoder for MMSI and navigational status, so a
-          # maritime site needs it as an image, not only in the tarball.
-          - { name: ais-nmea, wsdir: rust/connectors, pkg: ajar-ais-nmea }
-          - { name: asterix, wsdir: rust/connectors, pkg: ajar-asterix }
-          - { name: tak-cot, wsdir: rust/connectors, pkg: ajar-tak-cot }
-          # The out-of-the-box sidecar set is every ingress and egress
-          # connector, so whatever a site asks for exists built, signed and
-          # attested rather than assembled by hand when asked. The doctor
-          # rides too, so a cluster runs diagnostics from the same registry.
-          - { name: gmti, wsdir: rust/connectors, pkg: ajar-gmti }
-          - { name: klv, wsdir: rust/connectors, pkg: ajar-klv }
-          - { name: stanag4676, wsdir: rust/connectors, pkg: ajar-stanag4676 }
-          - { name: stanag4586, wsdir: rust/connectors, pkg: ajar-stanag4586 }
-          - { name: generic-egress, wsdir: rust/connectors, pkg: ajar-generic-egress }
-          - { name: sapient, wsdir: rust/connectors, pkg: ajar-sapient }
-          - { name: sapient-egress, wsdir: rust/connectors, pkg: ajar-sapient-egress }
-          - { name: doctor, wsdir: rust/connectors, pkg: ajar-doctor }
-          - { name: synthetic-radar, wsdir: rust/examples, pkg: synthetic-radar }
-          # One fixture, six sensors, on every connector's real wire format: a
-          # conformance and commissioning source, released beside the connectors.
-          - { name: feed-synthetic, wsdir: rust/connectors, pkg: ajar-feed-synthetic }
-    env:
-      IMAGE: ghcr.io/${{ github.repository_owner }}/ajar-connector-${{ matrix.name }}
     steps:
       - uses: actions/checkout@v7
-      - name: release-guard — tag must match the connector-suite version
+      - name: tag, SDK manifests, changelog and doc pins agree
         run: |
+          set -euo pipefail
           tag="${GITHUB_REF_NAME#v}"
-          ver="$(grep -m1 '^version' rust/connectors/Cargo.toml | cut -d'"' -f2)"
-          if [ "$tag" != "$ver" ]; then
-            echo "::error::git tag v$tag does not match rust/connectors/Cargo.toml version $ver"
-            exit 1
-          fi
-          # Checked here rather than only in the release job so that a tag which
-          # cannot produce release notes fails before any image is published.
+          bash scripts/check-versions.sh "$tag"
           if ! grep -qE "^## \[$tag\]( |$)" CHANGELOG.md; then
             echo "::error::CHANGELOG.md has no entry for $tag; write one before tagging"
             exit 1
@@ -118,132 +87,7 @@ jobs:
           # Install instructions that pin an older release send vendors to an SDK
           # from an earlier ontology, whose events Core rejects or quarantines.
           bash scripts/check-doc-pins.sh "$tag"
-          bash scripts/check-versions.sh "$tag"
-          echo "release-guard OK: tag, crate version, changelog and doc pins agree ($ver)"
-      # No QEMU: Dockerfile.build cross-compiles to arm64 on the native amd64
-      # runner, so there is no emulated arch to register.
-      - uses: docker/setup-buildx-action@v4
-      - uses: docker/login-action@v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - id: meta
-        uses: docker/metadata-action@v6
-        with:
-          images: ${{ env.IMAGE }}
-          tags: |
-            type=semver,pattern={{version}}
-            type=sha
-          labels: |
-            org.opencontainers.image.title=ajar-connector-${{ matrix.name }}
-            org.opencontainers.image.source=https://github.com/${{ github.repository }}
-      - id: build
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          file: deploy/docker/Dockerfile.build
-          platforms: linux/amd64,linux/arm64
-          build-args: |
-            WSDIR=${{ matrix.wsdir }}
-            PKG=${{ matrix.pkg }}
-            VERSION=${{ steps.meta.outputs.version }}
-            REVISION=${{ github.sha }}
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          provenance: true
-          sbom: true
-      - uses: actions/attest-build-provenance@v4
-        with:
-          subject-name: ${{ env.IMAGE }}
-          subject-digest: ${{ steps.build.outputs.digest }}
-          push-to-registry: true
-
-  # The chart is versioned and published with the suite it deploys, so a given
-  # release has a chart that matches its images. Chained behind the image builds
-  # for the same reason the release is: a chart that references images which do
-  # not exist is worse than no chart.
-  chart:
-    name: package + push the Helm chart
-    needs: [connectors]
-    if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: azure/setup-helm@v5
-      - name: Package at the release version and push to ghcr
-        run: |
-          set -euo pipefail
-          ver="${GITHUB_REF_NAME#v}"
-          echo "${{ secrets.GITHUB_TOKEN }}" \
-            | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
-          helm package deploy/helm/connector --version "$ver" --app-version "$ver" -d dist
-          helm push "dist/connector-$ver.tgz" "oci://ghcr.io/${{ github.repository_owner }}/charts"
-
-  # Static binaries for the release. An evaluator on a laptop, or an air-gapped
-  # site that cannot pull images, otherwise has to build a Rust toolchain first.
-  # Same cross-compile path the images use, so these are the binaries in them.
-  binaries:
-    name: build release binaries (${{ matrix.target }})
-    needs: [connectors]
-    if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        target: [x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu]
-    steps:
-      - uses: actions/checkout@v7
-      - name: Cross toolchain for aarch64
-        if: matrix.target == 'aarch64-unknown-linux-gnu'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends gcc-aarch64-linux-gnu libc6-dev-arm64-cross
-      - run: rustup target add ${{ matrix.target }}
-      - name: Build every connector
-        env:
-          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
-          CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
-        run: |
-          set -euo pipefail
-          cargo build --release --target ${{ matrix.target }} \
-            --manifest-path rust/connectors/Cargo.toml --bins
-      - name: Collect into one archive
-        run: |
-          set -euo pipefail
-          ver="${GITHUB_REF_NAME#v}"
-          out="ajar-connectors-$ver-${{ matrix.target }}"
-          mkdir -p "$out"
-          # Connectors only. A test source (the synthetic feed, the example
-          # publisher) ships as its own image, pulled on purpose, and is never
-          # bundled with the product. Asserted below.
-          find rust/connectors/target/${{ matrix.target }}/release -maxdepth 1 -type f \
-            -name 'ajar-*' ! -name '*.d' ! -name 'ajar-feed-synthetic' -exec cp {} "$out/" \;
-          test ! -e "$out/ajar-feed-synthetic"
-          test ! -e "$out/synthetic-radar"
-          # Configs and docs ride along: the tarball is an evaluator's whole
-          # starting point, not a bag of binaries. Asserted, so a workflow
-          # merge can never silently strip them again.
-          mkdir -p "$out/configs"
-          cp rust/connectors/*/*.example.toml "$out/configs/"
-          cp README.md ONBOARDING.md "$out/"
-          # The SAPIENT ontology fragment rides beside its binary: the operator
-          # registers it with `ajar onboard --type-spec`.
-          cp rust/connectors/sapient/sapient.types.json "$out/configs/"
-          test -f "$out/configs/sapient.types.json"
-          test -f "$out/configs/asterix.example.toml"
-          test -f "$out/ONBOARDING.md"
-          ls -la "$out"
-          test "$(ls -1 "$out" | wc -l)" -gt 0 || { echo "::error::no binaries collected"; exit 1; }
-          tar czf "$out.tar.gz" "$out"
-          sha256sum "$out.tar.gz" > "$out.tar.gz.sha256"
-      - uses: actions/upload-artifact@v7
-        with:
-          name: binaries-${{ matrix.target }}
-          path: |
-            ajar-connectors-*.tar.gz
-            ajar-connectors-*.tar.gz.sha256
+          echo "release-guard OK: tag, SDK manifests, changelog and doc pins agree ($tag)"
 
   # The C++ SDK as one self-contained source tarball. An air-gapped site, or a
   # partner whose build system is CMake and nothing else, takes this file and
@@ -252,7 +96,7 @@ jobs:
   # tarball that cannot reproduce contract-v1 never reaches the release.
   cpp-tarball:
     name: package + verify the C++ tarball
-    needs: [connectors]
+    needs: [guard]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
@@ -293,7 +137,7 @@ jobs:
   # than one whose images do not exist.
   release:
     name: publish the release
-    needs: [build-push, connectors, chart, binaries, cpp-tarball]
+    needs: [build-push, guard, cpp-tarball]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
@@ -302,7 +146,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
         with:
-          pattern: "{binaries-*,cpp-tarball}"
+          pattern: cpp-tarball
           merge-multiple: true
           path: dist
       - name: SBOM for the release (SPDX)

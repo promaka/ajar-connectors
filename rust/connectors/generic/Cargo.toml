@@ -2,7 +2,7 @@
 [package]
 name = "ajar-generic"
 description = "Config-driven Ajar ingress connector: map JSON/CSV fields to events with no code."
-version.workspace = true
+version = "0.6.6"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -38,3 +38,7 @@ sha2 = "0.11"
 hex.workspace = true
 proptest = "1"
 uuid = "1"
+
+# See CONTRIBUTING.md, "Releases".
+[package.metadata.ajar]
+release = true

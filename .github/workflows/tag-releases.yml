@@ -1,0 +1,77 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Merging a version bump is the release. On every push to main, each released
+# package whose current version is not tagged yet (scripts/release-tags.sh) is
+# tagged <name>-vX.Y.Z and released by release-connector.yml. The human gate is
+# the review of the PR that bumps the version.
+#
+# It compares against the existing tags rather than the previous commit, so a
+# run that stopped before tagging (cancelled, or refused by the guard) is caught
+# up by the next push, or by running this workflow from the Actions tab. Once a
+# tag exists, a failed build is re-run with release-connector instead.
+#
+# A tag pushed with GITHUB_TOKEN starts no other workflow, so this calls the
+# release workflow directly rather than relying on the tag push to start it.
+name: tag-releases
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  packages: write
+  id-token: write
+  attestations: write
+
+concurrency:
+  group: tag-releases
+  cancel-in-progress: false
+
+jobs:
+  tag:
+    name: tag bumped packages
+    # A manual run from another branch would tag that branch's commit.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    outputs:
+      tags: ${{ steps.tags.outputs.tags }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - id: tags
+        name: Tag every released package whose version is not tagged yet
+        run: |
+          set -euo pipefail
+          tags="$(./scripts/release-tags.sh)"
+          for t in $tags; do
+            # The same guard the release runs, before the tag exists.
+            ./scripts/release-target.sh "$t" >/dev/null
+          done
+          refs=()
+          for t in $tags; do
+            git tag "$t" "$GITHUB_SHA"
+            refs+=("refs/tags/$t")
+          done
+          # All or none: a tag pushed without its release would be skipped by
+          # every later run.
+          if [ "${#refs[@]}" -gt 0 ]; then
+            git push --atomic origin "${refs[@]}"
+            echo "tagged ${refs[*]}"
+          fi
+          echo "tags=$(jq -Rsc 'split("\n") | map(select(length > 0))' <<<"$tags")" >> "$GITHUB_OUTPUT"
+
+  release:
+    name: release ${{ matrix.tag }}
+    needs: tag
+    if: needs.tag.outputs.tags != '[]'
+    strategy:
+      fail-fast: false
+      matrix:
+        tag: ${{ fromJSON(needs.tag.outputs.tags) }}
+    uses: ./.github/workflows/release-connector.yml
+    with:
+      tag: ${{ matrix.tag }}
+    secrets: inherit

@@ -3,7 +3,7 @@
 #
 # Scaffold a new ingress connector on the shared runtime. Writes
 #   rust/connectors/<name>/            a crate named ajar-<name>: parser, wiring,
-#                                      example config, README, tests
+#                                      example config, README, changelog, tests
 # and adds it to the connectors workspace. Everything but the parser is the same
 # as every shipped connector: config, key, mTLS NATS, every transport, the
 # seal-and-publish loop, store-and-forward, health, shutdown.
@@ -60,7 +60,7 @@ cat > "$dir/Cargo.toml" <<EOF
 [package]
 name = "$crate"
 description = "Ajar ingress connector for <your format>."
-version.workspace = true
+version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -85,6 +85,29 @@ tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 anyhow.workspace = true
+
+# See CONTRIBUTING.md, "Releases".
+[package.metadata.ajar]
+release = false
+EOF
+
+cat > "$dir/CHANGELOG.md" <<EOF
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+# Changelog: $name
+
+Changes to this one package, released on its own as the tag \`$name-vX.Y.Z\`.
+The format is based on Keep a Changelog (https://keepachangelog.com). The
+version follows semver, and the entity types and attributes it emits count as
+its public interface: renaming or removing one is a major bump (see
+CONTRIBUTING.md, "Releases").
+
+## [Unreleased]
+
+## [0.1.0]
+
+### Added
+
+- First version: decodes <your format> into canonical events.
 EOF
 
 cat > "$dir/src/lib.rs" <<EOF
@@ -501,6 +524,8 @@ created rust/connectors/$name  (crate $crate)
       config: identity, key, transport
   README.md
       say what you decode and in which units
+  CHANGELOG.md
+      one entry per version; bump version in Cargo.toml with it
 
 next:
   cd rust/connectors

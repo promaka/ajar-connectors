@@ -2,7 +2,7 @@
 [package]
 name = "ajar-sapient-wire"
 description = "The SAPIENT (BSI Flex 335) wire format: the published protobuf schema compiled to Rust, and the length-prefixed TCP framing around each message."
-version.workspace = true
+version = "0.6.5"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
