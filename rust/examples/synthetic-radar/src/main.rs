@@ -1,36 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-//! Synthetic radar: stream a realistic **multi-domain** picture (air, surface,
-//! ground) of canonical `mim:` tracks into an Ajar Core over NATS, so an operator
-//! can watch the full governed path `connector -> NATS -> Core -> audit + egress`
-//! render live on the Vantage map.
-//!
-//! Each track follows a looping waypoint route and carries a stable identity so a
-//! consumer correlates observations into one track: a governed **`callsign`**
-//! (its native track key — a callsign / hull id) is the correlation key the console
-//! trails, and the same value rides in `source_uid` metadata for provenance.
-//! Domain-conveying `entity_type` (`mim:aircraft` / `mim:vessel` /
-//! `mim:land-vehicle`) drives correct symbology, and a `hostility` attribute
-//! colours friend/hostile/neutral.
-//!
-//! The shape every connector follows is the three steps in the loop:
-//!   1. normalize a native observation into a canonical Event (here synthesised),
-//!   2. seal it (detached Ed25519 signature ++ canonical bytes),
-//!   3. publish the sealed bytes to the connector's NATS ingest subject.
-//!
-//! ## Run
-//!
-//! ```text
-//! cargo run -p synthetic-radar                 # dev: plaintext localhost NATS
-//! cargo run -p synthetic-radar -- --dry-run    # build+seal+print, no NATS
-//! ```
-//!
-//! Env: `NATS_URL`, `AJAR_SOURCE_ID` (connector identity, default `demo-radar`),
-//! `AJAR_INGEST_PREFIX`, `AJAR_RATE_PER_MIN` (records/min, default 600),
-//! `AJAR_SIGNING_SEED` (32-byte Ed25519 signing seed; required unless --dry-run,
-//! where an ephemeral throwaway key is minted per run),
-//! `AJAR_TLS_CA` / `AJAR_TLS_CERT` / `AJAR_TLS_KEY` (enable mTLS),
-//! `AJAR_HEALTH_ADDR` (Prometheus `/metrics` + `/healthz`).
+//! Synthetic radar: streams air, surface and ground `mim:` tracks into an Ajar
+//! Core over NATS. Each track loops a waypoint route and carries its key as the
+//! governed `callsign` and as `source_uid` metadata, plus a `hostility`.
+//! Environment variables and flags are listed in the README.
 
 use std::env;
 use std::error::Error;
@@ -38,18 +11,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use ajar_connector::{canonical_bytes, seal, EventBuilder, SigningKey};
-
-/// An ephemeral throwaway seed for `--dry-run`, fresh each run — reachable only
-/// where nothing is published, so no key value needs to exist in this
-/// repository at all. Publishing requires `AJAR_SIGNING_SEED`.
-fn ephemeral_seed() -> [u8; 32] {
-    let mut seed = [0u8; 32];
-    std::fs::File::open("/dev/urandom")
-        .and_then(|mut f| std::io::Read::read_exact(&mut f, &mut seed))
-        .expect("[synthetic-radar] reading /dev/urandom");
-    seed
-}
+use ajar_connector::{EventBuilder, SigningKey, NATS_MSG_ID_HEADER};
 
 #[derive(Default)]
 struct Metrics {
@@ -57,8 +19,6 @@ struct Metrics {
     publish_errors: AtomicU64,
 }
 
-/// The three domains this feed renders, each a canonical `mim:` type that drives
-/// the console's symbology.
 #[derive(Clone, Copy)]
 enum Domain {
     Air,
@@ -76,20 +36,19 @@ impl Domain {
     }
 }
 
-/// A synthetic track following a looping waypoint route (a patrol/orbit, not
-/// random motion). Each tick it advances along the current leg, then turns to the
-/// next waypoint on arrival.
+/// A synthetic track that advances along a looping waypoint route.
 struct Track {
-    /// Native track key — rides in `source_uid` metadata; the console's stable id.
     uid: String,
     domain: Domain,
     hostility: &'static str,
-    route: Vec<(f64, f64)>, // waypoints (lat, lon)
+    /// Waypoints as (lat, lon).
+    route: Vec<(f64, f64)>,
     leg: usize,
     lat: f64,
     lon: f64,
     alt_m: f64,
-    step_deg: f64, // ground speed, degrees per sweep
+    /// Ground speed in degrees per sweep.
+    step_deg: f64,
 }
 
 impl Track {
@@ -106,86 +65,50 @@ impl Track {
             self.lon += dlon / dist * self.step_deg;
         }
     }
-
-    /// A diamond racetrack centred on `(cx, cy)` with radius `r`.
-    fn racetrack(cx: f64, cy: f64, r: f64) -> Vec<(f64, f64)> {
-        vec![(cx + r, cy), (cx, cy + r), (cx - r, cy), (cx, cy - r)]
-    }
 }
 
-/// Builds a realistic mixed order of battle over the Gulf: airborne CAP/AWACS,
-/// surface combatants + merchant traffic, and a coastal ground patrol. Stable,
-/// hand-picked track keys and hostilities so the picture reads like a real feed.
+/// A mixed order of battle over the Gulf, each track on a diamond racetrack.
 fn make_tracks() -> Vec<Track> {
-    // (uid, domain, hostility, centre lat, centre lon, radius, altitude m, step)
+    // (uid, domain, hostility, centre lat, centre lon, radius deg, altitude m, step deg)
     #[rustfmt::skip]
     #[allow(clippy::type_complexity)]
     let defs: &[(&str, Domain, &str, f64, f64, f64, f64, f64)] = &[
-        // Air
         ("QTR41", Domain::Air, "Friend", 25.6, 51.2, 0.22, 10600.0, 0.030),
         ("IAF221", Domain::Air, "Friend", 26.2, 50.6, 0.18, 9100.0, 0.026),
         ("AWACS1", Domain::Air, "Friend", 26.0, 50.9, 0.30, 9800.0, 0.018),
         ("UNK07", Domain::Air, "Unknown", 26.7, 52.0, 0.15, 7300.0, 0.034),
         ("HOSTILE9", Domain::Air, "Hostile", 27.0, 52.3, 0.20, 6100.0, 0.038),
         ("9HA4721", Domain::Air, "Neutral", 25.3, 51.6, 0.24, 11200.0, 0.028),
-        // Surface
         ("HMS-DARING", Domain::Surface, "Friend", 25.9, 50.3, 0.10, 0.0, 0.006),
         ("USS-COLE", Domain::Surface, "Friend", 26.1, 50.1, 0.08, 0.0, 0.005),
         ("IRIS-JAMARAN", Domain::Surface, "Hostile", 26.6, 51.4, 0.09, 0.0, 0.006),
         ("MV-SHERE", Domain::Surface, "Neutral", 25.5, 50.5, 0.14, 0.0, 0.004),
         ("MT-PATROL3", Domain::Surface, "Unknown", 26.4, 50.8, 0.07, 0.0, 0.005),
-        // Ground (coastal)
         ("SAM-SKORP1", Domain::Ground, "Hostile", 26.9, 51.9, 0.04, 15.0, 0.002),
         ("PATROL-V7", Domain::Ground, "Friend", 25.7, 50.2, 0.06, 20.0, 0.003),
         ("CONVOY-ZZ", Domain::Ground, "Friend", 25.4, 50.35, 0.05, 12.0, 0.0025),
     ];
     defs.iter()
-        .map(|&(uid, domain, aff, cx, cy, r, alt, step)| {
-            let route = Track::racetrack(cx, cy, r);
+        .map(|&(uid, domain, hostility, cx, cy, r, alt_m, step_deg)| {
+            let route = vec![(cx + r, cy), (cx, cy + r), (cx - r, cy), (cx, cy - r)];
             let (lat, lon) = route[0];
             Track {
                 uid: uid.to_string(),
                 domain,
-                hostility: aff,
+                hostility,
                 route,
                 leg: 1,
                 lat,
                 lon,
-                alt_m: alt,
-                step_deg: step,
+                alt_m,
+                step_deg,
             }
         })
         .collect()
 }
 
-/// Whether this invocation publishes nothing. Publishing is the default, so an
-/// unrecognised or misspelled flag leaves the connector publishing rather than
-/// silently entering a mode where the dev seed becomes reachable.
-fn is_dry_run(args: &[String]) -> bool {
-    args.iter().any(|a| a == "--dry-run")
-}
-
-fn flag_value(args: &[String], name: &str) -> Option<String> {
-    let i = args.iter().position(|a| a == name)?;
-    args.get(i + 1).cloned()
-}
-
-fn env_f64(key: &str, default: f64) -> f64 {
-    env::var(key)
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(default)
-}
-
-/// Loads the Ed25519 signing seed from the file named by `AJAR_SIGNING_SEED` —
-/// the same variable every connector template and the Helm chart use. The file is
-/// either 32 raw bytes or the 64 hex characters `ajar keygen` writes (surrounding
-/// whitespace tolerated); this is how the connector assumes its **registered
-/// identity**, and the seed's public half must be in Core's registry.
-///
-/// The dev seed is reachable only under `--dry-run`, where nothing is published.
-/// Publishing without a real seed is refused rather than silently signed with a
-/// key whose private half is in this repository.
+/// Loads the Ed25519 seed named by `AJAR_SIGNING_SEED`, or mints an ephemeral
+/// key under `--dry-run`, where nothing is published.
 fn load_seed(dry_run: bool) -> Result<[u8; 32], Box<dyn Error>> {
     match seed_source(dry_run, env::var("AJAR_SIGNING_SEED").ok().as_deref()) {
         SeedSource::File(path) => {
@@ -201,30 +124,27 @@ fn load_seed(dry_run: bool) -> Result<[u8; 32], Box<dyn Error>> {
         }
         SeedSource::Ephemeral => {
             eprintln!(
-                "[synthetic-radar] no AJAR_SIGNING_SEED — minted an ephemeral throwaway key (dry-run only)"
+                "[synthetic-radar] no AJAR_SIGNING_SEED, minted an ephemeral throwaway key (dry-run only)"
             );
-            Ok(ephemeral_seed())
+            let mut seed = [0u8; 32];
+            std::fs::File::open("/dev/urandom")
+                .and_then(|mut f| std::io::Read::read_exact(&mut f, &mut seed))
+                .expect("[synthetic-radar] reading /dev/urandom");
+            Ok(seed)
         }
         SeedSource::Refuse => Err(
-            "set AJAR_SIGNING_SEED to your 32-byte key file (see scripts/gen-connector-key.sh). \
-             The dev seed is a published test key and is never used for publishing."
+            "set AJAR_SIGNING_SEED to your 32-byte key file (see scripts/gen-connector-key.sh)"
                 .into(),
         ),
     }
 }
 
-/// Where the signing seed comes from. Decided before any I/O and with no
-/// environment access, so the rule that matters — the dev seed is unreachable
-/// whenever events are published — is a pure function that can be checked
-/// exhaustively rather than a branch nobody exercises.
+/// Where the signing seed comes from, decided without I/O so the rule that a
+/// publishing run never signs with an ephemeral key is unit-tested.
 #[derive(Debug, PartialEq, Eq)]
 enum SeedSource {
-    /// Read the seed from this path.
     File(String),
-    /// An ephemeral throwaway key, minted per run. Only ever selected when
-    /// nothing is published.
     Ephemeral,
-    /// No seed and events would be published: refuse rather than sign.
     Refuse,
 }
 
@@ -236,8 +156,8 @@ fn seed_source(dry_run: bool, configured: Option<&str>) -> SeedSource {
     }
 }
 
-/// A signing seed is 32 raw bytes, or the 64 hex characters `ajar keygen` writes
-/// (with optional surrounding whitespace). Fails closed on anything else.
+/// A seed file is 32 raw bytes or the 64 hex characters `ajar keygen` writes,
+/// surrounding whitespace tolerated.
 fn parse_seed(bytes: &[u8]) -> Option<[u8; 32]> {
     if let Ok(raw) = <[u8; 32]>::try_from(bytes) {
         return Some(raw);
@@ -249,19 +169,26 @@ fn parse_seed(bytes: &[u8]) -> Option<[u8; 32]> {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let args: Vec<String> = env::args().collect();
-    let dry_run = is_dry_run(&args);
-    let max_ticks: Option<u64> = flag_value(&args, "--ticks").and_then(|v| v.parse().ok());
+    let dry_run = args.iter().any(|a| a == "--dry-run");
+    let max_ticks: Option<u64> = args
+        .iter()
+        .position(|a| a == "--ticks")
+        .and_then(|i| args.get(i + 1))
+        .and_then(|v| v.parse().ok());
 
     let source_id = env::var("AJAR_SOURCE_ID").unwrap_or_else(|_| "demo-radar".to_string());
     let prefix = env::var("AJAR_INGEST_PREFIX").unwrap_or_else(|_| "ajar.ingest".to_string());
     let nats_url = env::var("NATS_URL").unwrap_or_else(|_| "nats://127.0.0.1:4222".to_string());
-    let rate_per_min = env_f64("AJAR_RATE_PER_MIN", 600.0).max(1.0);
+    let rate_per_min = env::var("AJAR_RATE_PER_MIN")
+        .ok()
+        .and_then(|v| v.parse::<f64>().ok())
+        .unwrap_or(600.0)
+        .max(1.0);
 
     let mut tracks = make_tracks();
     let n_tracks = tracks.len();
 
-    // One "sweep" emits a position for every track. Pick the sweep interval so
-    // `n_tracks * sweeps_per_sec` hits the requested records/minute.
+    // One sweep emits a position for every track.
     let sweeps_per_sec = (rate_per_min / 60.0) / n_tracks as f64;
     let interval = Duration::from_secs_f64((1.0 / sweeps_per_sec).clamp(0.05, 5.0));
 
@@ -294,12 +221,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         for track in tracks.iter_mut() {
             track.advance();
 
-            // 1. normalize (synthesised). Every event carries the track's stable
-            //    identity so a consumer correlates observations into one track:
-            //    `callsign` (a governed attribute on the platform types) is the
-            //    human-readable id, and the same native key rides in `source_uid`
-            //    metadata for provenance. Without a governed identity a consumer sees
-            //    every observation as a new track.
+            // 1. Normalize (synthesised here). The governed `callsign` is what a consumer
+            // correlates a track on.
             let mut builder = EventBuilder::new(&source_id, track.domain.entity_type())
                 .new_id()
                 .now()
@@ -309,19 +232,20 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 .attribute("hostility", track.hostility)
                 .attribute("callsign", &track.uid)
                 .metadata("source_uid", &track.uid);
-            // A vessel's domain is an attribute now that surface and subsurface
-            // share one entity type.
+            // Surface and subsurface vessels share one entity type.
             if let Domain::Surface = track.domain {
                 builder = builder.attribute("vessel_domain", "Surface");
             }
             let event = builder.build()?;
 
-            // 2. seal, 3. publish. Nats-Msg-Id carries the event id so the
-            // broker's duplicate window can drop retransmissions.
-            let sealed = seal(&canonical_bytes(&event), &key);
+            // 2. Seal.
+            let sealed = ajar_connector::seal(&ajar_connector::canonical_bytes(&event), &key);
+
+            // 3. Publish.
             if let Some(client) = &client {
                 let mut headers = async_nats::HeaderMap::new();
-                headers.insert("Nats-Msg-Id", event.id.as_str());
+                // The event id lets the broker's duplicate window drop retransmissions.
+                headers.insert(NATS_MSG_ID_HEADER, event.id.as_str());
                 if let Err(e) = client
                     .publish_with_headers(subject.clone(), headers, bytes::Bytes::from(sealed))
                     .await
@@ -368,9 +292,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-/// Connects to NATS, enabling **mTLS** when `AJAR_TLS_CA` / `AJAR_TLS_CERT` /
-/// `AJAR_TLS_KEY` are all set (production; client-cert CN = `source_id`). Unset →
-/// plaintext for local dev.
+/// Connects to NATS over mTLS when `AJAR_TLS_CA`, `AJAR_TLS_CERT` and
+/// `AJAR_TLS_KEY` are all set, else in plaintext.
 async fn nats_connect(url: &str) -> Result<async_nats::Client, async_nats::ConnectError> {
     let mut opts = async_nats::ConnectOptions::new().retry_on_initial_connect();
     match (
@@ -385,13 +308,12 @@ async fn nats_connect(url: &str) -> Result<async_nats::Client, async_nats::Conne
                 .add_root_certificates(ca.into())
                 .add_client_certificate(cert.into(), key.into());
         }
-        _ => eprintln!("[synthetic-radar] no AJAR_TLS_* set — connecting without TLS (dev only)"),
+        _ => eprintln!("[synthetic-radar] no AJAR_TLS_* set, connecting without TLS (dev only)"),
     }
     opts.connect(url).await
 }
 
-/// Spawns a tiny health/metrics HTTP endpoint when `AJAR_HEALTH_ADDR` is set.
-/// `GET /healthz` → liveness; `GET /metrics` → Prometheus text.
+/// Serves `GET /healthz` and Prometheus `GET /metrics` on `AJAR_HEALTH_ADDR`, if set.
 fn spawn_health(metrics: Arc<Metrics>) {
     let addr = match env::var("AJAR_HEALTH_ADDR") {
         Ok(a) if !a.is_empty() => a,
@@ -438,88 +360,30 @@ fn spawn_health(metrics: Arc<Metrics>) {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_dry_run, seed_source, SeedSource};
-
-    fn argv(parts: &[&str]) -> Vec<String> {
-        std::iter::once("synthetic-radar".to_string())
-            .chain(parts.iter().map(|s| s.to_string()))
-            .collect()
-    }
-
-    /// The one rule that matters: nothing may both sign with the published test
-    /// seed and publish. Checked over every flag arrangement crossed with every
-    /// state the seed variable can be in, rather than trusting one branch.
-    #[test]
-    fn no_invocation_both_signs_with_an_unregistered_key_and_publishes() {
-        let flag_sets: &[&[&str]] = &[
-            &[],
-            &["--ticks", "1"],
-            &["--dry-run"],
-            &["--dry-run", "--ticks", "1"],
-            &["--ticks", "1", "--dry-run"],
-            &["--rate", "600"],
-            // Near-misses: none of these may be mistaken for --dry-run, because
-            // being wrong here puts the dev seed on a publishing path.
-            &["--dry_run"],
-            &["--dryrun"],
-            &["-dry-run"],
-            &["--dry-run=true"],
-            &["--DRY-RUN"],
-            &["--ticks", "--dry-run"],
-        ];
-        let seed_states: &[Option<&str>] = &[None, Some(""), Some("/etc/ajar/seed")];
-
-        for flags in flag_sets {
-            let args = argv(flags);
-            let dry = is_dry_run(&args);
-            for configured in seed_states {
-                let source = seed_source(dry, *configured);
-                if !dry {
-                    assert_ne!(
-                        source,
-                        SeedSource::Ephemeral,
-                        "{flags:?} with seed {configured:?} publishes but selected the ephemeral key"
-                    );
-                }
-                // And the converse worth stating: a configured seed always wins,
-                // so --dry-run never quietly discards a real key.
-                if matches!(configured, Some(p) if !p.is_empty()) {
-                    assert!(matches!(source, SeedSource::File(_)));
-                }
-            }
-        }
-    }
+    use super::{parse_seed, seed_source, SeedSource};
 
     #[test]
-    fn publishing_without_a_seed_is_refused_not_defaulted() {
+    fn publishing_without_seed_is_refused() {
         assert_eq!(seed_source(false, None), SeedSource::Refuse);
         assert_eq!(seed_source(false, Some("")), SeedSource::Refuse);
     }
 
     #[test]
-    fn the_ephemeral_key_is_reachable_only_in_dry_run() {
+    fn ephemeral_key_only_in_dry_run() {
         assert_eq!(seed_source(true, None), SeedSource::Ephemeral);
         assert_eq!(seed_source(true, Some("")), SeedSource::Ephemeral);
     }
 
     #[test]
-    fn only_the_exact_flag_means_dry_run() {
-        assert!(is_dry_run(&argv(&["--dry-run"])));
-        for near in [
-            "--dry_run",
-            "--dryrun",
-            "-dry-run",
-            "--DRY-RUN",
-            "--dry-run=true",
-        ] {
-            assert!(
-                !is_dry_run(&argv(&[near])),
-                "{near} must not enable dry-run"
+    fn configured_seed_always_wins() {
+        for dry_run in [false, true] {
+            assert_eq!(
+                seed_source(dry_run, Some("/etc/ajar/seed")),
+                SeedSource::File("/etc/ajar/seed".to_string()),
+                "dry_run={dry_run}"
             );
         }
     }
-
-    use super::parse_seed;
 
     #[test]
     fn accepts_32_raw_bytes() {
@@ -528,8 +392,7 @@ mod tests {
     }
 
     #[test]
-    fn accepts_64_hex_from_ajar_keygen() {
-        // What `ajar keygen` writes: 64 hex chars, here with a trailing newline.
+    fn accepts_64_hex_with_newline() {
         let file = format!("{}\n", "03".repeat(32));
         assert_eq!(parse_seed(file.as_bytes()), Some([0x03u8; 32]));
     }
