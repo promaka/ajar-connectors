@@ -1,39 +1,23 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Consumer mode: subscribe to governed egress, verify EVERY event under the
-//! deployment's egress key, and hand the payload over. A consumer never
-//! signs; its whole job is to refuse what does not verify.
-//!
-//! The default is a verified tap: accepted payloads stream to stdout, one
-//! per line, ready to pipe into whatever the consumer runs. What does not
-//! verify is counted and dropped, never handed over. For a real delivery
-//! target - a TAK server, an HTTP consumer - `--to-tak`/`--to-http` generate
-//! a ready egress-connector config instead (the one fact a packet cannot
-//! carry is where the consumer wants the data, so that is the one flag).
+//! Consumer mode: subscribe to governed egress, verify every event under the
+//! deployment's egress key, and write each accepted payload to stdout, one per
+//! line; what does not verify is counted and dropped. `--to-tak`/`--to-http`
+//! write a ready egress-connector config for a real delivery target instead.
 
-use anyhow::{anyhow, Context};
+use anyhow::Context;
 use ed25519_dalek::VerifyingKey;
+use futures_util::StreamExt as _;
 use prost::Message as _;
+use tokio::io::AsyncWriteExt as _;
 
-use crate::packet::Packet;
+use crate::packet::{Manifest, Packet};
 
-/// Verify-and-validate for CI and staging: everything `run` would check
-/// before touching the network - subject present, egress key parses, formats
-/// sane, referenced cert files present - then exit. The packet signature and
-/// checksums were already enforced by `packet::open` before this is called.
+/// Everything `run` checks before touching the network: subject, egress key,
+/// formats and referenced cert files. `packet::open` already verified the
+/// signature and checksums.
 pub fn check(packet: &Packet) -> anyhow::Result<()> {
     let m = &packet.manifest;
-    let subject = m.egress_subject.as_deref().ok_or_else(|| {
-        anyhow!("this consumer packet names no egress_subject; ask the operator to re-issue it")
-    })?;
-    let key_hex = m
-        .egress_verifying_key_hex
-        .as_deref()
-        .ok_or_else(|| anyhow!("this consumer packet carries no egress_verifying_key_hex"))?;
-    let key_bytes: [u8; 32] = hex::decode(key_hex.trim())
-        .context("egress_verifying_key_hex is not hex")?
-        .try_into()
-        .map_err(|_| anyhow!("egress_verifying_key_hex must be 32 bytes"))?;
-    VerifyingKey::from_bytes(&key_bytes).context("egress verifying key is invalid")?;
+    let (subject, _) = egress(m)?;
     for path in [
         m.keys.ca_cert_path.as_deref(),
         m.keys.mtls_cert_path.as_deref(),
@@ -57,18 +41,15 @@ pub fn check(packet: &Packet) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub struct Options {
-    pub to_tak: Option<String>,
-    pub to_http: Option<String>,
-}
-
-pub async fn run(packet: &Packet, opts: &Options) -> anyhow::Result<()> {
-    let m = &packet.manifest;
+/// The egress subject and verifying key a consumer packet must carry.
+fn egress(m: &Manifest) -> anyhow::Result<(&str, VerifyingKey)> {
     let subject = m.egress_subject.as_deref().ok_or_else(|| {
-        anyhow!("this consumer packet names no egress_subject; ask the operator to re-issue it")
+        anyhow::anyhow!(
+            "this consumer packet names no egress_subject; ask the operator to re-issue it"
+        )
     })?;
     let key_hex = m.egress_verifying_key_hex.as_deref().ok_or_else(|| {
-        anyhow!(
+        anyhow::anyhow!(
             "this consumer packet carries no egress_verifying_key_hex, so received \
              events could not be verified; ask the operator to re-issue it"
         )
@@ -76,16 +57,26 @@ pub async fn run(packet: &Packet, opts: &Options) -> anyhow::Result<()> {
     let key_bytes: [u8; 32] = hex::decode(key_hex.trim())
         .context("egress_verifying_key_hex is not hex")?
         .try_into()
-        .map_err(|_| anyhow!("egress_verifying_key_hex must be 32 bytes"))?;
-    let egress_key =
-        VerifyingKey::from_bytes(&key_bytes).context("egress verifying key is invalid")?;
+        .map_err(|_| anyhow::anyhow!("egress_verifying_key_hex must be 32 bytes"))?;
+    let key = VerifyingKey::from_bytes(&key_bytes).context("egress verifying key is invalid")?;
+    Ok((subject, key))
+}
+
+pub struct Options {
+    pub to_tak: Option<String>,
+    pub to_http: Option<String>,
+}
+
+pub async fn run(packet: &Packet, opts: &Options) -> anyhow::Result<()> {
+    let m = &packet.manifest;
+    let (subject, egress_key) = egress(m)?;
     let formats: Vec<String> = m.formats.clone().unwrap_or_default();
 
-    // A delivery flag must name a format the operator actually egresses:
-    // wiring a TAK server to a deployment that never renders CoT is a
-    // misconfiguration better caught here than in an empty TAK screen.
+    // A delivery flag must name a format the deployment egresses.
     if let Some(tak) = &opts.to_tak {
-        require_format(&formats, "cot", "--to-tak")?;
+        if !formats.iter().any(|f| f == "cot") {
+            return Err(format_error(&formats, "cot", "--to-tak"));
+        }
         return write_tak_config(packet, tak);
     }
     if let Some(url) = &opts.to_http {
@@ -96,7 +87,6 @@ pub async fn run(packet: &Packet, opts: &Options) -> anyhow::Result<()> {
         return write_http_config(packet, url, format);
     }
 
-    // The verified tap.
     for (k, v) in crate::producer::mtls_env(packet) {
         std::env::set_var(k, v);
     }
@@ -120,8 +110,6 @@ pub async fn run(packet: &Packet, opts: &Options) -> anyhow::Result<()> {
 
     let mut accepted: u64 = 0;
     let mut rejected: u64 = 0;
-    use futures_util::StreamExt as _;
-    use tokio::io::AsyncWriteExt as _;
     let mut stdout = tokio::io::stdout();
     while let Some(msg) = sub.next().await {
         match ajar_connector::verify(&msg.payload, &egress_key) {
@@ -149,16 +137,8 @@ pub async fn run(packet: &Packet, opts: &Options) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn require_format(formats: &[String], want: &str, flag: &str) -> anyhow::Result<()> {
-    if formats.iter().any(|f| f == want) {
-        Ok(())
-    } else {
-        Err(format_error(formats, want, flag))
-    }
-}
-
 fn format_error(formats: &[String], want: &str, flag: &str) -> anyhow::Error {
-    anyhow!(
+    anyhow::anyhow!(
         "{flag} needs the {want} format, but this packet's deployment egresses: {}. \
          Ask the operator to enable it, or consume one of the listed formats.",
         if formats.is_empty() {
@@ -169,10 +149,9 @@ fn format_error(formats: &[String], want: &str, flag: &str) -> anyhow::Error {
     )
 }
 
-/// A ready tak-egress config, subscribed to the CoT egress slug. The TAK-side
-/// TLS certificates are enrolled with the TAK Server by its owner - the one
-/// credential no operator packet can carry - so they are the two lines left
-/// to fill.
+/// A tak-egress config on the CoT egress slug. The TAK-side client
+/// certificate is issued by the TAK Server's owner, so those two lines are
+/// left to fill.
 fn write_tak_config(packet: &Packet, tak_url: &str) -> anyhow::Result<()> {
     let m = &packet.manifest;
     let path = packet.path(&format!("{}-tak-egress.toml", m.source_id));
@@ -203,7 +182,7 @@ fn write_tak_config(packet: &Packet, tak_url: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// A ready generic-egress config delivering the JSON rendering to a webhook.
+/// A generic-egress config delivering the JSON rendering to a webhook.
 fn write_http_config(packet: &Packet, url: &str, format: &str) -> anyhow::Result<()> {
     let m = &packet.manifest;
     let path = packet.path(&format!("{}-http-egress.toml", m.source_id));
