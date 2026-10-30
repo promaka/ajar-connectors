@@ -1,43 +1,20 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-//! # Connector template — your starting point
-//!
-//! Copy this crate, make the **two edits** marked `EDIT 1` and `EDIT 2` below,
-//! and you have a working connector. Everything else is done for you.
-//!
-//! **See a sealed event right now — no key, no NATS, no feed:**
-//! ```text
-//! echo '{"lat":26.4,"lon":50.9,"alt_m":11000,"quality":0.9}' \
-//!   | cargo run -p connector-template -- --dry-run
-//! ```
-//!
-//! **Then run for real** (key from `scripts/gen-connector-key.sh`):
-//! ```text
-//! AJAR_SIGNING_SEED=connector.seed AJAR_SOURCE_ID=acme-radar-1 \
-//! NATS_URL=tls://nats.you.mil:4222  cargo run -p connector-template
-//! ```
-//!
-//! **Production behaviour (built in, no edits needed):**
-//! - A malformed or un-mappable record is **logged and skipped**, never fatal —
-//!   one bad input can't take the connector down.
-//! - A NATS publish error is logged and the connector keeps going; the client
-//!   retries the initial connection and auto-reconnects after a drop.
-//! - Set `AJAR_HEALTH_ADDR=0.0.0.0:9090` to expose `GET /healthz` (liveness) and
-//!   `GET /metrics` (Prometheus counters: published / skipped / publish_errors).
+//! Connector template: copy this crate and make the two edits marked `EDIT 1`
+//! and `EDIT 2`. It reads newline-delimited JSON on stdin, maps each record to
+//! an event, seals it and publishes it to NATS; a bad record is logged and
+//! skipped. The README shows how to run it.
 
 use std::env;
 use std::error::Error;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
-use ajar_connector::{canonical_bytes, seal, BuildError, Event, EventBuilder, SigningKey};
+use ajar_connector::{BuildError, Event, EventBuilder, SigningKey};
 use serde::Deserialize;
 use tokio::io::{AsyncBufReadExt, BufReader};
 
-// ╔═══════════════════════════════════════════════════════════════════════════╗
-// ║ EDIT 1 — describe ONE record from your feed.                              ║
-// ║ (These fields match the demo JSON above; change them to match your data.) ║
-// ╚═══════════════════════════════════════════════════════════════════════════╝
+// EDIT 1: describe one record from your feed. These fields match the README demo.
 #[derive(Debug, Deserialize)]
 struct MyRecord {
     lat: f64,
@@ -46,11 +23,7 @@ struct MyRecord {
     quality: f64,
 }
 
-// ╔═══════════════════════════════════════════════════════════════════════════╗
-// ║ EDIT 2 — map your record into a canonical Event.                          ║
-// ║ Use the entity_type Ajar assigned you. Add .attribute(k, v) only for      ║
-// ║ attributes your entity type's ontology schema defines.                    ║
-// ╚═══════════════════════════════════════════════════════════════════════════╝
+// EDIT 2: map your record to an Event of your entity type and its schema's attributes.
 fn to_event(source_id: &str, r: &MyRecord) -> Result<Event, BuildError> {
     EventBuilder::new(source_id, "mim:aircraft")
         .new_id()
@@ -60,11 +33,8 @@ fn to_event(source_id: &str, r: &MyRecord) -> Result<Event, BuildError> {
         .build()
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// You usually don't need to touch anything below this line.
-// ─────────────────────────────────────────────────────────────────────────────
+// Usually no edits are needed below here.
 
-/// Process counters, surfaced at `/metrics` and useful in logs.
 #[derive(Default)]
 struct Metrics {
     published: AtomicU64,
@@ -83,7 +53,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let key = SigningKey::from_bytes(&load_seed(dry_run));
 
     let metrics = Arc::new(Metrics::default());
-    spawn_health(metrics.clone()); // no-op unless AJAR_HEALTH_ADDR is set
+    spawn_health(metrics.clone());
 
     let client = if dry_run {
         eprintln!("[connector] --dry-run: building + sealing, not publishing");
@@ -94,14 +64,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
     };
     eprintln!("[connector] source_id={source_id}  subject={subject}");
 
-    // Your feed: by default, newline-delimited JSON on stdin. Swap this reader
-    // for your TCP socket / file / API / serial port — the rest stays the same.
+    // EDIT: swap stdin for your socket, file, API or serial port.
     let mut lines = BufReader::new(tokio::io::stdin()).lines();
     while let Some(line) = lines.next_line().await? {
         if line.trim().is_empty() {
             continue;
         }
-        // Resilient: a bad record is logged and skipped, never fatal.
         let record: MyRecord = match serde_json::from_str(&line) {
             Ok(r) => r,
             Err(e) => {
@@ -118,15 +86,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 continue;
             }
         };
-        let canonical = canonical_bytes(&event);
-        let sealed = seal(&canonical, &key); // sign it
+        let sealed = ajar_connector::seal(&ajar_connector::canonical_bytes(&event), &key);
 
         if let Some(client) = &client {
             if let Err(e) = client
                 .publish(subject.clone(), bytes::Bytes::from(sealed.clone()))
                 .await
             {
-                // Non-fatal: keep running; the client reconnects underneath us.
+                // The client reconnects on its own, so keep going.
                 eprintln!("[connector] publish error (continuing): {e}");
                 metrics.publish_errors.fetch_add(1, Ordering::Relaxed);
                 continue;
@@ -144,11 +111,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-/// Connects to NATS, enabling **mTLS** when `AJAR_TLS_CA` / `AJAR_TLS_CERT` /
-/// `AJAR_TLS_KEY` are all set — the production path: the operator issues these
-/// (client-cert CN = your `source_id`) and the Helm chart mounts them under
-/// `/etc/ajar/tls`. With them unset, connects plaintext for local dev.
-/// `retry_on_initial_connect` tolerates NATS not being up yet and auto-reconnects.
+/// Connects to NATS over mTLS when `AJAR_TLS_CA`, `AJAR_TLS_CERT` and
+/// `AJAR_TLS_KEY` are all set, else in plaintext. The client certificate's CN is
+/// your `source_id`.
 async fn nats_connect(url: &str) -> Result<async_nats::Client, async_nats::ConnectError> {
     let mut opts = async_nats::ConnectOptions::new().retry_on_initial_connect();
     match (
@@ -163,14 +128,13 @@ async fn nats_connect(url: &str) -> Result<async_nats::Client, async_nats::Conne
                 .add_root_certificates(ca.into())
                 .add_client_certificate(cert.into(), key.into());
         }
-        _ => eprintln!("[connector] no AJAR_TLS_* set — connecting without TLS (dev only)"),
+        _ => eprintln!("[connector] no AJAR_TLS_* set, connecting without TLS (dev only)"),
     }
     opts.connect(url).await
 }
 
-/// Loads your 32-byte Ed25519 seed from the file named by `AJAR_SIGNING_SEED`.
-/// In `--dry-run` with no seed set, falls back to a dev seed so you can try it
-/// instantly — never used for real publishing.
+/// Loads the Ed25519 seed named by `AJAR_SIGNING_SEED`, or mints an ephemeral
+/// key under `--dry-run`, where nothing is published.
 fn load_seed(dry_run: bool) -> [u8; 32] {
     match env::var("AJAR_SIGNING_SEED") {
         Ok(path) => {
@@ -179,7 +143,7 @@ fn load_seed(dry_run: bool) -> [u8; 32] {
             parse_seed(&bytes).expect("signing seed must be 32 raw bytes or 64 hex chars")
         }
         Err(_) if dry_run => {
-            eprintln!("[connector] no AJAR_SIGNING_SEED set — ephemeral throwaway key (dry-run only)");
+            eprintln!("[connector] no AJAR_SIGNING_SEED set, ephemeral throwaway key (dry-run only)");
             let mut seed = [0u8; 32];
             std::fs::File::open("/dev/urandom")
                 .and_then(|mut f| std::io::Read::read_exact(&mut f, &mut seed))
@@ -192,8 +156,8 @@ fn load_seed(dry_run: bool) -> [u8; 32] {
     }
 }
 
-/// A signing seed is 32 raw bytes, or the 64 hex characters `ajar keygen` writes
-/// (surrounding whitespace tolerated). Fails closed on anything else.
+/// A seed file is 32 raw bytes or the 64 hex characters `ajar keygen` writes,
+/// surrounding whitespace tolerated.
 fn parse_seed(bytes: &[u8]) -> Option<[u8; 32]> {
     if let Ok(raw) = <[u8; 32]>::try_from(bytes) {
         return Some(raw);
@@ -202,9 +166,8 @@ fn parse_seed(bytes: &[u8]) -> Option<[u8; 32]> {
     decoded.try_into().ok()
 }
 
-/// Spawns a tiny health/metrics HTTP endpoint when `AJAR_HEALTH_ADDR` is set
-/// (e.g. `0.0.0.0:9090`). `GET /healthz` → liveness; `GET /metrics` → Prometheus
-/// text. Std-only — no extra dependency, no impact unless you opt in.
+/// Serves `GET /healthz` and Prometheus `GET /metrics` on `AJAR_HEALTH_ADDR`
+/// (e.g. `0.0.0.0:9090`), if set.
 fn spawn_health(metrics: Arc<Metrics>) {
     let addr = match env::var("AJAR_HEALTH_ADDR") {
         Ok(a) if !a.is_empty() => a,
