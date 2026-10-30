@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! TAK info-egress relay binary. All logic lives in the library (`run`); this is
-//! only config + tracing wiring, matching the ingress connectors' shape.
+//! TAK egress relay binary.
 
 use ajar_tak_egress::EgressConfig;
 use anyhow::Context;
