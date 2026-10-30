@@ -31,6 +31,10 @@ docker compose -f deploy/dev/compose.yml up --build
 docker compose -f deploy/dev/compose.yml run --rm sink audit /etc/ajar/sink.toml
 ```
 
+`AJAR_TLS_CA`, `AJAR_TLS_CERT` and `AJAR_TLS_KEY` enable mTLS, as they do for a
+connector. `AJAR_SINK_NATS_URL` overrides `nats_url` for `run`, for a compose
+overlay that moves the sink onto the host network.
+
 ## What is stored
 
 One row per accepted event, holding the exact bytes that arrived plus the fields

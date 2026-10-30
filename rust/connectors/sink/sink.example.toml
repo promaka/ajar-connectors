@@ -1,26 +1,13 @@
 # SPDX-License-Identifier: Apache-2.0
 #
-# Example sink config. Copy, adjust, and run:
-#   ajar-sink run   ./sink.toml     # subscribe, verify, persist
-#   ajar-sink audit ./sink.toml     # re-verify every signature and link
-#   ajar-sink stats ./sink.toml     # what is held, per source
-#
-# The sink records what publishers actually sent and lets anyone prove afterwards
-# that the record is complete and unaltered. It does not govern: no policy, no
-# ontology, no classification. That is Ajar Core's job.
+# Example sink config. Run: ajar-sink run|audit|stats ./sink.toml
 
 nats_url = "nats://127.0.0.1:4222"
-
-# Every connector on the bus. Narrow it to one source with
-# "ajar.ingest.demo-radar" if you only want that feed.
+# Every connector on the bus; "ajar.ingest.demo-radar" narrows it to one source.
 subject = "ajar.ingest.>"
-
 database = "./ajar-sink.db"
 
-# Publishers this sink will accept, and the verifying key each registered. A
-# source that is not listed is refused: an event nobody can verify is worse than
-# no event at all. Generate a connector's key with `scripts/gen-connector-key.sh`
-# and register the public half it prints; the demo stack mints its own at
-# startup and registers it via sources_dir (see deploy/dev/sink.toml).
+# Accepted publishers and their hex verifying keys, from scripts/gen-connector-key.sh.
+# A source that is not listed is refused.
 [sources]
 "acme-radar-1" = "<64-char hex verifying key, from scripts/gen-connector-key.sh>"

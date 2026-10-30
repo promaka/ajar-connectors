@@ -1,23 +1,18 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Render verified events as Cursor-on-Target onto mesh SA multicast, so a TAK
-//! client on the same network shows the picture with no server and no setup.
-//!
-//! This is the demo's eyes, not an egress path. Production egress is Ajar Core
-//! rendering governed CoT for `ajar-tak-egress` to relay to a TAK Server; this
-//! renders only what THIS sink has verified, addressed to ATAK's default mesh
-//! SA group (239.2.3.1:6969), and is off unless configured. Best-effort by
-//! design: a send failure is counted, never fatal, and never touches the store.
+//! client on the same network shows the picture with no server. A demo view, off
+//! unless configured; production egress is Ajar Core with `ajar-tak-egress`.
 
-use std::net::UdpSocket;
+use std::net::{Ipv4Addr, SocketAddr, UdpSocket};
 
 use ajar_connector::Event;
+use anyhow::Context;
 
 /// ATAK's default mesh SA multicast group.
 pub const DEFAULT_GROUP: &str = "239.2.3.1:6969";
 
-/// How long a rendered track stays fresh on the map. Publishers in the demo
-/// re-report well inside this, so markers move rather than blink.
-const STALE_SECONDS: i64 = 60;
+/// How long a rendered track stays on the map without a new report.
+const STALE_S: i64 = 60;
 
 pub struct CotOut {
     socket: UdpSocket,
@@ -25,10 +20,9 @@ pub struct CotOut {
 }
 
 impl CotOut {
-    /// `interface` pins which network the picture goes out on — the address of
-    /// the interface your TAK clients share. Multicast otherwise leaves on the
-    /// OS default route, which on a multi-homed host is routinely the wrong one
-    /// and fails silently: sends succeed, nothing arrives.
+    /// `interface` is the IPv4 address of the interface the TAK clients share.
+    /// Without it multicast leaves on the OS default route, which on a
+    /// multi-homed host may be another network.
     pub fn open(group: &str, interface: Option<&str>) -> anyhow::Result<CotOut> {
         // socket2 for the interface pin; std's UdpSocket has no such knob.
         let socket = socket2::Socket::new(
@@ -38,26 +32,24 @@ impl CotOut {
         )?;
         socket.set_multicast_loop_v4(true)?;
         if let Some(addr) = interface {
-            let ip: std::net::Ipv4Addr = addr
+            let ip: Ipv4Addr = addr
                 .parse()
-                .map_err(|_| anyhow::anyhow!("cot interface {addr:?} is not an IPv4 address"))?;
+                .with_context(|| format!("cot interface {addr:?} is not an IPv4 address"))?;
             socket.set_multicast_if_v4(&ip)?;
         }
-        socket.bind(&std::net::SocketAddr::from(([0, 0, 0, 0], 0)).into())?;
+        socket.bind(&SocketAddr::from(([0, 0, 0, 0], 0)).into())?;
         Ok(CotOut {
             socket: socket.into(),
             group: group.to_string(),
         })
     }
 
-    /// Render and send one verified event. Events with no location are skipped:
-    /// CoT is a map protocol, and a point at (0,0) is a lie, not a default.
-    pub fn send(&self, event: &Event) -> anyhow::Result<bool> {
-        let Some(xml) = render(event) else {
-            return Ok(false);
-        };
-        self.socket.send_to(xml.as_bytes(), &self.group)?;
-        Ok(true)
+    /// Render and send one verified event; an event with no location is skipped.
+    pub fn send(&self, event: &Event) -> std::io::Result<()> {
+        if let Some(xml) = render(event) {
+            self.socket.send_to(xml.as_bytes(), &self.group)?;
+        }
+        Ok(())
     }
 }
 
@@ -77,8 +69,7 @@ fn metadata<'a>(event: &'a Event, key: &str) -> Option<&'a str> {
         .map(|m| m.value.as_str())
 }
 
-/// MIM 5.3 hostility -> CoT affiliation character (the ingress mapping, run in
-/// reverse; tak-cot's table is the source of truth for the forward direction).
+/// MIM 5.3 hostility to CoT affiliation, the reverse of tak-cot's mapping.
 fn affiliation(event: &Event) -> &'static str {
     match attribute(event, "hostility") {
         Some("Friend") => "f",
@@ -93,8 +84,7 @@ fn affiliation(event: &Event) -> &'static str {
     }
 }
 
-/// Battle dimension: the environment attribute decides when present, the entity
-/// type otherwise, and unknown stays unknown rather than guessing air.
+/// Battle dimension from the environment attribute, else the entity type.
 fn dimension(event: &Event) -> &'static str {
     match attribute(event, "environment") {
         Some("AIR") => "A",
@@ -128,9 +118,9 @@ fn escape(s: &str) -> String {
     out
 }
 
-/// One SA event, or None when there is no position to put on a map. The uid is
-/// the stable track identity (source_uid, else the native id, else the event
-/// id), so a moving track updates one marker instead of piling up contacts.
+/// One SA event, or None without a location. The uid is the track identity
+/// (source_uid, else native_id, else the event id), so a moving track updates
+/// one marker.
 fn render(event: &Event) -> Option<String> {
     let loc = event.location.as_ref()?;
     let uid = metadata(event, "source_uid")
@@ -161,22 +151,17 @@ fn render(event: &Event) -> Option<String> {
     ))
 }
 
-/// `timestamp + STALE_SECONDS`, computed on the RFC 3339 string the event
-/// already carries so no clock library enters the crate.
+/// `timestamp + STALE_S`, as arithmetic on the RFC 3339 time of day.
 fn stale_after(rfc3339: &str) -> Option<String> {
-    // Seconds field is at a fixed offset in "YYYY-MM-DDTHH:MM:SS...".
     let (date, time) = rfc3339.split_once('T')?;
-    let hms: Vec<&str> = time.trim_end_matches('Z').splitn(3, ':').collect();
-    if hms.len() != 3 {
+    let mut hms = time.trim_end_matches('Z').splitn(3, ':');
+    let (Some(h), Some(m), Some(s)) = (hms.next(), hms.next(), hms.next()) else {
         return None;
-    }
-    let (h, m) = (hms[0].parse::<i64>().ok()?, hms[1].parse::<i64>().ok()?);
-    let s = hms[2].split(['.', '+']).next()?.parse::<i64>().ok()?;
-    let total = h * 3600 + m * 60 + s + STALE_SECONDS;
-    // A stale time past midnight clamps to end of day: one shortened marker
-    // lifetime at day rollover is invisible in a demo, and this stays arithmetic
-    // on the string rather than a calendar dependency.
-    let total = total.min(24 * 3600 - 1);
+    };
+    let (h, m) = (h.parse::<i64>().ok()?, m.parse::<i64>().ok()?);
+    let s = s.split(['.', '+']).next()?.parse::<i64>().ok()?;
+    // Clamped to the end of the day, so a marker near midnight goes stale early.
+    let total = (h * 3600 + m * 60 + s + STALE_S).min(24 * 3600 - 1);
     Some(format!(
         "{date}T{:02}:{:02}:{:02}Z",
         total / 3600,
@@ -198,7 +183,7 @@ mod tests {
     }
 
     #[test]
-    fn renders_a_friendly_aircraft_as_a_f_a() {
+    fn friendly_aircraft_renders_as_a_f_a() {
         let ev = event("mim:aircraft")
             .attribute("callsign", "AJX-01")
             .attribute("hostility", "Friend")
@@ -213,7 +198,7 @@ mod tests {
     }
 
     #[test]
-    fn environment_beats_the_entity_type_for_the_dimension() {
+    fn environment_overrides_entity_type() {
         let ev = event("mim:object")
             .attribute("environment", "SUBSURFACE")
             .build()
@@ -222,7 +207,7 @@ mod tests {
     }
 
     #[test]
-    fn an_event_without_a_location_is_not_rendered() {
+    fn event_without_location_is_not_rendered() {
         let ev = EventBuilder::new("demo-radar", "mim:aircraft")
             .new_id()
             .timestamp("2026-06-10T08:00:00Z")
@@ -243,7 +228,7 @@ mod tests {
     }
 
     #[test]
-    fn every_hostility_maps_to_its_affiliation() {
+    fn hostility_maps_to_affiliation() {
         for (h, want) in [
             ("Friend", "a-f-"),
             ("AssumedFriend", "a-a-"),
