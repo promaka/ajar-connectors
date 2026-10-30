@@ -12,6 +12,7 @@ publish = false
 
 [dependencies]
 ajar-connector.workspace = true
+thiserror = "2"
 
 [[example]]
 name = "first_connector"

@@ -195,6 +195,7 @@ name = "cot-connector"
 version = "0.6.5"
 dependencies = [
  "ajar-connector",
+ "thiserror",
 ]
 
 [[package]]
