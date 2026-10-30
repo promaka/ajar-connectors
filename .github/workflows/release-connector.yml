@@ -1,13 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
-#
-# Release ONE package: a connector or tool (<name>-vX.Y.Z) or the connector chart
-# (chart-vX.Y.Z). Each is versioned on its own, so a release builds only what
-# its tag names: one image, that crate's binaries, one GitHub release.
-#
-# Normally called by tag-releases.yml when a version bump merges to main. A tag
-# pushed by hand runs it too, and workflow_dispatch re-runs a tag that exists.
-# scripts/release-target.sh refuses a tag whose version or changelog entry does
-# not match the tree, before anything is published.
+# Release one package: a connector or tool (<name>-vX.Y.Z) or the chart (chart-vX.Y.Z).
+# Called by tag-releases.yml; a pushed tag or workflow_dispatch also runs it.
 name: release-connector
 
 on:
@@ -54,6 +47,7 @@ jobs:
       # The tag reaches the shell through env, never through ${{ }}, so a
       # dispatch input cannot inject a command.
       - id: t
+        name: Read the tag
         env:
           TAG: ${{ inputs.tag || github.ref_name }}
         run: echo "tag=$TAG" >> "$GITHUB_OUTPUT"
@@ -61,14 +55,13 @@ jobs:
         with:
           ref: refs/tags/${{ steps.t.outputs.tag }}
       - id: r
-        name: release-guard — tag, manifest version and changelog agree
+        name: Check tag, version and changelog
         env:
           TAG: ${{ steps.t.outputs.tag }}
         run: |
           set -euo pipefail
           ./scripts/release-target.sh "$TAG" | tee -a "$GITHUB_OUTPUT"
-          # The wire contract every connector in this tree emits; stamped on the
-          # image so a site can check it against what its Core accepts.
+          # Stamped on the image so a site can check it against its Core.
           echo "contract=$(grep -m1 -v '^#' vendor/contract/CONTRACT_VERSION | tr -d '[:space:]')" >> "$GITHUB_OUTPUT"
 
   image:
@@ -82,14 +75,13 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: refs/tags/${{ needs.resolve.outputs.tag }}
-      # No QEMU: Dockerfile.build cross-compiles to arm64 on the native amd64
-      # runner, so there is no emulated arch to register.
-      # The tagged commit, not github.sha: a re-run from workflow_dispatch runs
-      # on a branch, but builds and labels what the tag points at.
+      # The tagged commit: github.sha is a branch on a workflow_dispatch re-run.
       - id: rev
+        name: Read the tagged commit
         run: |
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           echo "short=$(git rev-parse --short=7 HEAD)" >> "$GITHUB_OUTPUT"
+      # No QEMU: Dockerfile.build cross-compiles to arm64.
       - uses: docker/setup-buildx-action@v4
       - uses: docker/login-action@v4
         with:
@@ -134,9 +126,7 @@ jobs:
           subject-digest: ${{ steps.build.outputs.digest }}
           push-to-registry: true
 
-  # Static binaries of this one crate. An evaluator on a laptop, or an air-gapped
-  # site that cannot pull images, otherwise has to build a Rust toolchain first.
-  # Same cross-compile path the image uses.
+  # Binaries for sites that cannot pull images.
   binaries:
     name: build binaries (${{ matrix.target }})
     needs: resolve
@@ -150,13 +140,14 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: refs/tags/${{ needs.resolve.outputs.tag }}
-      - name: Cross toolchain for aarch64
+      - name: Install aarch64 cross toolchain
         if: matrix.target == 'aarch64-unknown-linux-gnu'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends gcc-aarch64-linux-gnu libc6-dev-arm64-cross
-      - run: rustup target add ${{ matrix.target }}
-      - name: Build
+      - name: Add the Rust target
+        run: rustup target add ${{ matrix.target }}
+      - name: Build the binaries
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
           CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
@@ -164,7 +155,7 @@ jobs:
           cargo build --release --target ${{ matrix.target }} \
             --manifest-path ${{ needs.resolve.outputs.wsdir }}/Cargo.toml \
             -p ${{ needs.resolve.outputs.pkg }} --bins
-      - name: Collect into one archive
+      - name: Archive the binaries
         env:
           NAME: ${{ needs.resolve.outputs.name }}
           VERSION: ${{ needs.resolve.outputs.version }}
@@ -176,9 +167,7 @@ jobs:
           out="ajar-$NAME-$VERSION-${{ matrix.target }}"
           mkdir -p "$out/configs"
           cp "$WSDIR/target/${{ matrix.target }}/release/$PKG" "$out/"
-          # The example config and any ontology fragment ride beside the
-          # binary (sapient's types are registered with `ajar onboard
-          # --type-spec`), with the connector's own README and changelog.
+          # Example configs and ontology fragments (*.types.json) ship beside the binary.
           find "$DIR" -maxdepth 1 \( -name '*.example.toml' -o -name '*.types.json' \) \
             -exec cp {} "$out/configs/" \;
           for f in README.md CHANGELOG.md; do
@@ -209,7 +198,7 @@ jobs:
         with:
           ref: refs/tags/${{ needs.resolve.outputs.tag }}
       - uses: azure/setup-helm@v5
-      - name: Package at the chart's version and push to ghcr
+      - name: Package and push the chart
         env:
           VERSION: ${{ needs.resolve.outputs.version }}
         run: |
@@ -220,8 +209,7 @@ jobs:
           test -f "dist/connector-$VERSION.tgz"
           helm push "dist/connector-$VERSION.tgz" "oci://ghcr.io/${{ github.repository_owner }}/charts"
 
-  # The GitHub release is created here and nowhere else, after everything it
-  # refers to has been published. A failed build therefore leaves no release.
+  # The only job that creates the GitHub release, after everything it names is published.
   release:
     name: publish the release
     needs: [resolve, image, binaries, chart]
@@ -239,7 +227,7 @@ jobs:
           pattern: binaries-${{ needs.resolve.outputs.tag }}-*
           merge-multiple: true
           path: dist
-      - name: notes for this version, from the package's CHANGELOG.md
+      - name: Extract release notes
         env:
           VERSION: ${{ needs.resolve.outputs.version }}
           DIR: ${{ needs.resolve.outputs.dir }}
@@ -262,9 +250,9 @@ jobs:
               "${{ github.repository_owner }}" "$NAME" "$VERSION" "$CONTRACT" >> notes.md
           fi
           cat notes.md
-      # --latest=false: the repository's "latest" release stays the SDK's, so a
-      # connector release never displaces the version a vendor should pin.
-      - env:
+      # --latest=false keeps the SDK's release as the repository's latest.
+      - name: Publish the GitHub release
+        env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.resolve.outputs.tag }}
         run: |

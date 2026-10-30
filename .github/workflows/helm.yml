@@ -27,14 +27,14 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: azure/setup-helm@v5
-      - name: Lint
+      - name: Lint the chart
         run: |
           helm lint deploy/helm/connector \
             --set image.repository=registry.example/connector \
             --set image.tag=1.0.0 \
             --set signingSeed.existingSecret=connector-seed \
             --set-file connector.config=.github/fixtures/ci-connector.toml
-      - name: Template (recommended path)
+      - name: Render the recommended path
         run: |
           helm template demo deploy/helm/connector \
             --set image.repository=registry.example/connector \
@@ -42,7 +42,7 @@ jobs:
             --set connector.sourceId=acme-radar-1 \
             --set signingSeed.existingSecret=connector-seed \
             --set-file connector.config=.github/fixtures/ci-connector.toml > /dev/null
-      - name: Guard rails reject incomplete config
+      - name: Check guard rails
         run: |
           if helm template demo deploy/helm/connector --set signingSeed.existingSecret=x >/dev/null 2>&1; then
             echo "expected failure: neither connector.name nor image.repository was accepted"; exit 1
@@ -68,12 +68,8 @@ jobs:
           fi
           echo "guard rails OK"
 
-  # Renders the chart and starts a REAL published connector against its output.
-  # `helm lint` and `helm template` both pass on a chart whose pod cannot start,
-  # because neither knows what the binary inside the image expects — so the only
-  # way to prove the deploy path is to run it. synthetic-radar is deliberately not
-  # used here: it is configured by environment alone and would pass while every
-  # connector we actually ship failed.
+  # helm lint and template pass on a chart whose pod cannot start, so run a
+  # published connector on the rendered output. synthetic-radar reads only env.
   chart-runs-a-connector:
     name: the chart's output boots a real connector
     runs-on: ubuntu-latest
@@ -99,7 +95,7 @@ jobs:
             --set signingSeed.existingSecret=ci-seed \
             --set-file connector.config=.github/fixtures/ci-connector.toml \
             > rendered.yaml
-      - name: Extract the config and argv the chart chose
+      - name: Extract config and argv
         run: |
           set -euo pipefail
           python3 - <<'EOF'
@@ -113,7 +109,7 @@ jobs:
           open("argv", "w").write(args[0])
           print("chart argv:", args)
           EOF
-      - name: Start the image exactly as the chart would
+      - name: Run the rendered connector
         run: |
           set -euo pipefail
           ARG="$(cat argv)"

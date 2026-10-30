@@ -19,20 +19,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - name: License headers
+      - name: Check license headers
         run: ./scripts/check-license-headers.sh
-      - name: Contract divergence
+      - name: Check contract hashes
         run: ./scripts/check-contract.sh
-      # Catches a pin going stale on the PR that causes it, rather than at the
-      # next release when the docs have already been wrong for weeks.
-      - name: Documented version pins
+      - name: Check documented version pins
         run: ./scripts/check-doc-pins.sh
-      - name: SDK manifest versions agree
+      - name: Check SDK manifest versions
         run: ./scripts/check-versions.sh
-      # Every tag a release would cut from this tree must resolve and pass its
-      # guard, so a released package with no changelog entry for its version
-      # fails here rather than at merge, when the release runs.
-      - name: Every released package can be released at its version
+      - name: Resolve every release tag
         run: |
           set -euo pipefail
           for ws in rust/connectors rust/examples; do
@@ -44,11 +39,10 @@ jobs:
           if grep -qE '^ +ajar\.release: *"?true"?' "$chart"; then
             ./scripts/release-target.sh "chart-v$(grep -m1 '^version:' "$chart" | awk '{print $2}')" >/dev/null
           fi
-      - name: The catalogue table names every released package's version
+      - name: Check the catalogue table
         run: ./scripts/check-catalogue.sh
 
-  # Each connector is released when a version bump merges. A change without a
-  # bump is sometimes intended, so this advises the reviewer and never fails.
+  # Advisory: a change without a version bump is sometimes intended.
   bump-check:
     name: bump-check (advisory)
     if: github.event_name == 'pull_request'
@@ -58,7 +52,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - name: Changed packages carry a new version
+      - name: Check version bumps
         run: ./scripts/check-bumps.sh "origin/${{ github.base_ref }}"
 
   dds-interop:
@@ -68,8 +62,7 @@ jobs:
       run:
         working-directory: rust/connectors
     env:
-      # ros:jazzy-ros-base as of 2026-08-19, pinned by digest like every other
-      # external in this workflow; bump deliberately, not by drift.
+      # ros:jazzy-ros-base, pinned by digest.
       ROS_IMAGE: ros@sha256:bab7e640bf79cd84957e4e18fcba7d87efc3385b4e3f36a32eeca01638e43206
     steps:
       - uses: actions/checkout@v7
@@ -77,13 +70,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: rust/connectors
-      - name: Build the probe (the connector's own transport, nothing else)
+      - name: Build the DDS probe
         run: cargo build -p ajar-connector-common --features dds --example dds_probe
-      # One ROS 2 container on the host network, so discovery is real. ROS 2 is
-      # the realistic peer: Fast DDS is its default middleware and Cyclone DDS
-      # its alternative, and a std_msgs/String is what an unmanned platform
-      # actually publishes. Neither publisher is ours.
-      - name: Start ROS 2 and install the second vendor once
+      # Host network for real discovery; ROS 2 ships Fast DDS and adds Cyclone DDS.
+      - name: Start ROS 2
         run: |
           set -euo pipefail
           docker run -d --name ros --network host "$ROS_IMAGE" sleep infinity
@@ -112,7 +102,7 @@ jobs:
           out=$(target/debug/examples/dds_probe 0 rt/chatter 'std_msgs::msg::dds_::String_' string 60 1)
           echo "$out"
           grep -q "hello from cyclone" <<<"$out"
-      - name: Container logs and cleanup
+      - name: Dump logs and clean up
         if: always()
         run: |
           docker logs ros 2>&1 | tail -50 || true
@@ -127,29 +117,24 @@ jobs:
         with:
           components: llvm-tools-preview
       - uses: taiki-e/install-action@cargo-llvm-cov
-      - name: Install nats-server (spool gate)
+      - name: Install nats-server
         run: |
           curl -sSfL https://github.com/nats-io/nats-server/releases/download/v2.10.24/nats-server-v2.10.24-linux-amd64.tar.gz | tar xz
           sudo install nats-server-v2.10.24-linux-amd64/nats-server /usr/local/bin/nats-server
           nats-server --version
-      # Shipped library and connector code holds an 85% line floor. Binary
-      # entrypoints are scoped out of the measurement with the reason on
-      # record: main.rs glue is proven by the CI gates that run the real
-      # binaries (mTLS, chart deploy, conformance), not by unit tests. The
-      # examples are teaching templates, run by dry-run gates rather than
-      # tested, and carry a presence floor only.
-      # Measured on 2026-08-29: sdk 92%, connectors 86%, examples 26%.
-      - name: SDK workspace
+      # main.rs is excluded: the gates that run the real binaries cover it.
+      - name: Measure SDK coverage
         working-directory: rust
         run: >
           cargo llvm-cov --workspace --all-features
           --ignore-filename-regex '/main\.rs$' --fail-under-lines 90
-      - name: Connectors workspace
+      - name: Measure connectors coverage
         working-directory: rust/connectors
         run: >
           cargo llvm-cov --workspace --all-features
           --ignore-filename-regex '/main\.rs$' --fail-under-lines 85
-      - name: Examples workspace
+      # Examples are templates covered by dry-run gates; this floor only checks they stay tested.
+      - name: Measure examples coverage
         working-directory: rust/examples
         run: cargo llvm-cov --workspace --all-features --fail-under-lines 22
 
@@ -179,7 +164,7 @@ jobs:
         with:
           # Full history: a secret in an old commit is still a secret.
           fetch-depth: 0
-      - name: gitleaks over the full history
+      - name: Scan history with gitleaks
         run: |
           docker run --rm -v "$PWD:/repo" -w /repo             ghcr.io/gitleaks/gitleaks:v8.24.3             git --config .gitleaks.toml --no-banner --redact .
 
@@ -200,51 +185,45 @@ jobs:
             rust
             rust/connectors
             rust/examples
-      - name: Format
+      - name: Check formatting
         run: cargo fmt --all -- --check
-      - name: Clippy
+      - name: Run clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
-      - name: Test
+      - name: Run tests
         run: cargo test --workspace
-      - name: Conformance gate
+      - name: Run conformance gate
         run: cargo test -p conformance --test golden_vectors
-      # Examples are a separate workspace (own transport deps).
-      - name: Examples — fmt
+      - name: Check examples formatting
         working-directory: rust/examples
         run: cargo fmt --all -- --check
-      - name: Examples — clippy
+      - name: Run clippy on examples
         working-directory: rust/examples
         run: cargo clippy --workspace --all-targets -- -D warnings
-      - name: Examples — test
+      - name: Test examples
         working-directory: rust/examples
         run: cargo test --workspace
-      - name: Examples — synthetic-radar dry-run (no infra)
+      - name: Dry-run synthetic-radar example
         working-directory: rust/examples
         run: cargo run -p synthetic-radar -- --dry-run --ticks 2
-      # Connectors are a separate workspace (transport-heavy deps) AND the shipped
-      # artifact — build, lint, and test them on every change so a break here can
-      # never reach a release image.
-      - name: Install nats-server (spool gate)
+      - name: Install nats-server
         run: |
           curl -sSfL https://github.com/nats-io/nats-server/releases/download/v2.10.24/nats-server-v2.10.24-linux-amd64.tar.gz | tar xz
           sudo install nats-server-v2.10.24-linux-amd64/nats-server /usr/local/bin/nats-server
           nats-server --version
-      - name: Connectors — fmt
+      - name: Check connectors formatting
         working-directory: rust/connectors
         run: cargo fmt --all -- --check
-      - name: Connectors — clippy
+      - name: Run clippy on connectors
         working-directory: rust/connectors
         run: cargo clippy --workspace --all-targets -- -D warnings
-      - name: Connectors — test
+      - name: Test connectors
         working-directory: rust/connectors
         run: cargo test --workspace
-      # The synthetic feed proves its MAVLink encoder against the connector's
-      # reference frame at startup and prints one tick of every sensor: a
-      # generator that drifted from a decoder fails here, not on a partner's box.
-      - name: Connectors — synthetic feed dry-run (no infra)
+      # Runs one tick of every sensor, so a generator that panics fails here.
+      - name: Dry-run synthetic feed
         working-directory: rust/connectors
         run: cargo run -p ajar-feed-synthetic -- --dry-run --ticks 1
-      - name: SDK — consumer feature (wire gate)
+      - name: Test SDK consumer feature
         run: cargo test -p ajar-connector --features consumer
 
   go:
@@ -259,28 +238,26 @@ jobs:
         with:
           go-version: "1.26"
           cache-dependency-path: go/go.sum
-      - name: gofmt
+      - name: Check gofmt
         run: |
           unformatted=$(gofmt -l .)
           if [ -n "$unformatted" ]; then echo "gofmt needed:"; echo "$unformatted"; exit 1; fi
-      - name: Vet
+      - name: Run go vet
         run: go vet ./...
-      - name: Test
+      - name: Run tests
         run: go test ./...
-      - name: Conformance gate
-        # -count=1 disables the test cache: it keys on source files, not the
-        # external vectors.json, so a re-vendor must never serve a stale pass.
+      - name: Run conformance gate
+        # -count=1: the test cache ignores vectors.json.
         run: go test ./conformance/ -count=1 -run 'TestGoldenVectorsAreReproduced|TestVerifyingKeyDerivesFromTestSeed' -v
-      # Examples are a separate Go module (own transport deps, e.g. nats.go).
-      - name: Examples — gofmt
+      - name: Check examples gofmt
         working-directory: go/examples
         run: |
           unformatted=$(gofmt -l .)
           if [ -n "$unformatted" ]; then echo "gofmt needed:"; echo "$unformatted"; exit 1; fi
-      - name: Examples — vet + test
+      - name: Vet and test examples
         working-directory: go/examples
         run: go vet ./... && go test ./...
-      - name: Examples — synthetic-radar dry-run (no infra)
+      - name: Dry-run synthetic-radar example
         working-directory: go/examples
         run: go run ./synthetic-radar -dry-run -ticks 2
 
@@ -289,11 +266,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - name: Install protobuf + cmake
+      - name: Install protobuf and CMake
         run: |
           sudo apt-get update
           sudo apt-get install -y cmake build-essential protobuf-compiler libprotobuf-dev libssl-dev
-      - name: Install cnats (NATS C client) for the synthetic-radar example
+      - name: Install the NATS C client
         run: |
           git clone --depth 1 --branch v3.13.0 https://github.com/nats-io/nats.c /tmp/nats.c
           cmake -S /tmp/nats.c -B /tmp/nats.c/build \
@@ -301,28 +278,26 @@ jobs:
           cmake --build /tmp/nats.c/build -j
           sudo cmake --install /tmp/nats.c/build
           sudo ldconfig
-      - name: Configure
+      - name: Configure CMake
         run: cmake -S cpp -B cpp/build -DCMAKE_BUILD_TYPE=Release
-      - name: Build
+      - name: Build with CMake
         run: cmake --build cpp/build -j
-      - name: Conformance + round-trip gate
+      - name: Run conformance tests
         run: ctest --test-dir cpp/build --output-on-failure
 
   quickstart:
-    # The stopwatch: a stranger, this checkout, and the README's prebuilt path,
-    # measured from nothing to the first governed event. Deliberately uncached:
-    # the number is only honest if the build is as cold as the stranger's.
+    # Uncached, so the time includes a cold build.
     name: quickstart stopwatch
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
-      - name: Install nats-server (spool gate)
+      - name: Install nats-server
         run: |
           curl -sSfL https://github.com/nats-io/nats-server/releases/download/v2.10.24/nats-server-v2.10.24-linux-amd64.tar.gz | tar xz
           sudo install nats-server-v2.10.24-linux-amd64/nats-server /usr/local/bin/nats-server
           nats-server --version
-      - name: Follow the README, timed
+      - name: Time the quickstart
         run: bash scripts/quickstart-stopwatch.sh
 
   python:
@@ -336,16 +311,16 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
-      - name: Install deps
+      - name: Install dependencies
         run: pip install "protobuf>=7.35,<8" "cryptography>=42" pytest "nats-py>=2.6"
-      - name: Install nats-server (producer wire gate)
+      - name: Install nats-server
         run: |
           curl -sSfL https://github.com/nats-io/nats-server/releases/download/v2.10.24/nats-server-v2.10.24-linux-amd64.tar.gz | tar xz
           sudo install nats-server-v2.10.24-linux-amd64/nats-server /usr/local/bin/nats-server
           nats-server --version
-      - name: Unit tests
+      - name: Run unit tests
         run: python -m pytest -q
-      - name: Conformance gate
+      - name: Run conformance gate
         run: PYTHONPATH=. python conformance/golden_vectors.py
-      - name: synthetic-radar dry-run (no infra)
+      - name: Dry-run synthetic-radar example
         run: PYTHONPATH=. python examples/synthetic_radar.py --dry-run --ticks 2

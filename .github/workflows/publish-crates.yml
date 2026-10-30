@@ -1,13 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
-# Publishes the Rust SDK to crates.io on a release tag.
-#
-# Gated on the golden vectors for the same reason PyPI is: a package that does
-# not reproduce contract-v1 is not a package anyone should be able to install.
-#
-# Authentication is crates.io Trusted Publishing (OIDC): the auth action
-# exchanges the workflow's identity for a thirty-minute token, so no long-lived
-# credential exists in this repository. crates.io requires the first release of
-# a crate to be published manually; this workflow takes over from the second.
+# Publish the Rust SDK to crates.io on a release tag, after the golden vectors pass.
+# Trusted Publishing (OIDC); crates.io needs a crate's first release published by hand.
 name: publish-crates
 
 on:
@@ -25,12 +18,12 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
-      - name: Versions agree across every manifest
+      - name: Check manifest versions
         run: ./scripts/check-versions.sh "${GITHUB_REF_NAME#v}"
-      - name: Golden vectors
+      - name: Run golden vectors
         working-directory: rust
         run: cargo test -p conformance --test golden_vectors
-      - name: The packaged crate builds standalone
+      - name: Package the crate
         working-directory: rust
         run: cargo package -p ajar-connector
 
@@ -47,7 +40,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: rust-lang/crates-io-auth-action@v1
         id: auth
-      - name: Publish
+      - name: Publish to crates.io
         working-directory: rust
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
