@@ -1,11 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Reference conformance adapter (Python).
-
-What `ajar-conformance` asks of any implementation, in any language: read the
-fixture on stdin, write raw bytes on stdout, exit 0.
-
-    ajar-conformance run --impl python3 python/examples/conformance_adapter.py
-"""
+"""Conformance adapter: reads a corpus fixture on stdin, writes canonical or sealed bytes."""
 import json
 import os
 import sys

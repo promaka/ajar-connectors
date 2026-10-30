@@ -1,22 +1,15 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Consume governed events, derive an assessment, publish it back — end to end.
+"""Derived producer: consume governed events, assess them, publish the assessments back.
 
-THE SNIPPET TO COPY is the publish_assessment() call at the bottom: that is
-the only code your platform adds. The lineage wiring is the point: the ids of
-the events your model reasoned over go into derived_from, and the boundary
-refuses derived events without them. Everything else is the same three SDK
-calls every connector makes.
+Each assessment names the event it was derived from in ``derived_from``. Needs the
+``producer`` and ``consumer`` extras and AJAR_EGRESS_PUBKEY set to the egress key (hex).
 
-Run against a live deployment:
-
-    pip install "ajar-connector[producer]"
-    export AJAR_EGRESS_PUBKEY=...   # Core's egress verifying key, hex, from your operator
-    python examples/derived_producer.py \
-        --nats tls://nats.operator.example:4443 \
-        --source-id assess-1 --seed ./assess-1.seed \
+    python examples/derived_producer.py \\
+        --nats tls://nats.operator.example:4443 \\
+        --source-id assess-1 --seed ./assess-1.seed \\
         --consume "ajar.egress.signed.>"
 
-(mTLS: also pass --ca/--cert/--key, the PEMs your operator issued.)
+For mTLS also pass --ca, --cert and --key, the PEMs your operator issued.
 """
 
 import argparse
@@ -31,12 +24,9 @@ MODEL = "example-assessor@0.1"
 
 
 def assess(event: event_pb2.Event) -> dict[str, str] | None:
-    """YOUR MODEL GOES HERE. Returns governed attributes, or None to skip.
+    """Return attributes for an assessment of ``event``, or None to skip it.
 
-    This stand-in flags fast vessels; a real platform calls its inference
-    pipeline instead. The contract is the same either way: whatever you
-    return rides as governed attributes on a NEW event that names its
-    sources.
+    EDIT: call your model here; this stand-in flags fast vessels.
     """
     attrs = {a.key: a.value for a in event.attributes}
     try:
@@ -72,9 +62,8 @@ async def main() -> None:
     print(f"[derived-producer] consuming {args.consume}, publishing as {args.source_id}",
           file=sys.stderr)
 
-    # 1. CONSUME: every event this loop yields has VERIFIED under the egress
-    # key; tampered ones are counted and dropped inside consume(). The two
-    # skip guards stop the loop assessing its own (or any AI's) output.
+    # 1. Consume: every event yielded has verified under the egress key. The skip guards
+    # keep the loop from assessing its own or any model's output.
     async for delivery in consume(
         args.nats,
         subject=args.consume,
@@ -87,18 +76,17 @@ async def main() -> None:
     ):
         source_event = delivery.event
 
-        # 2. DERIVE: run your model over the governed event.
+        # 2. Derive: run your model over the governed event.
         assessment = assess(source_event)
         if assessment is None:
             continue
 
-        # 3. PUBLISH: a new event that names what it was derived from.
-        #    >>> This call is the integration; everything else is plumbing. <<<
+        # 3. Publish: this call is what your platform adds.
         event_id = await publish_assessment(
             producer,
             entity_type=source_event.entity_type,
             model=MODEL,
-            derived_from=[source_event.id],  # the lineage: the event(s) you reasoned over
+            derived_from=[source_event.id],
             attributes=assessment,
             location=(
                 source_event.location.latitude,

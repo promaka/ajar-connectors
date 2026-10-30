@@ -1,7 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""The consumer module: verification is unskippable, guards work, and the
-wire test proves it against a real broker (required in CI, skipped locally
-without nats-server - same policy as every wire gate)."""
+"""Tests for the consumer; the wire test needs nats-server on PATH."""
 
 import asyncio
 import os
@@ -89,9 +87,6 @@ def test_the_wire_loop_verifies_guards_and_counts():
             await asyncio.sleep(0.5)
 
             subj = "ajar.egress.test.x"
-            # 1. valid -> yielded. 2. tampered -> rejected inside the loop.
-            # 3. own source -> skipped. 4. derived (model attr) -> skipped.
-            # 5. valid -> yielded (proves the loop survived all of the above).
             await pub.publish(subj, sealed_event("radar-1", b"payload-one"))
             tampered = bytearray(sealed_event("radar-1", b"evil"))
             tampered[-1] ^= 0xFF

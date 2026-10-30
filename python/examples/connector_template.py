@@ -1,24 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Connector template — your starting point (Python).
+"""Connector template: newline-delimited JSON on stdin to sealed events on NATS.
 
-Copy this file, edit the ONE function marked `EDIT` below, and you have a
-working connector. Everything else is done for you.
+Copy this file and edit ``to_event``; ``--dry-run`` builds and seals without NATS.
+python/README.md shows how to run it and lists the environment.
 
-See a sealed event right now — no key, no NATS, no feed:
-
-    echo '{"lat":26.4,"lon":50.9,"alt_m":11000,"quality":0.9}' \\
-      | python examples/connector_template.py --dry-run
-
-Then run for real (key from scripts/gen-connector-key.sh):
-
-    AJAR_SIGNING_SEED=connector.seed AJAR_SOURCE_ID=acme-radar-1 \\
-    NATS_URL=nats://nats.you.mil:4222  python examples/connector_template.py
-
-Production behaviour (built in, no edits needed):
-- A malformed or un-mappable record is logged and skipped, never fatal.
-- A NATS publish error is logged and the connector keeps going.
-- Set AJAR_HEALTH_ADDR=0.0.0.0:9090 to expose GET /healthz (liveness) and
-  GET /metrics (Prometheus counters: published / skipped / publish_errors).
+A bad record is logged and skipped, and a NATS publish error is logged and the
+connector keeps going. /metrics counts published, skipped and publish_errors.
 """
 
 import asyncio
@@ -31,16 +18,10 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from ajar_connector import EventBuilder, SigningKey, canonical_bytes, ingest_headers, seal
 from ajar_connector.event_pb2 import Event
 
-# Process counters, surfaced at /metrics.
 _METRICS = {"published": 0, "skipped": 0, "publish_errors": 0}
 
 
-# ┌───────────────────────────────────────────────────────────────────────────┐
-# │ EDIT — map one record from your feed into a canonical Event.               │
-# │ `r` is one JSON object from your feed (change the fields to match yours).  │
-# │ Use the entity_type Ajar assigned you. Add .attribute(k, v) only for       │
-# │ attributes your entity type's ontology schema defines.                     │
-# └───────────────────────────────────────────────────────────────────────────┘
+# EDIT: map one JSON record from your feed to an Event of your entity type.
 def to_event(source_id: str, r: dict) -> Event:
     return (
         EventBuilder(source_id, "mim:aircraft")
@@ -52,15 +33,8 @@ def to_event(source_id: str, r: dict) -> Event:
     )
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# You usually don't need to touch anything below this line.
-# ─────────────────────────────────────────────────────────────────────────────
-
-
 def _spawn_health() -> None:
-    """Start a tiny health/metrics HTTP server if AJAR_HEALTH_ADDR is set
-    (e.g. 0.0.0.0:9090). GET /healthz -> liveness; GET /metrics -> Prometheus
-    text. Stdlib only — no impact unless you opt in."""
+    """Serve /healthz and Prometheus /metrics on AJAR_HEALTH_ADDR, if set."""
     addr = os.environ.get("AJAR_HEALTH_ADDR")
     if not addr:
         return
@@ -86,7 +60,7 @@ def _spawn_health() -> None:
             self.end_headers()
             self.wfile.write(data)
 
-        def log_message(self, *_args):  # silence per-request logging
+        def log_message(self, *_args):
             pass
 
     server = HTTPServer((host or "0.0.0.0", int(port)), _Handler)
@@ -95,9 +69,10 @@ def _spawn_health() -> None:
 
 
 def _nats_tls_opts() -> dict:
-    """mTLS when AJAR_TLS_CA / AJAR_TLS_CERT / AJAR_TLS_KEY are all set (the
-    production path — client-cert CN = source_id, mounted by the Helm chart under
-    /etc/ajar/tls). Unset -> plaintext for local dev."""
+    """Return mTLS options when AJAR_TLS_CA, AJAR_TLS_CERT and AJAR_TLS_KEY are all set.
+
+    The client certificate CN is the source_id.
+    """
     ca = os.environ.get("AJAR_TLS_CA")
     cert = os.environ.get("AJAR_TLS_CERT")
     key = os.environ.get("AJAR_TLS_KEY")
@@ -133,40 +108,37 @@ async def main() -> None:
     subject = f"{prefix}.{source_id}"
     key = SigningKey.from_seed(_load_seed(dry_run))
 
-    _spawn_health()  # no-op unless AJAR_HEALTH_ADDR is set
+    _spawn_health()
 
     nc = None
     if dry_run:
         print("[connector] --dry-run: building + sealing, not publishing", file=sys.stderr)
     else:
-        import nats  # transport dep — only needed for a real run
+        import nats
 
         print(f"[connector] connecting to NATS at {nats_url}", file=sys.stderr)
         nc = await nats.connect(nats_url, **_nats_tls_opts())
     print(f"[connector] source_id={source_id}  subject={subject}", file=sys.stderr)
 
-    # Your feed: by default, newline-delimited JSON on stdin. Swap this loop for
-    # your TCP socket / file / API / serial port — the rest stays the same.
+    # EDIT: replace stdin with your feed if it is not newline-delimited JSON.
     for line in sys.stdin:
         line = line.strip()
         if not line:
             continue
-        # Resilient: a bad record is logged and skipped, never fatal.
         try:
-            record = json.loads(line)  # parse one record
-            event = to_event(source_id, record)  # EDIT maps it
-        except Exception as e:  # noqa: BLE001 — one bad input must not kill the loop
+            record = json.loads(line)
+            event = to_event(source_id, record)
+        except Exception as e:  # noqa: BLE001 - one bad input must not kill the loop
             print(f"[connector] skip: bad record: {e}", file=sys.stderr)
             _METRICS["skipped"] += 1
             continue
         canonical = canonical_bytes(event)
-        sealed = seal(canonical, key)  # sign it
+        sealed = seal(canonical, key)
         if nc is not None:
             try:
-                # Nats-Msg-Id = event id: broker-side duplicate protection.
                 await nc.publish(subject, sealed,
                                  headers=ingest_headers(event))
-            except Exception as e:  # noqa: BLE001 — keep running on a transport blip
+            except Exception as e:  # noqa: BLE001
                 print(f"[connector] publish error (continuing): {e}", file=sys.stderr)
                 _METRICS["publish_errors"] += 1
                 continue

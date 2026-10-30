@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Unit tests for the builder, seal, and profile (run with pytest)."""
+"""Tests for the builder, seal and profile."""
 
 import pytest
 
@@ -50,7 +50,6 @@ def test_builder_rejects_out_of_range_confidence():
 def test_builder_enforces_namespacing_with_opt_out():
     with pytest.raises(BuildError, match="not namespaced"):
         EventBuilder("sensor-1", "drone").new_id().now().build()
-    # opt-out builds fine
     EventBuilder("sensor-1", "drone").new_id().now().allow_unnamespaced_entity_type().build()
 
 
@@ -73,7 +72,8 @@ def test_profile_json_serializes_verifying_key_as_hex():
     assert '"source_id":"sensor-123"' in js
     assert "mim:drone" in js
     assert vk.hex() in js
-    assert '"rate_refill_per_sec":5.0' in js  # float keeps the .0, like the other SDKs
+    # The float keeps its ".0", as the other SDKs serialize it.
+    assert '"rate_refill_per_sec":5.0' in js
 
 
 def test_verify_round_trips_and_returns_canonical_bytes():

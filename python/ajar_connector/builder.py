@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Ergonomic, fail-closed construction of canonical Events."""
+"""Construction and validation of canonical Events."""
 
 import os
 import time
@@ -18,7 +18,7 @@ class BuildError(Exception):
 
 
 def _uuid7() -> str:
-    """A UUIDv7 string (48-bit ms timestamp + random), dependency-free."""
+    """Return a UUIDv7 string: 48-bit ms timestamp, then random bits."""
     b = bytearray(os.urandom(16))
     ms = int(time.time() * 1000)
     b[0] = (ms >> 40) & 0xFF
@@ -34,7 +34,6 @@ def _uuid7() -> str:
 
 
 def _is_namespaced(entity_type: str) -> bool:
-    """True if entity_type is mim:<type> or x:<vendor>:<type>."""
     if entity_type.startswith("mim:"):
         rest = entity_type[4:]
         return bool(rest) and ":" not in rest
@@ -45,9 +44,11 @@ def _is_namespaced(entity_type: str) -> bool:
 
 
 class EventBuilder:
-    """Builds a canonical Event. Auto-sorts attributes, rejects duplicate keys,
-    enforces required fields and limits, offers UUIDv7 / RFC 3339 helpers.
-    ``received_at`` is intentionally not exposed — Ajar stamps its own clock.
+    """Builds a canonical Event.
+
+    Fails closed: it sorts attributes and metadata, rejects duplicate keys, and
+    enforces required fields and limits, so a connector cannot emit a non-canonical
+    event by accident. ``received_at`` has no setter, because Ajar stamps its own clock.
     """
 
     def __init__(self, source_id: str, entity_type: str) -> None:
@@ -64,56 +65,67 @@ class EventBuilder:
         self._strict_entity_namespace = True
 
     def id(self, value: str) -> "EventBuilder":
+        """Set the event id."""
         self._id = value
         return self
 
     def new_id(self) -> "EventBuilder":
+        """Set the event id to a fresh UUIDv7."""
         self._id = _uuid7()
         return self
 
     def timestamp(self, ts: str) -> "EventBuilder":
+        """Set the RFC 3339 observation time."""
         self._timestamp = ts
         return self
 
     def now(self) -> "EventBuilder":
+        """Set the observation time to the current UTC second."""
         self._timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         return self
 
     def location(self, latitude: float, longitude: float, altitude_m: float) -> "EventBuilder":
+        """Set the WGS-84 position."""
         self._location = (latitude, longitude, altitude_m)
         return self
 
     def payload(self, data: bytes) -> "EventBuilder":
+        """Set the raw native bytes."""
         self._payload = data
         return self
 
     def policy_tag(self, tag: str) -> "EventBuilder":
+        """Add one policy tag."""
         self._policy_tags.append(tag)
         return self
 
     def confidence(self, confidence: float) -> "EventBuilder":
+        """Set the confidence, in [0.0, 1.0]."""
         self._confidence = confidence
         return self
 
     def attribute(self, key: str, value: str) -> "EventBuilder":
+        """Add one attribute; ``build`` sorts by key and rejects duplicates."""
         self._attributes.append((key, value))
         return self
 
     def metadata(self, key: str, value: str) -> "EventBuilder":
-        """Add one ungoverned passthrough metadata entry (ADR-0030): a
-        vendor-specific field carried and audited opaquely, but not
-        type-validated or correlated (e.g. a source's native identifier).
-        Order does not matter — ``build`` sorts by key and rejects duplicates.
+        """Add one ungoverned passthrough metadata entry.
+
+        A vendor-specific field carried and audited opaquely, but not type-validated
+        or correlated, e.g. a source's native identifier. Order does not matter:
+        ``build`` sorts by key and rejects duplicates.
         """
         self._metadata.append((key, value))
         return self
 
     def allow_unnamespaced_entity_type(self) -> "EventBuilder":
+        """Accept an entity type outside ``mim:`` and ``x:<vendor>:``."""
         self._strict_entity_namespace = False
         return self
 
     def build(self) -> Event:
-        """Validate invariants and produce the canonical Event."""
+        """Validate the invariants and return the canonical Event."""
         if not self._id:
             raise BuildError("missing required field: id")
         if not self._timestamp:
@@ -136,13 +148,11 @@ class EventBuilder:
         if len(self._metadata) > MAX_METADATA:
             raise BuildError(f"too many metadata entries: {len(self._metadata)} (max {MAX_METADATA})")
 
-        # Canonical rule: attributes sorted by key, unique.
         attrs = sorted(self._attributes, key=lambda kv: kv[0])
         for i in range(1, len(attrs)):
             if attrs[i][0] == attrs[i - 1][0]:
                 raise BuildError(f"duplicate attribute key: {attrs[i][0]!r}")
 
-        # Metadata follows the identical canonical rule: sorted by key, unique.
         meta = sorted(self._metadata, key=lambda kv: kv[0])
         for i in range(1, len(meta)):
             if meta[i][0] == meta[i - 1][0]:
@@ -154,7 +164,6 @@ class EventBuilder:
         event.source_id = self._source_id
         event.entity_type = self._entity_type
         event.timestamp = self._timestamp
-        # received_at intentionally left empty — Ajar stamps its own clock.
         if self._location is not None:
             event.location.latitude = self._location[0]
             event.location.longitude = self._location[1]

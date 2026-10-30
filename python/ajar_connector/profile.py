@@ -5,9 +5,7 @@ import json
 
 
 class ConnectorProfile:
-    """A connector's published profile. Serializes deterministically (verifying
-    key as lowercase hex); byte-identical to the Rust/Go/C++ profile JSON.
-    """
+    """A connector's published profile, serialized byte-identical to the other SDKs."""
 
     def __init__(self, source_id: str, verifying_key: bytes) -> None:
         self.source_id = source_id
@@ -18,14 +16,17 @@ class ConnectorProfile:
         self.verifying_key = verifying_key
 
     def allow_entity_type(self, entity_type: str) -> "ConnectorProfile":
+        """Add an entity type the connector may emit."""
         self.allowed_entity_types.append(entity_type)
         return self
 
     def with_max_payload_bytes(self, max_bytes: int) -> "ConnectorProfile":
+        """Set the largest payload the connector may send."""
         self.max_payload_bytes = max_bytes
         return self
 
     def rate_limit(self, capacity: int, refill_per_sec: float) -> "ConnectorProfile":
+        """Set the token-bucket capacity and refill rate."""
         self.rate_capacity = capacity
         self.rate_refill_per_sec = refill_per_sec
         return self
@@ -41,9 +42,9 @@ class ConnectorProfile:
         }
 
     def to_json(self) -> str:
-        """Compact JSON."""
+        """Return the profile as compact JSON."""
         return json.dumps(self._wire(), separators=(",", ":"))
 
     def to_json_pretty(self) -> str:
-        """Indented JSON."""
+        """Return the profile as indented JSON."""
         return json.dumps(self._wire(), indent=2)

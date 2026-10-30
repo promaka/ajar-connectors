@@ -1,17 +1,15 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Consume governed events with verification built in, ready to embed.
+"""Consume governed egress events, yielding only those whose signature verifies.
 
-The consume side of the SDK, mirroring :mod:`ajar_connector.producer`: one
-call that subscribes to governed egress and yields events - and ONLY events
-whose Ed25519 signature verified under the deployment's egress key. The
-verification is structurally unskippable: an event that does not verify is
-counted and dropped inside the loop, and your code never sees it.
+One call subscribes to governed egress and yields events whose Ed25519 signature
+verified under the deployment's egress key. An event that does not verify is counted
+and dropped inside the loop, so your code never sees it.
 
 Requires the ``consumer`` extra for the transport::
 
     pip install "ajar-connector[consumer]"
 
-Usage, in full::
+Usage::
 
     from ajar_connector.consumer import consume
 
@@ -24,9 +22,9 @@ Usage, in full::
         do_something(delivery.event)        # decoded, verified Event
         # delivery.payload is the rendered bytes (GeoJSON, CoT, ...)
 
-For a platform that also publishes assessments back (the derive loop), pass
-``skip_source_ids={"your-producer-id"}`` so your own published events, which
-come back out of egress like everything else, are never fed to your model.
+A platform that also publishes assessments back passes
+``skip_source_ids={"your-producer-id"}``, so its own published events, which come
+back out of egress like everything else, are never fed to its model.
 """
 
 from __future__ import annotations
@@ -40,25 +38,23 @@ from . import event_pb2, verify
 
 @dataclass
 class Delivery:
-    """One verified governed event, as delivered."""
+    """One verified governed event."""
 
-    #: The decoded canonical event. Its signature verified; you never see one
-    #: that did not.
     event: "event_pb2.Event"
-    #: The event's rendered payload bytes (GeoJSON, CoT, native frame...).
+    #: Rendered payload bytes (GeoJSON, CoT, native frame).
     payload: bytes
-    #: The NATS subject it arrived on (e.g. ajar.egress.signed.coastal-1).
+    #: NATS subject the event arrived on.
     subject: str
 
 
 @dataclass
 class ConsumerStats:
-    """Live counters, updated as the iterator runs."""
+    """Counters updated as the consume iterator runs."""
 
     accepted: int = 0
-    #: Events that failed signature verification: dropped, never yielded.
+    #: Events that failed signature verification and were dropped.
     rejected: int = 0
-    #: Events skipped by the skip_source_ids / skip_derived guards.
+    #: Events dropped by ``skip_source_ids`` or ``skip_derived``.
     skipped: int = 0
     _last: str = field(default="", repr=False)
 
@@ -75,21 +71,20 @@ async def consume(
     skip_derived: bool = False,
     stats: ConsumerStats | None = None,
 ) -> AsyncIterator[Delivery]:
-    """Subscribe and yield verified events, forever.
+    """Subscribe to ``subject`` and yield verified events until cancelled.
 
-    ``egress_verifying_key`` is the deployment's egress verifying key from
-    your operator (64-char hex, or the raw 32 bytes). ``ca``/``cert``/``key``
-    are the mTLS PEM paths; pass all three or none (a partial TLS setup is
-    refused rather than guessed at). ``skip_derived`` skips events carrying a
-    ``model`` attribute - anything produced by an AI/analytics platform -
-    which a deriving platform sets to avoid assessing assessments.
+    ``egress_verifying_key`` is the deployment's egress verifying key from your
+    operator: 64-char hex or the raw 32 bytes. ``ca``, ``cert`` and ``key`` are the mTLS
+    PEM paths; pass all three or none, as a partial TLS setup is refused. ``skip_derived``
+    drops events carrying a ``model`` attribute, meaning anything produced by an AI or
+    analytics platform; ``skip_source_ids`` drops a deriving platform's own events.
 
-    Pass a :class:`ConsumerStats` to watch accept/reject counts from outside
-    the loop; rejections also emit one ``warning`` log line each.
+    Pass a :class:`ConsumerStats` to watch accept and reject counts from outside the
+    loop; each rejection also logs one warning.
     """
     try:
-        import nats  # transport dep: pip install "ajar-connector[consumer]"
-    except ImportError as e:  # pragma: no cover - import guidance only
+        import nats
+    except ImportError as e:  # pragma: no cover
         raise ImportError(
             'the consumer needs the NATS client: pip install "ajar-connector[consumer]"'
         ) from e
@@ -124,7 +119,7 @@ async def consume(
         async for msg in sub.messages:
             try:
                 canonical = verify(msg.data, key_bytes)
-            except Exception:  # noqa: BLE001 - the whole point: refuse, count, continue
+            except Exception:  # noqa: BLE001 - refuse, count, continue
                 s.rejected += 1
                 import logging
 

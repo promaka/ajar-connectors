@@ -1,7 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Verification is the egress hot path, so its speed is a tested property, not
-a README claim: a change that makes it slow fails here rather than quietly
-degrading a consumer."""
+"""Throughput floor for seal verification."""
 import os
 import time
 
@@ -27,7 +25,6 @@ def test_verify_throughput_is_hot_path_grade():
         verify(sealed, vk)
     per_sec = n / (time.perf_counter() - start)
     print(f"verify: {per_sec:.0f} envelopes/sec on one core")
-    # Python rides cryptography's (OpenSSL) Ed25519; the floor is deliberately
-    # modest so CI hardware variance never flakes, while a real regression —
-    # accidental pure-Python fallback, per-call key re-parsing — still fails.
+    # The floor sits far below OpenSSL-backed Ed25519 speed to absorb CI variance,
+    # and is meant to catch an accidental pure-Python fallback.
     assert per_sec > 500, f"verification unexpectedly slow: {per_sec:.0f}/sec"

@@ -15,9 +15,9 @@ SEAL_SIGNATURE_LEN = 64
 class SigningKey:
     """An Ed25519 signing key.
 
-    Each production connector holds its own; Ajar registers the matching
-    verifying key in the connector's profile. The golden-vector seed (32 x
-    0x47) is a published TEST seed — never sign production events with it.
+    Each production connector holds its own; Ajar registers the matching verifying key
+    in the connector's profile. The golden-vector seed (32 x 0x47) is a published test
+    seed: never sign production events with it.
     """
 
     def __init__(self, key: Ed25519PrivateKey) -> None:
@@ -43,11 +43,11 @@ class SigningKey:
 
 
 def seal(canonical: bytes, key: SigningKey) -> bytes:
-    """Seal canonical bytes: ``sign(key, canonical) ++ canonical``.
+    """Seal canonical bytes as ``sign(key, canonical) ++ canonical``.
 
-    The verifier splits at :data:`SEAL_SIGNATURE_LEN`, checks the signature over
-    the remainder with the connector's registered verifying key, and recovers
-    the canonical event from the suffix.
+    The verifier splits at :data:`SEAL_SIGNATURE_LEN`, checks the signature over the
+    remainder with the connector's registered verifying key, and recovers the canonical
+    event from the suffix.
     """
     return key.sign(canonical) + canonical
 
@@ -59,16 +59,13 @@ class SealVerificationError(Exception):
 def verify(sealed: bytes, verifying_key: bytes) -> bytes:
     """Verify a sealed envelope and return the canonical bytes it carries.
 
-    The inverse of :func:`seal`, and the whole trust model in one call: it
-    answers whether these exact bytes were sealed by the holder of
-    ``verifying_key`` and are unaltered since. A recipient holding a
-    connector's registered verifying key can establish provenance without the
-    connector, the broker or Ajar Core being present or trusted.
+    The inverse of :func:`seal`. It answers whether these exact bytes were sealed by the
+    holder of ``verifying_key``, unaltered since. A recipient holding a connector's
+    registered verifying key can establish provenance without the connector, the broker
+    or Ajar Core being present or trusted.
 
-    ``verifying_key`` is the 32-byte raw Ed25519 public key, as published in the
-    connector's profile.
-
-    Raises :class:`SealVerificationError` if the envelope is too short, the key
+    ``verifying_key`` is the raw 32-byte Ed25519 public key from the connector's
+    profile. Raises :class:`SealVerificationError` if the envelope is too short, the key
     is not a valid Ed25519 public key, or the signature does not verify.
     """
     if len(verifying_key) != 32:
