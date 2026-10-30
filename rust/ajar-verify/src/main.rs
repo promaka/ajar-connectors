@@ -1,28 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
-//! `ajar-verify` — check the seal on an Ajar event and print what it carries.
-//!
-//! An Ajar event is a detached Ed25519 signature followed by canonically-encoded
-//! protobuf. Verifying it establishes two things: that the bytes were sealed by
-//! the holder of a particular key, and that nothing has altered them since. That
-//! is the whole trust model, and this tool exercises it with nothing else
-//! present — no connector, no broker, no Ajar Core, no network.
-//!
-//! A recipient of Ajar data can therefore confirm provenance for themselves
-//! rather than taking the sender's word for it, which is the point of signing the
-//! events in the first place.
-//!
-//! ```text
-//! ajar-verify --key <64-hex-chars> event.sealed
-//! ajar-verify --key-file publisher.pub < event.sealed
-//! ```
-//!
-//! Exit status is 0 when the seal verifies and 1 when it does not, so it drops
-//! into a pipeline or a CI check unchanged.
+//! `ajar-verify`: checks the Ed25519 seal on an Ajar event and prints what it
+//! carries. Needs no connector, broker, Core or network. Exits 0 when the seal
+//! verifies and 1 otherwise.
 
 use std::io::Read;
 use std::process::ExitCode;
 
-use ajar_connector::{event::Event, verify};
+use ajar_connector::event::Event;
+use ajar_connector::VerifyingKey;
+use anyhow::Context;
 use prost::Message;
 
 const USAGE: &str = "\
@@ -53,14 +39,14 @@ fn main() -> ExitCode {
             }
             ExitCode::SUCCESS
         }
-        Err(message) => {
-            eprintln!("ajar-verify: {message}");
+        Err(e) => {
+            eprintln!("ajar-verify: {e:#}");
             ExitCode::FAILURE
         }
     }
 }
 
-fn run() -> Result<Option<String>, String> {
+fn run() -> anyhow::Result<Option<String>> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.is_empty() || args.iter().any(|a| a == "--help" || a == "-h") {
         return Ok(Some(USAGE.trim_end().to_string()));
@@ -74,10 +60,10 @@ fn run() -> Result<Option<String>, String> {
     let mut it = args.iter();
     while let Some(arg) = it.next() {
         match arg.as_str() {
-            "--key" => key_hex = Some(it.next().ok_or("--key needs a value")?.clone()),
-            "--key-file" => key_file = Some(it.next().ok_or("--key-file needs a value")?.clone()),
+            "--key" => key_hex = Some(it.next().context("--key needs a value")?.clone()),
+            "--key-file" => key_file = Some(it.next().context("--key-file needs a value")?.clone()),
             "--quiet" | "-q" => quiet = true,
-            other if other.starts_with('-') => return Err(format!("unknown option {other}")),
+            other if other.starts_with('-') => anyhow::bail!("unknown option {other}"),
             other => input = Some(other.to_string()),
         }
     }
@@ -85,66 +71,52 @@ fn run() -> Result<Option<String>, String> {
     let key = match (key_hex, key_file) {
         (Some(hex), None) => parse_key(hex.trim().as_bytes())?,
         (None, Some(path)) => {
-            let raw = std::fs::read(&path).map_err(|e| format!("reading {path}: {e}"))?;
+            let raw = std::fs::read(&path).with_context(|| format!("reading {path}"))?;
             parse_key(&raw)?
         }
-        (Some(_), Some(_)) => return Err("use --key or --key-file, not both".into()),
-        (None, None) => return Err("a verifying key is required (--key or --key-file)".into()),
+        (Some(_), Some(_)) => anyhow::bail!("use --key or --key-file, not both"),
+        (None, None) => anyhow::bail!("a verifying key is required (--key or --key-file)"),
     };
 
     let sealed = match &input {
-        Some(path) => std::fs::read(path).map_err(|e| format!("reading {path}: {e}"))?,
+        Some(path) => std::fs::read(path).with_context(|| format!("reading {path}"))?,
         None => {
             let mut buf = Vec::new();
             std::io::stdin()
                 .read_to_end(&mut buf)
-                .map_err(|e| format!("reading stdin: {e}"))?;
+                .context("reading stdin")?;
             buf
         }
     };
 
-    let canonical = verify(&sealed, &key).map_err(|e| e.to_string())?;
+    let canonical = ajar_connector::verify(&sealed, &key)?;
     if quiet {
         return Ok(None);
     }
 
-    // Decoding is deliberately after verification: nothing is parsed until the
-    // bytes have been shown to be authentic.
-    let event = Event::decode(canonical).map_err(|e| {
-        format!("seal verified, but the payload is not a canonical Ajar event: {e}")
-    })?;
+    // Nothing is decoded until the seal has verified.
+    let event = Event::decode(canonical)
+        .context("seal verified, but the payload is not a canonical Ajar event")?;
     Ok(Some(describe(&event, sealed.len(), canonical.len())))
 }
 
-/// Accept a key as 64 hex characters or as 32 raw bytes, so both `ajar keygen`
-/// output and a raw key file work without conversion.
-fn parse_key(raw: &[u8]) -> Result<ajar_connector::VerifyingKey, String> {
+/// Accepts a key as 64 hex characters or 32 raw bytes, ignoring whitespace.
+fn parse_key(raw: &[u8]) -> anyhow::Result<VerifyingKey> {
     let trimmed: Vec<u8> = raw
         .iter()
         .copied()
         .filter(|b| !b.is_ascii_whitespace())
         .collect();
-    let bytes: [u8; 32] = if trimmed.len() == 64 {
-        let decoded = hex::decode(&trimmed).map_err(|e| format!("key is not valid hex: {e}"))?;
-        decoded
-            .try_into()
-            .map_err(|_| "hex key must decode to 32 bytes".to_string())?
-    } else if trimmed.len() == 32 {
-        trimmed
-            .try_into()
-            .map_err(|_| "raw key must be 32 bytes".to_string())?
-    } else {
-        return Err(format!(
-            "key must be 32 raw bytes or 64 hex characters, got {} bytes",
-            trimmed.len()
-        ));
-    };
-    ajar_connector::VerifyingKey::from_bytes(&bytes)
-        .map_err(|e| format!("not a valid Ed25519 verifying key: {e}"))
+    let mut bytes = [0u8; 32];
+    match trimmed.len() {
+        64 => hex::decode_to_slice(&trimmed, &mut bytes).context("key is not valid hex")?,
+        32 => bytes.copy_from_slice(&trimmed),
+        n => anyhow::bail!("key must be 32 raw bytes or 64 hex characters, got {n} bytes"),
+    }
+    VerifyingKey::from_bytes(&bytes).context("not a valid Ed25519 verifying key")
 }
 
-/// A human-readable summary of a verified event. Deliberately plain text so it
-/// greps and diffs; the canonical bytes remain the authority.
+/// Plain-text summary of a verified event, one field per line.
 fn describe(event: &Event, sealed_len: usize, canonical_len: usize) -> String {
     let mut out = String::new();
     out.push_str("seal: VERIFIED\n");
@@ -188,17 +160,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn accepts_a_key_as_hex_or_raw_bytes() {
+    fn accepts_hex_or_raw_key() {
         let raw = [0x47u8; 32];
         let as_hex = hex::encode(raw);
         assert!(parse_key(as_hex.as_bytes()).is_ok());
         assert!(parse_key(&raw).is_ok());
-        // Trailing newline from a key file is tolerated.
-        assert!(parse_key(format!("{as_hex}\n").as_bytes()).is_ok());
+        assert!(
+            parse_key(format!("{as_hex}\n").as_bytes()).is_ok(),
+            "trailing newline"
+        );
     }
 
     #[test]
-    fn rejects_a_key_of_the_wrong_length_or_alphabet() {
+    fn rejects_wrong_length_or_non_hex_key() {
         assert!(parse_key(b"deadbeef").is_err());
         assert!(parse_key(&[0u8; 31]).is_err());
         assert!(parse_key(&[b'z'; 64]).is_err());

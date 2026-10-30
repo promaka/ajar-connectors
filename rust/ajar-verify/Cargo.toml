@@ -16,5 +16,6 @@ path = "src/main.rs"
 
 [dependencies]
 ajar-connector = { path = "../ajar-connector" }
+anyhow.workspace = true
 prost.workspace = true
 hex.workspace = true
