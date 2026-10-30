@@ -1,27 +1,22 @@
 // SPDX-License-Identifier: Apache-2.0
-//! The connection to the fusion node: connect, register, be acknowledged,
-//! then send reports and answer what comes back. Drops and reconnects on
-//! any error; the caller buffers and retries.
-//!
-//! BSI Flex 335 makes registration the first thing on a new connection and
-//! says a node reports nothing until its registration is acknowledged. A
-//! rejection carries reasons, which are surfaced in the error so an operator
-//! sees what the fusion node objected to.
+//! The connection to the fusion node. BSI Flex 335 makes registration the
+//! first message on a connection, and a node reports nothing until it is
+//! acknowledged. Any error drops the connection; the next send reconnects and
+//! re-registers.
 
+use std::io::{self, ErrorKind};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use ajar_sapient_wire::v2;
 use ajar_sapient_wire::v2::sapient_message::Content;
-use ajar_sapient_wire::{v2, FrameError, MAX_MESSAGE_LEN, PREFIX_LEN};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncWriteExt;
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::TcpStream;
 
 use crate::report::Node;
 
-/// How long a fusion node has to accept a connection and to acknowledge a
-/// registration before the attempt is given up and retried.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const ACK_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -31,11 +26,10 @@ pub struct FusionLink {
     reader: Option<OwnedReadHalf>,
     writer: Option<OwnedWriteHalf>,
     held: Vec<u8>,
-    /// 1 while registered and connected, 0 otherwise. A gauge for `/metrics`.
+    /// Gauge: 1 while registered and connected.
     pub up: Arc<AtomicU64>,
-    /// Connections made after the first, since start.
+    /// Connections made after the first.
     pub reconnects: Arc<AtomicU64>,
-    /// Registrations the fusion node rejected, since start.
     pub rejected_registrations: Arc<AtomicU64>,
     ever_connected: bool,
 }
@@ -60,15 +54,13 @@ impl FusionLink {
     }
 
     /// Connect and register if not already; an error leaves the link down.
-    pub async fn ensure_registered(&mut self) -> std::io::Result<()> {
+    pub async fn ensure_registered(&mut self) -> io::Result<()> {
         if self.connected() {
             return Ok(());
         }
         let stream = tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect(&self.addr))
             .await
-            .map_err(|_| {
-                std::io::Error::new(std::io::ErrorKind::TimedOut, "connect timed out")
-            })??;
+            .map_err(|_| io::Error::new(ErrorKind::TimedOut, "connect timed out"))??;
         stream.set_nodelay(true)?;
         let (reader, writer) = stream.into_split();
         self.reader = Some(reader);
@@ -92,9 +84,9 @@ impl FusionLink {
             }
             Err(_) => {
                 self.drop_connection();
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::TimedOut,
-                    "no registration acknowledgement within 10 s",
+                return Err(io::Error::new(
+                    ErrorKind::TimedOut,
+                    format!("no registration acknowledgement within {ACK_TIMEOUT:?}"),
                 ));
             }
         };
@@ -106,7 +98,7 @@ impl FusionLink {
             } else {
                 ack.ack_response_reason.join("; ")
             };
-            return Err(std::io::Error::other(format!(
+            return Err(io::Error::other(format!(
                 "the fusion node rejected this node's registration: {reasons}"
             )));
         }
@@ -116,7 +108,7 @@ impl FusionLink {
     }
 
     /// Read messages until the registration acknowledgement arrives.
-    async fn await_ack(&mut self) -> std::io::Result<v2::RegistrationAck> {
+    async fn await_ack(&mut self) -> io::Result<v2::RegistrationAck> {
         loop {
             let message = self.read_message().await?;
             if let Some(Content::RegistrationAck(ack)) = message.content {
@@ -125,9 +117,8 @@ impl FusionLink {
         }
     }
 
-    /// Send one message, framed. An error drops the connection so the next
-    /// call reconnects and re-registers; the caller keeps the message.
-    pub async fn send(&mut self, message: &v2::SapientMessage) -> std::io::Result<()> {
+    /// Send one message. On an error the caller keeps the message.
+    pub async fn send(&mut self, message: &v2::SapientMessage) -> io::Result<()> {
         self.ensure_registered().await?;
         if let Err(e) = self.write(message).await {
             self.drop_connection();
@@ -136,19 +127,19 @@ impl FusionLink {
         Ok(())
     }
 
-    async fn write(&mut self, message: &v2::SapientMessage) -> std::io::Result<()> {
+    async fn write(&mut self, message: &v2::SapientMessage) -> io::Result<()> {
         let bytes = ajar_sapient_wire::frame(&ajar_sapient_wire::encode(message));
-        let writer = self.writer.as_mut().ok_or_else(|| {
-            std::io::Error::new(std::io::ErrorKind::NotConnected, "not connected")
-        })?;
+        let writer = self
+            .writer
+            .as_mut()
+            .ok_or_else(|| io::Error::from(ErrorKind::NotConnected))?;
         writer.write_all(&bytes).await?;
         writer.flush().await
     }
 
-    /// The next message from the fusion node. Only meaningful while
-    /// connected; pending forever otherwise, so a `select!` branch guards it
+    /// The next message from the fusion node; a `select!` branch guards it
     /// with [`FusionLink::connected`].
-    pub async fn next_inbound(&mut self) -> std::io::Result<v2::SapientMessage> {
+    pub async fn next_inbound(&mut self) -> io::Result<v2::SapientMessage> {
         match self.read_message().await {
             Ok(m) => Ok(m),
             Err(e) => {
@@ -158,59 +149,27 @@ impl FusionLink {
         }
     }
 
-    async fn read_message(&mut self) -> std::io::Result<v2::SapientMessage> {
-        let reader = self.reader.as_mut().ok_or_else(|| {
-            std::io::Error::new(std::io::ErrorKind::NotConnected, "not connected")
-        })?;
-        let mut chunk = [0u8; 8192];
-        loop {
-            match ajar_sapient_wire::unframe(&self.held) {
-                Ok((payload, rest)) => {
-                    let message = ajar_sapient_wire::decode(payload).map_err(|e| {
-                        std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string())
-                    });
-                    let consumed = self.held.len() - rest.len();
-                    self.held.drain(..consumed);
-                    return message;
-                }
-                Err(FrameError::TooLong(n)) => {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
-                        format!("frame of {n} bytes from the fusion node is above the bound"),
-                    ));
-                }
-                Err(FrameError::NeedPrefix) | Err(FrameError::Incomplete { .. }) => {}
-            }
-            if self.held.len() > MAX_MESSAGE_LEN + PREFIX_LEN {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "no frame boundary within the size bound",
-                ));
-            }
-            let n = reader.read(&mut chunk).await?;
-            if n == 0 {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::UnexpectedEof,
-                    "the fusion node closed the connection",
-                ));
-            }
-            self.held.extend_from_slice(&chunk[..n]);
-        }
+    async fn read_message(&mut self) -> io::Result<v2::SapientMessage> {
+        let reader = self
+            .reader
+            .as_mut()
+            .ok_or_else(|| io::Error::from(ErrorKind::NotConnected))?;
+        let payload = ajar_sapient_wire::read_frame(reader, &mut self.held).await?;
+        ajar_sapient_wire::decode(&payload).map_err(|e| io::Error::new(ErrorKind::InvalidData, e))
     }
 
-    /// Answer an inbound message: a task is refused, anything else noted.
-    /// Returns whether a reply was sent.
-    pub async fn answer(&mut self, message: &v2::SapientMessage) -> std::io::Result<bool> {
+    /// Refuse a task, note an error. Returns whether a reply was sent.
+    pub async fn answer(&mut self, message: &v2::SapientMessage) -> io::Result<bool> {
         match &message.content {
             Some(Content::Task(task)) => {
-                let id = task.task_id.clone().unwrap_or_default();
-                tracing::info!(task_id = %id, "task from the fusion node refused: this node takes no tasks");
-                let ack = self.node.task_rejected(&id, message.node_id.as_deref());
+                let id = task.task_id.as_deref().unwrap_or_default();
+                tracing::info!(task_id = %id, "task from the fusion node refused");
+                let ack = self.node.task_rejected(id, message.node_id.as_deref());
                 self.send(&ack).await?;
                 Ok(true)
             }
             Some(Content::Error(e)) => {
-                tracing::warn!(reasons = ?e.error_message, "the fusion node reported an error on a message of ours");
+                tracing::warn!(reasons = ?e.error_message, "fusion node reported an error");
                 Ok(false)
             }
             _ => Ok(false),
@@ -219,7 +178,7 @@ impl FusionLink {
 
     pub fn drop_connection(&mut self) {
         if self.connected() {
-            tracing::warn!(fusion_node = %self.addr, "connection to the fusion node dropped; will reconnect and re-register");
+            tracing::warn!(fusion_node = %self.addr, "fusion node connection dropped");
         }
         self.reader = None;
         self.writer = None;
@@ -231,31 +190,20 @@ impl FusionLink {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::EgressConfig;
     use tokio::net::TcpListener;
 
-    const KEY: &str = "e28a89f1c0d2b3a4958677665544332211ffeeddccbbaa99887766554433221100";
+    const TASK_ID: &str = "01J9A0TASK00000000000000001";
 
     fn node() -> Node {
-        let cfg: EgressConfig = toml::from_str(&format!(
-            "nats_url = \"nats://127.0.0.1:4222\"\negress_verifying_key = \"{KEY}\"\n[sapient]\nfusion_node = \"x:1\"\nnode_id = \"ajar-node\""
-        ))
-        .unwrap();
-        Node::from_config(&cfg)
+        Node::from_config(&crate::config::test_config("node_id = \"ajar-node\"").unwrap())
     }
 
-    /// A fusion node that reads one framed message and returns it.
+    /// The fusion node's side: read one framed message.
     async fn read_one(stream: &mut TcpStream) -> v2::SapientMessage {
-        let mut held = Vec::new();
-        let mut chunk = [0u8; 4096];
-        loop {
-            if let Ok((payload, _)) = ajar_sapient_wire::unframe(&held) {
-                return ajar_sapient_wire::decode(payload).unwrap();
-            }
-            let n = stream.read(&mut chunk).await.unwrap();
-            assert!(n > 0, "node closed before sending");
-            held.extend_from_slice(&chunk[..n]);
-        }
+        let payload = ajar_sapient_wire::read_frame(stream, &mut Vec::new())
+            .await
+            .expect("node closed before sending");
+        ajar_sapient_wire::decode(&payload).unwrap()
     }
 
     fn ack(accept: bool, reasons: &[&str]) -> Vec<u8> {
@@ -283,13 +231,12 @@ mod tests {
             s.write_all(&ack(true, &[])).await.unwrap();
             let status = read_one(&mut s).await;
             assert!(matches!(status.content, Some(Content::StatusReport(_))));
-            // Task the node; expect a rejection.
             let task = v2::SapientMessage {
                 timestamp: Some(ajar_sapient_wire::now()),
                 node_id: Some("fusion".into()),
                 destination_id: Some("ajar-node".into()),
                 content: Some(Content::Task(v2::Task {
-                    task_id: Some("01J9A0TASK00000000000000001".into()),
+                    task_id: Some(TASK_ID.into()),
                     control: Some(v2::task::Control::Start as i32),
                     ..Default::default()
                 })),
@@ -305,7 +252,7 @@ mod tests {
                         a.task_status,
                         Some(v2::task_ack::TaskStatus::Rejected as i32)
                     );
-                    assert_eq!(a.task_id.as_deref(), Some("01J9A0TASK00000000000000001"));
+                    assert_eq!(a.task_id.as_deref(), Some(TASK_ID));
                 }
                 other => panic!("{other:?}"),
             }
@@ -322,7 +269,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_rejected_registration_is_an_error_with_the_reasons() {
+    async fn rejected_registration_reports_the_reasons() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         tokio::spawn(async move {
@@ -343,19 +290,20 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_dropped_connection_reconnects_and_re_registers_on_the_next_send() {
+    async fn dropped_connection_re_registers_on_send() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let fusion = tokio::spawn(async move {
-            // First connection: accept the registration, then hang up.
             let (mut s, _) = listener.accept().await.unwrap();
             let _ = read_one(&mut s).await;
             s.write_all(&ack(true, &[])).await.unwrap();
             drop(s);
-            // Second connection: a fresh registration must arrive first.
             let (mut s, _) = listener.accept().await.unwrap();
             let reg = read_one(&mut s).await;
-            assert!(matches!(reg.content, Some(Content::Registration(_))));
+            assert!(
+                matches!(reg.content, Some(Content::Registration(_))),
+                "a reconnect registers first"
+            );
             s.write_all(&ack(true, &[])).await.unwrap();
             let status = read_one(&mut s).await;
             assert!(matches!(status.content, Some(Content::StatusReport(_))));
@@ -363,17 +311,15 @@ mod tests {
         let node = node();
         let mut link = FusionLink::new(&addr.to_string(), node.clone());
         link.ensure_registered().await.unwrap();
-        // The peer hung up: the next read fails and drops the link.
-        assert!(link.next_inbound().await.is_err());
+        assert!(link.next_inbound().await.is_err(), "the peer hung up");
         assert!(!link.connected());
-        // A send reconnects, re-registers, then delivers.
         link.send(&node.status(true)).await.unwrap();
         assert_eq!(link.reconnects.load(Ordering::Relaxed), 1);
         fusion.await.unwrap();
     }
 
     #[tokio::test]
-    async fn nobody_listening_is_an_error_not_a_hang() {
+    async fn no_listener_is_an_error() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         drop(listener);

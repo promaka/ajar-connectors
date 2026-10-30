@@ -1,24 +1,17 @@
 // SPDX-License-Identifier: Apache-2.0
-//! The SAPIENT wire format, BSI Flex 335: the UK MOD interface between sensor
-//! edge nodes and a fusion node, used for counter-UAS.
-//!
-//! Two things live here and nothing else, so the ingress and egress connectors
-//! share one definition of the bytes:
-//!
-//! - the published protobuf schema, compiled to Rust in [`v2`] (and [`v1`]
-//!   behind the `v1` feature), from the files vendored under `proto/`;
-//! - the framing the standard puts around each message on a TCP stream: a
-//!   4-byte little-endian length, then the protobuf bytes.
-//!
-//! Decoding is prost's; the helpers here add the framing and the few
-//! conversions every connector needs (timestamps, the frame size bound).
+//! The SAPIENT (BSI Flex 335) wire format shared by the ingress and egress
+//! connectors: the vendored protobuf schema compiled to Rust in [`v2`] (and
+//! [`v1`] behind the `v1` feature), and the stream framing, a 4-byte
+//! little-endian length followed by the protobuf bytes.
+
+use std::io;
 
 use prost::Message;
+use tokio::io::{AsyncRead, AsyncReadExt};
 
 /// BSI Flex 335 v2.0, the current schema.
 pub mod v2 {
-    // Generated from the standard's own files, comments included; they are
-    // not written to Rust's lint conventions and are kept verbatim.
+    // Generated from the standard's files and kept verbatim.
     #![allow(clippy::all)]
     include!(concat!(
         env!("OUT_DIR"),
@@ -40,41 +33,43 @@ pub mod v1 {
 /// The standard's version string a v2.0 node declares in its registration.
 pub const ICD_VERSION_V2: &str = "BSI Flex 335 v2.0";
 
-/// Bytes in the length prefix.
 pub const PREFIX_LEN: usize = 4;
 
-/// The largest message a connector accepts, prefix excluded. A detection
-/// report with every optional field is a few kilobytes; this bound exists so
-/// a hostile prefix cannot make a reader allocate or wait.
+/// The largest message accepted, prefix excluded, so a hostile prefix cannot
+/// make a reader allocate or wait.
 pub const MAX_MESSAGE_LEN: usize = 64 * 1024;
 
 /// Why a frame could not be taken from a buffer.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum FrameError {
-    /// Fewer than four bytes: no prefix yet.
+    #[error("fewer than {PREFIX_LEN} bytes: no length prefix")]
     NeedPrefix,
-    /// The prefix declares more than [`MAX_MESSAGE_LEN`].
+    #[error("frame declares {0} bytes, above the {MAX_MESSAGE_LEN} bound")]
     TooLong(usize),
-    /// The prefix is whole but the payload is not all there yet.
+    #[error("frame declares {declared} bytes, {have} present")]
     Incomplete { declared: usize, have: usize },
 }
 
-impl std::fmt::Display for FrameError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::NeedPrefix => write!(f, "fewer than {PREFIX_LEN} bytes: no length prefix"),
-            Self::TooLong(n) => write!(
-                f,
-                "frame declares {n} bytes, above the {MAX_MESSAGE_LEN} bound"
-            ),
-            Self::Incomplete { declared, have } => {
-                write!(f, "frame declares {declared} bytes, {have} present")
-            }
+/// Why a frame could not be read from a stream.
+#[derive(Debug, thiserror::Error)]
+pub enum ReadError {
+    #[error("frame declares {0} bytes, above the {MAX_MESSAGE_LEN} bound")]
+    TooLong(usize),
+    #[error("peer closed the connection")]
+    Closed,
+    #[error(transparent)]
+    Io(#[from] io::Error),
+}
+
+impl From<ReadError> for io::Error {
+    fn from(e: ReadError) -> Self {
+        match e {
+            ReadError::Io(e) => e,
+            ReadError::Closed => io::Error::new(io::ErrorKind::UnexpectedEof, e),
+            ReadError::TooLong(_) => io::Error::new(io::ErrorKind::InvalidData, e),
         }
     }
 }
-
-impl std::error::Error for FrameError {}
 
 /// Wrap one encoded message in the standard's framing.
 pub fn frame(payload: &[u8]) -> Vec<u8> {
@@ -97,8 +92,32 @@ pub fn unframe(bytes: &[u8]) -> Result<(&[u8], &[u8]), FrameError> {
     if have < declared {
         return Err(FrameError::Incomplete { declared, have });
     }
-    let (payload, rest) = bytes[PREFIX_LEN..].split_at(declared);
-    Ok((payload, rest))
+    Ok(bytes[PREFIX_LEN..].split_at(declared))
+}
+
+/// Read the next frame's payload from `reader`. `held` keeps the bytes read
+/// past that frame for the next call.
+pub async fn read_frame<R: AsyncRead + Unpin>(
+    reader: &mut R,
+    held: &mut Vec<u8>,
+) -> Result<Vec<u8>, ReadError> {
+    let mut chunk = [0u8; 8192];
+    loop {
+        match unframe(held) {
+            Ok((payload, _)) => {
+                let payload = payload.to_vec();
+                held.drain(..PREFIX_LEN + payload.len());
+                return Ok(payload);
+            }
+            Err(FrameError::TooLong(n)) => return Err(ReadError::TooLong(n)),
+            Err(FrameError::NeedPrefix | FrameError::Incomplete { .. }) => {}
+        }
+        let n = reader.read(&mut chunk).await?;
+        if n == 0 {
+            return Err(ReadError::Closed);
+        }
+        held.extend_from_slice(&chunk[..n]);
+    }
 }
 
 /// Encode a v2.0 message to its protobuf bytes, unframed.
@@ -111,8 +130,7 @@ pub fn decode(bytes: &[u8]) -> Result<v2::SapientMessage, prost::DecodeError> {
     v2::SapientMessage::decode(bytes)
 }
 
-/// A protobuf timestamp as the RFC 3339 string an event carries, or `None`
-/// for one outside the representable range.
+/// A protobuf timestamp as RFC 3339, or `None` outside the representable range.
 pub fn rfc3339(ts: &prost_types::Timestamp) -> Option<String> {
     let nanos = i128::from(ts.seconds) * 1_000_000_000 + i128::from(ts.nanos);
     let t = time::OffsetDateTime::from_unix_timestamp_nanos(nanos).ok()?;
@@ -120,7 +138,6 @@ pub fn rfc3339(ts: &prost_types::Timestamp) -> Option<String> {
         .ok()
 }
 
-/// The current time as a protobuf timestamp.
 pub fn now() -> prost_types::Timestamp {
     let t = time::OffsetDateTime::now_utc();
     prost_types::Timestamp {
@@ -163,7 +180,7 @@ mod tests {
     }
 
     #[test]
-    fn a_message_survives_encode_frame_unframe_decode() {
+    fn encode_frame_unframe_decode_round_trips() {
         let framed = frame(&encode(&detection()));
         assert_eq!(&framed[..4], &(framed.len() as u32 - 4).to_le_bytes());
         let (payload, rest) = unframe(&framed).unwrap();
@@ -172,7 +189,7 @@ mod tests {
     }
 
     #[test]
-    fn two_frames_split_where_the_prefixes_say() {
+    fn two_frames_split_at_their_prefixes() {
         let mut bytes = frame(b"abc");
         bytes.extend(frame(b""));
         let (first, rest) = unframe(&bytes).unwrap();
@@ -184,7 +201,7 @@ mod tests {
     }
 
     #[test]
-    fn a_short_or_hostile_prefix_is_refused_not_waited_for() {
+    fn short_or_oversized_prefix_is_refused() {
         assert_eq!(unframe(&[1, 0]), Err(FrameError::NeedPrefix));
         assert_eq!(
             unframe(&[5, 0, 0, 0, 1, 2]),
@@ -199,10 +216,27 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn read_frame_keeps_bytes_past_the_frame() {
+        let mut bytes = frame(b"abc");
+        bytes.extend(frame(b"de"));
+        let mut reader = &bytes[..];
+        let mut held = Vec::new();
+        assert_eq!(read_frame(&mut reader, &mut held).await.unwrap(), b"abc");
+        assert_eq!(read_frame(&mut reader, &mut held).await.unwrap(), b"de");
+        assert!(matches!(
+            read_frame(&mut reader, &mut held).await,
+            Err(ReadError::Closed)
+        ));
+        let mut oversized = &[0xff, 0xff, 0xff, 0xff][..];
+        assert!(matches!(
+            read_frame(&mut oversized, &mut Vec::new()).await,
+            Err(ReadError::TooLong(_))
+        ));
+    }
+
     #[test]
     fn the_encoding_is_pinned() {
-        // The bytes a v2.0 node puts on the wire for this report. A change here
-        // is a change to what every SAPIENT peer sees.
         let hex: String = encode(&detection())
             .iter()
             .map(|b| format!("{b:02x}"))
@@ -210,12 +244,12 @@ mod tests {
         assert_eq!(
             hex,
             "0a0b0880cae2d0061080e59a77122432663163366131652d346135652d346237652d396231612d3064336632653663376131313a5e0a1a30314a385a31563451384b3654324e3353345735583659375a38121a30314a385a31563451384b3654324e3353345735583659374131321f09ebe2361ac05bc0bf11c5feb27bf2c04940190000000000005e40380140013d6666663f",
-            "see the note above"
+            "the bytes every SAPIENT peer sees for this report"
         );
     }
 
     #[test]
-    fn timestamps_render_as_rfc3339_and_bad_ones_as_none() {
+    fn timestamps_render_as_rfc3339() {
         let ts = prost_types::Timestamp {
             seconds: 1_780_000_000,
             nanos: 0,

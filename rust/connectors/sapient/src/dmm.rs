@@ -1,55 +1,47 @@
 // SPDX-License-Identifier: Apache-2.0
-//! The fusion-node acceptor: sensors connect in over TCP, register, and are
-//! acknowledged; everything they send then flows to the parser.
-//!
-//! BSI Flex 335 calls the fusion node's message handler the DMM. A sensor
-//! opens a connection, sends a `Registration`, and reports nothing until it
-//! has a `RegistrationAck`. The runtime's `tcp-server` transport only reads,
-//! so this source owns the connections: it reads frames in the standard's
-//! framing, answers each registration, and forwards every message, the
-//! registration included, through a bounded channel the runtime drains.
-//!
-//! Nothing is interpreted here beyond "is this a registration": the parser
-//! sees the same bytes the sensor sent.
+//! The fusion-node acceptor, the DMM in BSI Flex 335 terms. A sensor connects,
+//! sends a `Registration` and reports nothing until it has a
+//! `RegistrationAck`, so this source owns the connections: it answers each
+//! registration and forwards every message unchanged, the registration
+//! included, through a bounded channel the runtime drains.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
 use ajar_connector_common::FrameSource;
 use ajar_sapient_wire::v2::sapient_message::Content;
-use ajar_sapient_wire::{v2, FrameError, MAX_MESSAGE_LEN, PREFIX_LEN};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use ajar_sapient_wire::{v2, ReadError};
+use anyhow::Context;
+use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc;
 
-/// Frames buffered between the acceptor and the runtime. A full channel slows
-/// the sensors rather than growing memory.
+/// Frames buffered toward the runtime. A full channel slows the sensors
+/// rather than growing memory.
 const CHANNEL_FRAMES: usize = 1024;
 
-/// Counters the acceptor publishes on `/metrics`.
 #[derive(Default)]
 pub struct DmmCounters {
-    /// Registrations acknowledged, since start.
+    /// Registrations acknowledged.
     pub registrations: Arc<AtomicU64>,
-    /// Connections that ended with bytes that were not the standard's framing.
+    /// Connections closed for a frame above the size bound.
     pub bad_framing: Arc<AtomicU64>,
 }
 
-/// The accepting source. Hand it to the runtime as the frame source.
 pub struct DmmSource {
     rx: mpsc::Receiver<Vec<u8>>,
     bind: String,
-    counters: Arc<DmmCounters>,
+    pub counters: Arc<DmmCounters>,
 }
 
 impl DmmSource {
-    /// Bind `bind` and start accepting sensors. Binding is eager, so a port in
-    /// use fails at start-up. `node_id` is this fusion node's identity, carried
+    /// Bind eagerly, so a port in use fails at start-up. `node_id` is carried
     /// in every acknowledgement.
     pub async fn bind(bind: &str, node_id: String) -> anyhow::Result<Self> {
         let listener = TcpListener::bind(bind)
             .await
-            .map_err(|e| anyhow::anyhow!("binding {bind}: {e}"))?;
+            .with_context(|| format!("binding {bind}"))?;
         let (tx, rx) = mpsc::channel(CHANNEL_FRAMES);
         let counters = Arc::new(DmmCounters::default());
         tokio::spawn(accept_loop(listener, node_id, tx, counters.clone()));
@@ -58,11 +50,6 @@ impl DmmSource {
             bind: bind.to_string(),
             counters,
         })
-    }
-
-    /// The counters, for the runtime's metrics endpoint.
-    pub fn counters(&self) -> Arc<DmmCounters> {
-        self.counters.clone()
     }
 }
 
@@ -106,15 +93,14 @@ async fn accept_loop(
             }
             Err(e) => {
                 tracing::warn!(error = %e, "accept failed, retrying");
-                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                tokio::time::sleep(Duration::from_millis(200)).await;
             }
         }
     }
 }
 
-/// One sensor's connection: read frames, acknowledge its registration, and
-/// forward every message. Ends when the sensor disconnects or sends bytes
-/// that are not the standard's framing.
+/// One sensor's connection, until it disconnects or sends a frame above the
+/// size bound.
 async fn connection_loop(
     mut stream: TcpStream,
     node_id: String,
@@ -125,58 +111,40 @@ async fn connection_loop(
         .peer_addr()
         .map(|a| a.to_string())
         .unwrap_or_else(|_| "unknown".into());
-    let mut held: Vec<u8> = Vec::with_capacity(8192);
-    let mut chunk = [0u8; 8192];
+    let mut held = Vec::with_capacity(8192);
     loop {
-        // Deliver every whole frame already held.
-        loop {
-            match ajar_sapient_wire::unframe(&held) {
-                Ok((payload, rest)) => {
-                    let payload = payload.to_vec();
-                    let consumed = held.len() - rest.len();
-                    held.drain(..consumed);
-                    if let Some(ack) = registration_ack(&payload, &node_id) {
-                        if let Err(e) = stream.write_all(&ack).await {
-                            tracing::warn!(%peer, error = %e, "sending registration ack failed");
-                            return;
-                        }
-                        counters.registrations.fetch_add(1, Ordering::Relaxed);
-                        tracing::info!(%peer, "sapient node registered and acknowledged");
-                    }
-                    if tx.send(payload).await.is_err() {
-                        return; // the runtime is gone
-                    }
-                }
-                Err(FrameError::NeedPrefix) | Err(FrameError::Incomplete { .. }) => break,
-                Err(FrameError::TooLong(n)) => {
-                    counters.bad_framing.fetch_add(1, Ordering::Relaxed);
-                    tracing::warn!(%peer, declared = n, "frame above the size bound; closing");
-                    return;
-                }
-            }
-        }
-        if held.len() > MAX_MESSAGE_LEN + PREFIX_LEN {
-            counters.bad_framing.fetch_add(1, Ordering::Relaxed);
-            tracing::warn!(%peer, "no frame boundary within the size bound; closing");
-            return;
-        }
-        match stream.read(&mut chunk).await {
-            Ok(0) => {
+        let payload = match ajar_sapient_wire::read_frame(&mut stream, &mut held).await {
+            Ok(payload) => payload,
+            Err(ReadError::Closed) => {
                 tracing::info!(%peer, "sapient node disconnected");
                 return;
             }
-            Ok(n) => held.extend_from_slice(&chunk[..n]),
-            Err(e) => {
+            Err(ReadError::TooLong(n)) => {
+                counters.bad_framing.fetch_add(1, Ordering::Relaxed);
+                tracing::warn!(%peer, declared = n, "frame above the size bound");
+                return;
+            }
+            Err(ReadError::Io(e)) => {
                 tracing::warn!(%peer, error = %e, "read failed");
                 return;
             }
+        };
+        if let Some(ack) = registration_ack(&payload, &node_id) {
+            if let Err(e) = stream.write_all(&ack).await {
+                tracing::warn!(%peer, error = %e, "sending registration ack failed");
+                return;
+            }
+            counters.registrations.fetch_add(1, Ordering::Relaxed);
+            tracing::info!(%peer, "sapient node registered");
+        }
+        if tx.send(payload).await.is_err() {
+            return;
         }
     }
 }
 
-/// The framed acknowledgement to send if `payload` is a registration, else
-/// `None`. A message that does not decode is not a registration; the parser
-/// reports it.
+/// The framed acknowledgement to send if `payload` is a registration. A
+/// message that does not decode is left for the parser to report.
 fn registration_ack(payload: &[u8], node_id: &str) -> Option<Vec<u8>> {
     let message = ajar_sapient_wire::decode(payload).ok()?;
     if !matches!(message.content, Some(Content::Registration(_))) {
@@ -185,7 +153,7 @@ fn registration_ack(payload: &[u8], node_id: &str) -> Option<Vec<u8>> {
     let ack = v2::SapientMessage {
         timestamp: Some(ajar_sapient_wire::now()),
         node_id: Some(node_id.to_string()),
-        destination_id: message.node_id.clone(),
+        destination_id: message.node_id,
         content: Some(Content::RegistrationAck(v2::RegistrationAck {
             acceptance: Some(true),
             ack_response_reason: Vec::new(),
@@ -198,7 +166,8 @@ fn registration_ack(payload: &[u8], node_id: &str) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::net::TcpStream;
+    use ajar_sapient_wire::PREFIX_LEN;
+    use tokio::io::AsyncReadExt;
 
     fn registration(node: &str) -> Vec<u8> {
         let m = v2::SapientMessage {
@@ -230,7 +199,7 @@ mod tests {
 
         let mut sensor = TcpStream::connect(addr).await.unwrap();
         let reg = registration("sensor-7");
-        // Split the write so the acceptor sees a partial frame first.
+        // Split so the acceptor sees a partial frame first.
         sensor.write_all(&reg[..3]).await.unwrap();
         sensor.write_all(&reg[3..]).await.unwrap();
 
@@ -255,7 +224,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn bytes_that_are_not_the_framing_close_the_connection() {
+    async fn oversized_frame_closes_the_connection() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let (tx, _rx) = mpsc::channel(8);

@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
-//! The decoder sits on a TCP port any edge node can reach, so its one absolute
-//! obligation is to never panic: random bytes, valid envelopes with mutated
-//! bodies, and oversized or lying frames must all return `Ok` or a typed error.
+//! Arbitrary bytes, mutated messages and lying frames never panic the parser.
 
 use ajar_connector_common::{Enrichment, FrameParser};
 use ajar_sapient::SapientParser;
+use ajar_sapient_wire::v2::sapient_message::Content;
+use ajar_sapient_wire::v2::{self, detection_report};
 use proptest::prelude::*;
 
 fn parser() -> SapientParser {
@@ -13,8 +13,6 @@ fn parser() -> SapientParser {
 
 /// A valid detection report, to mutate.
 fn detection() -> Vec<u8> {
-    use ajar_sapient_wire::v2::sapient_message::Content;
-    use ajar_sapient_wire::v2::{self, detection_report};
     ajar_sapient_wire::encode(&v2::SapientMessage {
         timestamp: Some(ajar_sapient_wire::now()),
         node_id: Some("node".into()),
@@ -42,8 +40,6 @@ proptest! {
         let _ = parser().parse(&bytes);
     }
 
-    /// A real message with bytes flipped anywhere in it: the protobuf decoder
-    /// and every conversion after it must refuse or accept, never panic.
     #[test]
     fn a_mutated_real_message_never_panics(
         flips in proptest::collection::vec((0usize..200, any::<u8>()), 1..8),
@@ -57,8 +53,6 @@ proptest! {
         let _ = parser().parse(&bytes);
     }
 
-    /// Framing on arbitrary bytes: a prefix that lies is refused, never
-    /// allocated for or waited on.
     #[test]
     fn framing_never_panics(bytes in proptest::collection::vec(any::<u8>(), 0..64)) {
         let _ = ajar_sapient_wire::unframe(&bytes);

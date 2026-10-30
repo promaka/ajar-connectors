@@ -1,17 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Contract conformance for the SAPIENT connector, checked on a detection
-//! report with a WGS-84 position.
-//!
-//! Verified without importing Core (its rules are mirrored, not linked):
-//!  1. the produced event satisfies Core's content contract — UUIDv7 id, RFC 3339
-//!     timestamp, canonical attribute and metadata order;
-//!  2. the seal verifies under the published contract key;
-//!  3. the native identity (node and object) is preserved as `source_uid`
-//!     metadata, and the message bytes as the payload.
+//! Events meet Core's content contract and seal under the published contract key.
 
 mod support;
 
-use ajar_connector::{canonical_bytes, seal, SEAL_SIGNATURE_LEN};
+use ajar_connector::SEAL_SIGNATURE_LEN;
 use ajar_connector_common::{Enrichment, FrameParser};
 use ajar_sapient::SapientParser;
 use ed25519_dalek::{Signature, SigningKey, Verifier, VerifyingKey};
@@ -32,8 +24,7 @@ fn hex32(v: &serde_json::Value, key: &str) -> [u8; 32] {
     hex::decode(s).expect("hex").try_into().expect("32 bytes")
 }
 
-/// The scenario's third message: the first detection, after the node has
-/// reported where it is.
+/// The scenario's first detection, after the node reported its position.
 fn connector_event() -> (ajar_connector::Event, Vec<u8>) {
     let parser = SapientParser::new(
         "sapient-fusion-1",
@@ -91,8 +82,8 @@ fn seal_verifies_under_the_published_contract_key() {
     let vk = VerifyingKey::from_bytes(&hex32(&contract, "verifyingKeyHex"))
         .expect("published verifying key is valid");
 
-    let canonical = canonical_bytes(&connector_event().0);
-    let sealed = seal(&canonical, &SigningKey::from_bytes(&seed));
+    let canonical = ajar_connector::canonical_bytes(&connector_event().0);
+    let sealed = ajar_connector::seal(&canonical, &SigningKey::from_bytes(&seed));
 
     assert_eq!(sealed.len(), SEAL_SIGNATURE_LEN + canonical.len());
     let (sig, body) = sealed.split_at(SEAL_SIGNATURE_LEN);
@@ -102,12 +93,12 @@ fn seal_verifies_under_the_published_contract_key() {
         .expect("seal signature must verify under the contract key");
 }
 
-/// Canonical repeated entries: keys strictly increasing (sorted + unique).
+/// Keys strictly increasing: sorted and unique.
 fn is_canonical(entries: &[ajar_connector::Attribute]) -> bool {
     entries.windows(2).all(|w| w[0].key < w[1].key)
 }
 
-/// Mirror Core's timestamp rule without importing it.
+/// Core's timestamp rule: RFC 3339 with `Z` or a numeric offset.
 fn is_rfc3339(s: &str) -> bool {
     let b = s.as_bytes();
     b.len() >= 20

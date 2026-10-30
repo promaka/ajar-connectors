@@ -1,16 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
-//! The replay test: the bench capture, frame by frame as the `file` transport
-//! delivers it, must yield one event per world-describing message, each
-//! geolocated once the node has said where it is, with every report accepted.
-//!
-//! `tests/data/sapient-capture.bin` is the scenario in `support` on the wire.
-//! Regenerate it with `SAPIENT_WRITE_CAPTURE=1 cargo test -p ajar-sapient
-//! --test capture` after changing the scenario; the first test fails until the
-//! file and the scenario agree again.
+//! The bench capture replays to one geolocated event per world-describing
+//! message. `tests/data/sapient-capture.bin` is the `support` scenario on the
+//! wire; regenerate it with `SAPIENT_WRITE_CAPTURE=1`.
 
 mod support;
 
-use ajar_connector_common::{Enrichment, FrameParser};
+use ajar_connector_common::{Enrichment, FrameParser, Framing, Transport};
 use ajar_sapient::SapientParser;
 
 const FIXTURE: &str = concat!(
@@ -29,7 +24,7 @@ fn the_fixture_is_the_scenario_on_the_wire() {
 }
 
 #[test]
-fn every_report_in_the_capture_is_accepted_and_the_track_is_geolocated() {
+fn capture_replays_to_a_geolocated_track() {
     let bytes = std::fs::read(FIXTURE).expect("the committed capture");
     let parser = SapientParser::new("sapient-fusion-1", Enrichment::default());
     let mut rest = &bytes[..];
@@ -53,13 +48,14 @@ fn every_report_in_the_capture_is_accepted_and_the_track_is_geolocated() {
     assert!(kinds[2..7].iter().all(|k| *k == "sapient:track"));
     assert_eq!(kinds[7], "sapient:alert");
 
-    // The radar reported its position before any detection, so every
-    // detection is geolocated against it, north-east and closing.
     let node = events[1].location.as_ref().expect("the node's position");
     let mut last_range = f64::MAX;
     for e in &events[2..7] {
         let loc = e.location.as_ref().expect("geolocated");
-        assert!(loc.latitude > node.latitude && loc.longitude > node.longitude);
+        assert!(
+            loc.latitude > node.latitude && loc.longitude > node.longitude,
+            "north-east of the radar"
+        );
         let dlat = (loc.latitude - node.latitude).to_radians();
         let dlon = (loc.longitude - node.longitude).to_radians() * node.latitude.to_radians().cos();
         let range = (dlat * dlat + dlon * dlon).sqrt() * 6_371_008.8;
@@ -80,14 +76,15 @@ fn every_report_in_the_capture_is_accepted_and_the_track_is_geolocated() {
 }
 
 #[tokio::test]
-async fn the_file_transport_delivers_the_capture_frame_by_frame() {
-    use ajar_connector_common::{open_source, Framing, Transport};
+async fn file_transport_delivers_the_capture() {
     let transport = Transport::File {
         path: FIXTURE.to_string(),
         from_start: true,
         framing: Framing::LengthU32le,
     };
-    let mut source = open_source(&transport).await.expect("opens");
+    let mut source = ajar_connector_common::open_source(&transport)
+        .await
+        .expect("opens");
     let parser = SapientParser::new("sapient-fusion-1", Enrichment::default());
     let mut buf = vec![0u8; ajar_connector_common::MAX_FRAME_BYTES];
     let mut published = 0;

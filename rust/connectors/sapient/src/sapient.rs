@@ -1,49 +1,36 @@
 // SPDX-License-Identifier: Apache-2.0
-//! The parser: one SAPIENT message in, zero or one canonical event out.
-//!
-//! BSI Flex 335 carries nine message kinds in one envelope. Four describe the
-//! world and become events: a detection report (`sapient:detection`, or
-//! `sapient:track` when the node is following the object), a status report
-//! and a registration (`sapient:sensor-status`), and an alert
-//! (`sapient:alert`). The rest are the fusion node's side of the conversation
-//! (tasks, acknowledgements, errors); they are counted and publish nothing.
-//!
-//! Every event seals the message's protobuf bytes verbatim in `payload`, so a
-//! field this parser does not map survives for a later ontology. Positions
-//! come out as WGS-84 degrees and metres; a range-and-bearing report is
-//! geolocated against the node's last reported position when there is one, and
-//! rides as metadata when there is not. Velocity becomes speed, course and
-//! vertical rate in the contract's units.
+//! One SAPIENT message in, zero or one event out. Detection reports become
+//! `sapient:detection` (`sapient:track` when the node follows the object),
+//! status reports and registrations `sapient:sensor-status`, alerts
+//! `sapient:alert`; the fusion node's own messages are counted and publish
+//! nothing. Range and bearing is geolocated against the node's last position.
 
 use std::collections::HashMap;
 use std::f64::consts::PI;
-use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use ajar_connector::{Event, EventBuilder};
+use ajar_connector::{BuildError, Event, EventBuilder};
 use ajar_connector_common::{Enrichment, FrameParser, GovernedAttribute, ParseError};
 use ajar_sapient_wire::v2::sapient_message::Content;
 use ajar_sapient_wire::v2::{self, detection_report, registration, status_report};
 
-/// Mean Earth radius, metres (IUGG), for geolocating range and bearing.
+/// Mean Earth radius (IUGG).
 const EARTH_RADIUS_M: f64 = 6_371_008.8;
 
-/// Entity types this connector emits. Registered with Core from
-/// `sapient.types.json`.
+/// Registered with Core from `sapient.types.json`.
 pub const TYPE_DETECTION: &str = "sapient:detection";
 pub const TYPE_TRACK: &str = "sapient:track";
 pub const TYPE_SENSOR_STATUS: &str = "sapient:sensor-status";
 pub const TYPE_ALERT: &str = "sapient:alert";
 
-/// Which side of the interface this connector plays.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Role {
-    /// The fusion node's message handler: edge nodes connect in, register and
-    /// are acknowledged. Needs the `tcp-server` transport.
+    /// The fusion node's message handler: edge nodes connect in and register.
+    #[default]
     Dmm,
-    /// A listener on a fusion node's output, or a capture. Any transport.
+    /// A listener on a fusion node's output, or a capture.
     Subscriber,
 }
 
@@ -51,71 +38,41 @@ pub enum Role {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Options {
     pub role: Role,
-    /// This node's identity, carried in every acknowledgement the `dmm` role
-    /// sends. Made fresh at start-up when the config does not set it.
+    /// Minted at start-up when the config does not set it.
     pub node_id: String,
-    /// The entity type each kind of report becomes.
     pub types: Types,
 }
 
-/// The entity types this connector emits, one per kind of SAPIENT report.
-/// The defaults are the `sapient:` fragment; a site without the fragment
-/// registered maps each to a MIM type instead, as `[options.types]`.
+/// The entity type each kind of report becomes.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(default, deny_unknown_fields)]
 pub struct Types {
-    #[serde(default = "default_detection")]
     pub detection: String,
-    #[serde(default = "default_track")]
     pub track: String,
-    #[serde(default = "default_sensor_status")]
     pub sensor_status: String,
-    #[serde(default = "default_alert")]
     pub alert: String,
-}
-
-fn default_detection() -> String {
-    TYPE_DETECTION.into()
-}
-fn default_track() -> String {
-    TYPE_TRACK.into()
-}
-fn default_sensor_status() -> String {
-    TYPE_SENSOR_STATUS.into()
-}
-fn default_alert() -> String {
-    TYPE_ALERT.into()
 }
 
 impl Default for Types {
     fn default() -> Self {
         Types {
-            detection: default_detection(),
-            track: default_track(),
-            sensor_status: default_sensor_status(),
-            alert: default_alert(),
+            detection: TYPE_DETECTION.into(),
+            track: TYPE_TRACK.into(),
+            sensor_status: TYPE_SENSOR_STATUS.into(),
+            alert: TYPE_ALERT.into(),
         }
     }
 }
 
-#[derive(serde::Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Default, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
 struct OptionsTable {
-    #[serde(default = "default_role")]
     role: Role,
-    #[serde(default)]
     node_id: Option<String>,
-    #[serde(default)]
     types: Types,
 }
 
-fn default_role() -> Role {
-    Role::Dmm
-}
-
 impl Options {
-    /// Read the `[options]` table. An unknown key is refused, since a typo
-    /// there would silently leave a default in force.
     pub fn from_table(table: &toml::Table) -> anyhow::Result<Self> {
         let t: OptionsTable = table.clone().try_into()?;
         let node_id = match t.node_id {
@@ -142,69 +99,48 @@ impl Options {
     }
 }
 
-/// Every way a message can be refused. None of them is a panic.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, PartialEq, thiserror::Error)]
 pub enum SapientError {
-    /// The bytes are not a SAPIENT message.
-    Decode(String),
-    /// The envelope carries no content.
+    #[error("not a SAPIENT message: {0}")]
+    Decode(#[from] prost::DecodeError),
+    #[error("SAPIENT envelope carries no content")]
     Empty,
-    /// The SDK refused the event.
-    Build(String),
+    #[error("event rejected by the SDK: {0}")]
+    Build(#[from] BuildError),
 }
 
-impl fmt::Display for SapientError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Decode(e) => write!(f, "not a SAPIENT message: {e}"),
-            Self::Empty => write!(f, "SAPIENT envelope carries no content"),
-            Self::Build(e) => write!(f, "event rejected by the SDK: {e}"),
-        }
-    }
-}
-
-impl std::error::Error for SapientError {}
-
-/// What the connector remembers about each node, from its registration and
-/// status reports, to make sense of its detections.
+/// What the registration and status reports said about a node.
 #[derive(Debug, Clone, Default)]
 struct Node {
     name: Option<String>,
     node_type: Option<String>,
-    /// The node's last reported position, WGS-84 degrees and metres.
+    /// Last reported (lat, lon, alt_m).
     location: Option<(f64, f64, f64)>,
-    /// The node declared its velocities in km/h rather than m/s.
+    /// The node declared its velocities in km/h.
     velocity_kph: bool,
 }
 
-/// Nodes remembered at once. A fusion node's whole fleet is far below this;
-/// the bound exists so a hostile stream of node ids cannot grow memory.
+/// Bounds memory against a stream of fresh node ids.
 const MAX_NODES: usize = 4096;
 
 #[derive(Default)]
 struct Counters {
     /// Messages of a kind that publishes nothing (task, ack, error).
     unmapped: Arc<AtomicU64>,
-    /// Range-and-bearing reports published without a position, because the
-    /// node's own position was not known or its bearing datum was magnetic.
+    /// Range-and-bearing reports published without a position.
     unlocated: Arc<AtomicU64>,
-    /// Registrations seen.
     registrations: Arc<AtomicU64>,
 }
 
-/// The connector: holds its Ajar identity, the operator's choices and what it
-/// has learnt about each node.
 pub struct SapientParser {
     source_id: String,
     enrichment: Enrichment,
     /// SAPIENT classification type (lower-cased) to the entity type it becomes.
     entity_map: HashMap<String, String>,
-    /// The entity type each kind of report becomes.
     types: Types,
     nodes: Mutex<HashMap<String, Node>>,
     counters: Counters,
-    /// The acceptor's counters, when this connector is the fusion node, so
-    /// they reach `/metrics` with the parser's.
+    /// The acceptor's counters in the `dmm` role, published with the parser's.
     dmm: Option<Arc<crate::dmm::DmmCounters>>,
 }
 
@@ -221,21 +157,17 @@ impl SapientParser {
         }
     }
 
-    /// Emit each kind of report under the operator's chosen entity types.
     pub fn with_types(mut self, types: Types) -> Self {
         self.types = types;
         self
     }
 
-    /// Publish the fusion-node acceptor's counters alongside the parser's.
     pub fn with_dmm_counters(mut self, counters: Arc<crate::dmm::DmmCounters>) -> Self {
         self.dmm = Some(counters);
         self
     }
 
-    /// Apply the operator's `[entity_map]`: a SAPIENT classification type to
-    /// the Ajar entity type a detection of it becomes. Each target must be a
-    /// namespaced type.
+    /// Apply `[entity_map]`: SAPIENT classification type to entity type.
     pub fn with_entity_map(mut self, map: &HashMap<String, String>) -> anyhow::Result<Self> {
         for (class, entity_type) in map {
             if !entity_type.contains(':') {
@@ -252,13 +184,12 @@ impl SapientParser {
 
     /// Decode one message and build its event, if its kind publishes one.
     pub fn parse_message(&self, frame: &[u8]) -> Result<Option<Event>, SapientError> {
-        let message =
-            ajar_sapient_wire::decode(frame).map_err(|e| SapientError::Decode(e.to_string()))?;
+        let message = ajar_sapient_wire::decode(frame)?;
         let observed = message
             .timestamp
             .as_ref()
             .and_then(ajar_sapient_wire::rfc3339);
-        let node_id = message.node_id.clone().unwrap_or_default();
+        let node_id = message.node_id.unwrap_or_default();
         let content = message.content.ok_or(SapientError::Empty)?;
         let built = match content {
             Content::DetectionReport(report) => {
@@ -281,9 +212,7 @@ impl SapientParser {
                 None
             }
         };
-        built
-            .transpose()
-            .map_err(|e| SapientError::Build(e.to_string()))
+        Ok(built.transpose()?)
     }
 
     fn node(&self, node_id: &str) -> Node {
@@ -297,8 +226,12 @@ impl SapientParser {
 
     fn update_node(&self, node_id: &str, f: impl FnOnce(&mut Node)) {
         let mut nodes = self.nodes.lock().unwrap_or_else(|p| p.into_inner());
-        if !nodes.contains_key(node_id) && nodes.len() >= MAX_NODES {
-            // Drop one so the newcomer fits; the fleet is nowhere near this.
+        if let Some(node) = nodes.get_mut(node_id) {
+            f(node);
+            return;
+        }
+        if nodes.len() >= MAX_NODES {
+            // Evict an arbitrary node so the newcomer fits.
             if let Some(victim) = nodes.keys().next().cloned() {
                 nodes.remove(&victim);
             }
@@ -306,8 +239,6 @@ impl SapientParser {
         f(nodes.entry(node_id.to_string()).or_default());
     }
 
-    /// Common start of every event: identity, time, the raw message, and the
-    /// operator's hostility if any.
     fn builder(
         &self,
         entity_type: &str,
@@ -337,7 +268,7 @@ impl SapientParser {
         r: &v2::DetectionReport,
         observed: Option<&str>,
         raw: &[u8],
-    ) -> Result<Event, ajar_connector::BuildError> {
+    ) -> Result<Event, BuildError> {
         let node = self.node(node_id);
         let top = top_classification(&r.classification);
         let entity_type = top
@@ -347,9 +278,8 @@ impl SapientParser {
                 &self.types.detection
             } else {
                 &self.types.track
-            })
-            .to_string();
-        let mut b = self.builder(&entity_type, node_id, observed, raw);
+            });
+        let mut b = self.builder(entity_type, node_id, observed, raw);
         // The object's identifier keeps it its own track across reports.
         let object_id = r.object_id.clone().unwrap_or_default();
         b = b.metadata("source_uid", format!("{node_id}:{object_id}"));
@@ -366,18 +296,16 @@ impl SapientParser {
             }
         }
 
-        // Position, in whichever form the node reported it.
         match &r.location_oneof {
             Some(detection_report::LocationOneof::Location(loc)) => {
-                b = self.place(b, &entity_type, loc, "location");
+                b = self.place(b, entity_type, loc, "location");
             }
             Some(detection_report::LocationOneof::RangeBearing(rb)) => {
-                b = self.place_relative(b, &entity_type, node.location, rb);
+                b = self.place_relative(b, entity_type, node.location, rb);
             }
             None => {}
         }
 
-        // Velocity: ENU components in the node's declared units.
         if let Some(detection_report::VelocityOneof::EnuVelocity(v)) = &r.velocity_oneof {
             let scale = if node.velocity_kph {
                 1000.0 / 3600.0
@@ -388,11 +316,11 @@ impl SapientParser {
                 let (e, n) = (e * scale, n * scale);
                 let speed = (e * e + n * n).sqrt();
                 let course = (e.atan2(n).to_degrees() + 360.0) % 360.0;
-                b = b.governed(&entity_type, "speed", fixed(speed, 2));
-                b = b.governed(&entity_type, "course", fixed(course, 1));
+                b = b.governed(entity_type, "speed", fixed(speed, 2));
+                b = b.governed(entity_type, "course", fixed(course, 1));
             }
             if let Some(up) = v.up_rate {
-                b = b.governed(&entity_type, "vertical_rate", fixed(up * scale, 2));
+                b = b.governed(entity_type, "vertical_rate", fixed(up * scale, 2));
             }
             if node.velocity_kph {
                 b = b.metadata("velocity_units", "km/h");
@@ -400,11 +328,11 @@ impl SapientParser {
         }
 
         if let Some((class, confidence)) = top {
-            b = b.governed(&entity_type, "sapient_classification", class);
-            b = b.governed(&entity_type, "object_class", class);
+            b = b.governed(entity_type, "sapient_classification", class);
+            b = b.governed(entity_type, "object_class", class);
             if let Some(c) = confidence {
                 b = b.governed(
-                    &entity_type,
+                    entity_type,
                     "sapient_classification_confidence",
                     fixed(f64::from(c), 3),
                 );
@@ -416,10 +344,10 @@ impl SapientParser {
             }
         }
         if let Some(behaviour) = r.behaviour.iter().find_map(|x| x.r#type.as_deref()) {
-            b = b.governed(&entity_type, "sapient_behaviour", behaviour);
+            b = b.governed(entity_type, "sapient_behaviour", behaviour);
         }
         if let Some(state) = &r.state {
-            b = b.governed(&entity_type, "sapient_state", state);
+            b = b.governed(entity_type, "sapient_state", state);
         }
         if let Some(id) = &r.id {
             b = b.metadata("native_id", id);
@@ -448,7 +376,7 @@ impl SapientParser {
                 b = b.metadata(format!("file_{i}_url"), url);
             }
         }
-        if let Some(name) = &node.name {
+        if let Some(name) = node.name {
             b = b.metadata("node_name", name);
         }
         b.build()
@@ -485,7 +413,7 @@ impl SapientParser {
                 b
             }
             None => {
-                // UTM or unspecified units: kept as the node sent them.
+                // UTM or unspecified units, kept as the node sent them.
                 let mut b = b;
                 if let Some(x) = loc.x {
                     b = b.metadata(format!("{prefix}_x"), fixed(x, 3));
@@ -499,11 +427,15 @@ impl SapientParser {
                 if let Some(zone) = &loc.utm_zone {
                     b = b.metadata(format!("{prefix}_utm_zone"), zone);
                 }
-                b = b.metadata(
+                b.metadata(
                     format!("{prefix}_coordinate_system"),
-                    coordinate_system_name(loc.coordinate_system),
-                );
-                b
+                    enum_name(
+                        loc.coordinate_system
+                            .and_then(|s| v2::LocationCoordinateSystem::try_from(s).ok())
+                            .map(|s| s.as_str_name()),
+                        "LOCATION_COORDINATE_SYSTEM_",
+                    ),
+                )
             }
         }
     }
@@ -577,7 +509,7 @@ impl SapientParser {
         r: &v2::StatusReport,
         observed: Option<&str>,
         raw: &[u8],
-    ) -> Result<Event, ajar_connector::BuildError> {
+    ) -> Result<Event, BuildError> {
         if let Some(loc) = &r.node_location {
             if let Some(pos) = wgs84(loc) {
                 self.update_node(node_id, |n| n.location = Some(pos));
@@ -652,16 +584,16 @@ impl SapientParser {
                     .map(|l| l.as_str_name()),
                 "STATUS_LEVEL_",
             );
-            let value = s.status_value.clone().unwrap_or_default();
+            let value = s.status_value.as_deref().unwrap_or_default();
             b = b.metadata(
                 format!("status_{}", kind.to_lowercase()),
                 format!("{level}: {value}"),
             );
         }
-        if let Some(nt) = &node.node_type {
+        if let Some(nt) = node.node_type {
             b = b.governed(t, "sapient_node_type", nt);
         }
-        if let Some(name) = &node.name {
+        if let Some(name) = node.name {
             b = b.metadata("node_name", name);
         }
         b.build()
@@ -673,7 +605,7 @@ impl SapientParser {
         reg: &v2::Registration,
         observed: Option<&str>,
         raw: &[u8],
-    ) -> Result<Event, ajar_connector::BuildError> {
+    ) -> Result<Event, BuildError> {
         let node_type = reg
             .node_definition
             .first()
@@ -763,7 +695,7 @@ impl SapientParser {
         a: &v2::Alert,
         observed: Option<&str>,
         raw: &[u8],
-    ) -> Result<Event, ajar_connector::BuildError> {
+    ) -> Result<Event, BuildError> {
         let node = self.node(node_id);
         let t = self.types.alert.as_str();
         let mut b = self.builder(t, node_id, observed, raw);
@@ -833,14 +765,9 @@ impl SapientParser {
     }
 }
 
-/// The one piece of glue that plugs this format into the shared runtime.
 impl FrameParser for SapientParser {
     fn parse(&self, frame: &[u8]) -> Result<Vec<Event>, ParseError> {
-        match self.parse_message(frame) {
-            Ok(Some(event)) => Ok(vec![event]),
-            Ok(None) => Ok(Vec::new()),
-            Err(e) => Err(Box::new(e) as ParseError),
-        }
+        Ok(self.parse_message(frame)?.into_iter().collect())
     }
 
     fn counters(&self) -> Vec<(&'static str, Arc<AtomicU64>)> {
@@ -891,7 +818,7 @@ fn wgs84(loc: &v2::Location) -> Option<(f64, f64, f64)> {
 }
 
 /// The point `distance_m` along `bearing_deg` (true) from a start, on a
-/// sphere of mean radius: better than a metre at counter-UAS ranges.
+/// sphere of mean radius: within a metre at counter-UAS ranges.
 fn destination(lat_deg: f64, lon_deg: f64, bearing_deg: f64, distance_m: f64) -> (f64, f64) {
     let (lat1, lon1, brg) = (
         lat_deg.to_radians(),
@@ -921,15 +848,6 @@ fn duration_seconds(d: &registration::Duration) -> Option<f64> {
     (s.is_finite() && s >= 0.0).then_some(s)
 }
 
-fn coordinate_system_name(system: Option<i32>) -> String {
-    enum_name(
-        system
-            .and_then(|s| v2::LocationCoordinateSystem::try_from(s).ok())
-            .map(|s| s.as_str_name()),
-        "LOCATION_COORDINATE_SYSTEM_",
-    )
-}
-
 /// A protobuf enum name without its prefix: `STATUS_TYPE_WEATHER` -> `WEATHER`.
 fn enum_name(name: Option<&str>, prefix: &str) -> String {
     name.map(|n| n.strip_prefix(prefix).unwrap_or(n))
@@ -950,7 +868,8 @@ fn key_safe(text: &str) -> String {
             gap = true;
         }
     }
-    out.trim_end_matches('_').to_string()
+    out.truncate(out.trim_end_matches('_').len());
+    out
 }
 
 /// A number with fixed decimals; never prints a negative zero.
@@ -966,7 +885,6 @@ fn fixed(value: f64, decimals: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ajar_sapient_wire::v2::sapient_message::Content;
 
     const NODE: &str = "2f1c6a1e-4a5e-4b7e-9b1a-0d3f2e6c7a11";
 
@@ -1032,6 +950,14 @@ mod tests {
         }))
     }
 
+    fn node_status() -> Vec<u8> {
+        envelope(Content::StatusReport(v2::StatusReport {
+            node_location: Some(latlng(51.0, 0.0, Some(10.0))),
+            system: Some(status_report::System::Ok as i32),
+            ..Default::default()
+        }))
+    }
+
     fn attribute<'a>(e: &'a Event, key: &str) -> Option<&'a str> {
         e.attributes
             .iter()
@@ -1047,7 +973,7 @@ mod tests {
     }
 
     #[test]
-    fn a_located_detection_becomes_one_event_in_contract_units() {
+    fn located_detection_in_contract_units() {
         let raw = detection_at(51.5074, -0.1278);
         let events = parser().parse(&raw).unwrap();
         assert_eq!(events.len(), 1);
@@ -1075,9 +1001,8 @@ mod tests {
         assert!((e.confidence - 0.9).abs() < 1e-6);
     }
 
-    #[test]
-    fn track_info_makes_it_a_track_and_the_entity_map_can_override() {
-        let mut report = v2::DetectionReport {
+    fn tracked_report(classification: Option<&str>) -> Vec<u8> {
+        envelope(Content::DetectionReport(v2::DetectionReport {
             object_id: Some("x".into()),
             location_oneof: Some(detection_report::LocationOneof::Location(latlng(
                 1.0, 2.0, None,
@@ -1087,32 +1012,43 @@ mod tests {
                 value: Some("good".into()),
                 error: None,
             }],
+            classification: classification
+                .map(|c| detection_report::DetectionReportClassification {
+                    r#type: Some(c.into()),
+                    confidence: None,
+                    sub_class: vec![],
+                })
+                .into_iter()
+                .collect(),
             ..Default::default()
-        };
-        let raw = envelope(Content::DetectionReport(report.clone()));
-        let e = &parser().parse(&raw).unwrap()[0];
+        }))
+    }
+
+    #[test]
+    fn track_info_makes_a_track() {
+        let e = &parser().parse(&tracked_report(None)).unwrap()[0];
         assert_eq!(e.entity_type, TYPE_TRACK);
         assert_eq!(metadata(e, "info_track_quality"), Some("good"));
         assert_eq!(metadata(e, "altitude_known"), Some("false"));
+    }
 
-        report.classification = vec![detection_report::DetectionReportClassification {
-            r#type: Some("UAV".into()),
-            confidence: None,
-            sub_class: vec![],
-        }];
-        let raw = envelope(Content::DetectionReport(report));
+    #[test]
+    fn entity_map_overrides_the_type() {
         let mut map = HashMap::new();
         map.insert("uav".to_string(), "mim:aircraft".to_string());
         let p = parser().with_entity_map(&map).unwrap();
-        let e = &p.parse(&raw).unwrap()[0];
+        let e = &p.parse(&tracked_report(Some("UAV"))).unwrap()[0];
         assert_eq!(e.entity_type, "mim:aircraft");
-        // A MIM type does not govern the SAPIENT names, so they ride as metadata.
-        assert_eq!(attribute(e, "sapient_classification"), None);
+        assert_eq!(
+            attribute(e, "sapient_classification"),
+            None,
+            "a MIM type does not govern the SAPIENT names"
+        );
         assert_eq!(metadata(e, "sapient_classification"), Some("UAV"));
     }
 
     #[test]
-    fn range_and_bearing_is_geolocated_once_the_node_has_reported_where_it_is() {
+    fn range_bearing_geolocates_after_node_position() {
         let p = parser();
         let rb = detection_report::LocationOneof::RangeBearing(v2::RangeBearing {
             azimuth: Some(90.0),
@@ -1137,12 +1073,7 @@ mod tests {
         );
         assert_eq!(metadata(e, "range_m"), Some("1000.0"));
 
-        let status = envelope(Content::StatusReport(v2::StatusReport {
-            node_location: Some(latlng(51.0, 0.0, Some(10.0))),
-            system: Some(status_report::System::Ok as i32),
-            ..Default::default()
-        }));
-        let s = &p.parse(&status).unwrap()[0];
+        let s = &p.parse(&node_status()).unwrap()[0];
         assert_eq!(s.entity_type, TYPE_SENSOR_STATUS);
         assert_eq!(attribute(s, "sapient_system"), Some("OK"));
 
@@ -1156,10 +1087,8 @@ mod tests {
         assert_eq!(p.counters.unlocated.load(Ordering::Relaxed), 1);
     }
 
-    #[test]
-    fn a_registration_is_a_sensor_status_event_and_sets_the_velocity_units() {
-        let p = parser();
-        let reg = v2::Registration {
+    fn registration() -> Vec<u8> {
+        envelope(Content::Registration(v2::Registration {
             node_definition: vec![registration::NodeDefinition {
                 node_type: Some(registration::NodeType::Radar as i32),
                 node_sub_type: vec!["holographic".into()],
@@ -1191,16 +1120,25 @@ mod tests {
                 ..Default::default()
             }],
             ..Default::default()
-        };
-        let e = &p.parse(&envelope(Content::Registration(reg))).unwrap()[0];
+        }))
+    }
+
+    #[test]
+    fn registration_is_a_sensor_status_event() {
+        let p = parser();
+        let e = &p.parse(&registration()).unwrap()[0];
         assert_eq!(e.entity_type, TYPE_SENSOR_STATUS);
         assert_eq!(attribute(e, "sapient_node_type"), Some("RADAR"));
         assert_eq!(attribute(e, "update_interval_s"), Some("5.0"));
         assert_eq!(metadata(e, "node_name"), Some("Bench radar"));
         assert_eq!(metadata(e, "node_sub_type"), Some("holographic"));
         assert_eq!(p.counters.registrations.load(Ordering::Relaxed), 1);
+    }
 
-        // 36 km/h east is 10 m/s.
+    #[test]
+    fn registered_kph_scales_later_velocities() {
+        let p = parser();
+        p.parse(&registration()).unwrap();
         let d = &p
             .parse(&envelope(Content::DetectionReport(v2::DetectionReport {
                 object_id: Some("z".into()),
@@ -1217,13 +1155,13 @@ mod tests {
                 ..Default::default()
             })))
             .unwrap()[0];
-        assert_eq!(attribute(d, "speed"), Some("10.00"));
+        assert_eq!(attribute(d, "speed"), Some("10.00"), "36 km/h is 10 m/s");
         assert_eq!(attribute(d, "course"), Some("90.0"));
         assert_eq!(metadata(d, "velocity_units"), Some("km/h"));
     }
 
     #[test]
-    fn an_alert_becomes_an_alert_event_with_its_priority() {
+    fn alert_becomes_an_alert_event() {
         let raw = envelope(Content::Alert(v2::Alert {
             alert_id: Some("01J8ZALERT".into()),
             alert_type: Some(v2::alert::AlertType::Critical as i32),
@@ -1243,7 +1181,7 @@ mod tests {
     }
 
     #[test]
-    fn fusion_side_messages_publish_nothing_and_are_counted() {
+    fn fusion_side_messages_are_only_counted() {
         let p = parser();
         let raw = envelope(Content::Task(v2::Task::default()));
         assert!(p.parse(&raw).unwrap().is_empty());
@@ -1253,7 +1191,7 @@ mod tests {
     }
 
     #[test]
-    fn hostility_is_only_stamped_when_the_operator_set_it() {
+    fn hostility_only_when_configured() {
         let raw = detection_at(0.0, 0.0);
         let plain = &parser().parse(&raw).unwrap()[0];
         assert_eq!(attribute(plain, "hostility"), None);
@@ -1263,7 +1201,7 @@ mod tests {
     }
 
     #[test]
-    fn malformed_and_hostile_bytes_are_refused_with_a_reason_and_never_panic() {
+    fn malformed_bytes_are_refused_without_panic() {
         let p = parser();
         assert!(matches!(
             p.parse_message(b"\xff\xff\xff"),
@@ -1289,13 +1227,21 @@ mod tests {
     }
 
     #[test]
-    fn options_refuse_a_typo_and_mint_a_node_id_when_unset() {
+    fn options_refuse_a_typo() {
+        let t: toml::Table = toml::from_str("rol = \"dmm\"").unwrap();
+        assert!(Options::from_table(&t).is_err());
+    }
+
+    #[test]
+    fn options_mint_a_node_id_when_unset() {
         let t: toml::Table = toml::from_str("role = \"subscriber\"").unwrap();
         let o = Options::from_table(&t).unwrap();
         assert_eq!(o.role, Role::Subscriber);
         assert!(uuid::Uuid::parse_str(&o.node_id).is_ok());
-        let t: toml::Table = toml::from_str("rol = \"dmm\"").unwrap();
-        assert!(Options::from_table(&t).is_err());
+    }
+
+    #[test]
+    fn options_default_to_the_dmm_role() {
         let t: toml::Table = toml::from_str("node_id = \"fusion-1\"").unwrap();
         let o = Options::from_table(&t).unwrap();
         assert_eq!(o.role, Role::Dmm);
@@ -1303,7 +1249,7 @@ mod tests {
     }
 
     #[test]
-    fn report_kinds_can_be_mapped_to_mim_types_for_a_site_without_the_fragment() {
+    fn report_kinds_map_to_mim_types() {
         let t: toml::Table =
             toml::from_str("[types]\ntrack = \"mim:aircraft\"\nsensor_status = \"mim:sensor\"")
                 .unwrap();
@@ -1313,15 +1259,13 @@ mod tests {
             "unset kinds keep the fragment"
         );
         let p = parser().with_types(o.types);
-        let status = envelope(Content::StatusReport(v2::StatusReport {
-            node_location: Some(latlng(51.0, 0.0, Some(10.0))),
-            system: Some(status_report::System::Ok as i32),
-            ..Default::default()
-        }));
-        let s = &p.parse(&status).unwrap()[0];
+        let s = &p.parse(&node_status()).unwrap()[0];
         assert_eq!(s.entity_type, "mim:sensor");
-        // mim:sensor does not govern the SAPIENT names, so they ride as metadata.
-        assert_eq!(attribute(s, "sapient_system"), None);
+        assert_eq!(
+            attribute(s, "sapient_system"),
+            None,
+            "mim:sensor does not govern the SAPIENT names"
+        );
         assert_eq!(metadata(s, "sapient_system"), Some("OK"));
         let t: toml::Table = toml::from_str("[types]\nalert = \"action\"").unwrap();
         assert!(
@@ -1336,8 +1280,7 @@ mod tests {
         let (lat, lon) = destination(0.0, 0.0, 0.0, 100_000.0);
         assert!((lat - 0.8993).abs() < 1e-3, "{lat}");
         assert!(lon.abs() < 1e-9);
-        // Crossing the antimeridian wraps.
         let (_, lon) = destination(0.0, 179.9, 90.0, 50_000.0);
-        assert!(lon < -179.0, "{lon}");
+        assert!(lon < -179.0, "the antimeridian wraps: {lon}");
     }
 }

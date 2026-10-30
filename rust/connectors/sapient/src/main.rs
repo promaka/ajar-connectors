@@ -1,13 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
-//! SAPIENT (BSI Flex 335) ingress connector.
-//!
-//! All the moving parts — config, key, mTLS NATS, the seal-and-publish loop,
-//! health, shutdown — live in `ajar_connector_common`. This binary is only the
-//! wiring: read config, build the parser, open the right source for the role,
-//! run. In the `dmm` role the source is this crate's own acceptor, because a
-//! fusion node has to answer each sensor's registration.
+//! SAPIENT (BSI Flex 335) ingress connector. In the `dmm` role the source is
+//! this crate's acceptor, since a fusion node answers each registration.
 
-use ajar_connector_common::{open_source, run, Config, FrameSource, Framing, Transport};
+use ajar_connector_common::{Config, FrameSource, Framing, Transport};
 use ajar_sapient::dmm::DmmSource;
 use ajar_sapient::{Options, Role, SapientParser};
 use anyhow::Context;
@@ -22,8 +17,7 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let args: Vec<String> = std::env::args().collect();
-    // The first non-flag argument is the config path, so `--profile` may sit on
-    // either side of it.
+    // The config path is the first non-flag argument.
     let path = args
         .iter()
         .skip(1)
@@ -32,8 +26,7 @@ async fn main() -> anyhow::Result<()> {
         .unwrap_or_else(|| "sapient.toml".to_string());
     let cfg = Config::load(&path).with_context(|| format!("loading {path}"))?;
 
-    // `--profile` prints the document the operator registers and exits,
-    // before any transport is opened.
+    // Print the profile the operator registers, before any transport opens.
     if ajar_connector_common::profile::requested(&args) {
         println!(
             "{}",
@@ -55,42 +48,35 @@ async fn main() -> anyhow::Result<()> {
                     .await
                     .context("opening the fusion-node acceptor")?;
                 tracing::info!(bind = %bind, node_id = %options.node_id, "accepting sapient edge nodes");
-                parser = parser.with_dmm_counters(dmm.counters());
+                parser = parser.with_dmm_counters(dmm.counters.clone());
                 Box::new(dmm)
             }
             other => anyhow::bail!(
-                "the dmm role accepts edge nodes over TCP, so [transport] must be \
-                 kind = \"tcp-server\"; it is {other:?}. For a fusion node's \
-                 output or a capture, set role = \"subscriber\""
+                "role dmm needs [transport] kind = \"tcp-server\", not {other:?}; \
+                 a fusion node's output or a capture takes role = \"subscriber\""
             ),
         },
         Role::Subscriber => {
-            warn_if_not_the_standard_framing(&cfg.transport);
-            open_source(&cfg.transport)
+            let framing = match &cfg.transport {
+                Transport::TcpClient { framing, .. }
+                | Transport::TcpServer { framing, .. }
+                | Transport::File { framing, .. }
+                | Transport::Stdin { framing } => Some(*framing),
+                _ => None,
+            };
+            // Any other framing hands the parser half-messages.
+            if let Some(f) = framing.filter(|f| *f != Framing::LengthU32le) {
+                tracing::warn!(
+                    framing = ?f,
+                    expected = "length-u32le",
+                    "framing is not the sapient length prefix"
+                );
+            }
+            ajar_connector_common::open_source(&cfg.transport)
                 .await
                 .context("opening transport")?
         }
     };
 
-    run(cfg, source, parser).await
-}
-
-/// A stream transport without the standard's framing would hand the parser
-/// half-messages; say so at start-up rather than per frame.
-fn warn_if_not_the_standard_framing(transport: &Transport) {
-    let framing = match transport {
-        Transport::TcpClient { framing, .. }
-        | Transport::TcpServer { framing, .. }
-        | Transport::File { framing, .. }
-        | Transport::Stdin { framing } => Some(*framing),
-        _ => None,
-    };
-    if let Some(f) = framing {
-        if f != Framing::LengthU32le {
-            tracing::warn!(
-                framing = ?f,
-                "SAPIENT messages carry a 4-byte little-endian length prefix; set framing = \"length-u32le\""
-            );
-        }
-    }
+    ajar_connector_common::run(cfg, source, parser).await
 }
