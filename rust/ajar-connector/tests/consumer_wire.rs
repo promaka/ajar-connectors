@@ -1,16 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
-//! The verified consumer stream against a real broker: valid events reach
-//! the caller, tampered ones are counted and dropped inside the stream, and
-//! the self-consume guards hold. Same nats-server policy as every wire gate:
-//! required in CI, skipped locally without the binary.
+//! Verified consumer stream against a real nats-server (required in CI, skipped locally without it).
 #![cfg(feature = "consumer")]
 
 use std::process::{Command, Stdio};
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use ajar_connector::consumer::{verified_events, Guards, Stats};
-use ajar_connector::{canonical_bytes, seal, EventBuilder, SigningKey};
+use ajar_connector::consumer::{Guards, Stats};
+use ajar_connector::{EventBuilder, SigningKey};
+use futures_util::StreamExt as _;
 
 fn nats_server() -> Option<String> {
     let bin = std::env::var("NATS_SERVER_BIN").unwrap_or_else(|_| "nats-server".into());
@@ -26,7 +25,7 @@ fn nats_server() -> Option<String> {
     } else if std::env::var("CI").is_ok() {
         panic!("nats-server is required in CI: the consumer wire gate must run, not skip");
     } else {
-        eprintln!("consumer wire gate SKIPPED: no nats-server binary");
+        eprintln!("skipping consumer wire test: no nats-server binary");
         None
     }
 }
@@ -39,11 +38,11 @@ fn sealed(key: &SigningKey, source_id: &str, payload: &[u8], model: Option<&str>
     if let Some(m) = model {
         b = b.attribute("model", m);
     }
-    seal(&canonical_bytes(&b.build().unwrap()), key)
+    ajar_connector::seal(&ajar_connector::canonical_bytes(&b.build().unwrap()), key)
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn the_stream_yields_only_what_verifies_and_passes_the_guards() {
+async fn stream_yields_only_verified_unguarded_events() {
     let Some(bin) = nats_server() else { return };
     let port = {
         let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -71,7 +70,7 @@ async fn the_stream_yields_only_what_verifies_and_passes_the_guards() {
         ..Default::default()
     };
     guards.skip_source_ids.insert("me".into());
-    let mut stream = verified_events(
+    let mut stream = ajar_connector::consumer::verified_events(
         &client,
         "ajar.egress.t.>",
         egress.verifying_key(),
@@ -119,7 +118,6 @@ async fn the_stream_yields_only_what_verifies_and_passes_the_guards() {
         .unwrap();
     publisher.flush().await.unwrap();
 
-    use futures_util::StreamExt as _;
     let first = tokio::time::timeout(Duration::from_secs(5), stream.next())
         .await
         .unwrap()
@@ -136,7 +134,6 @@ async fn the_stream_yields_only_what_verifies_and_passes_the_guards() {
         "everything between was refused or skipped"
     );
 
-    use std::sync::atomic::Ordering;
     assert_eq!(stats.accepted.load(Ordering::Relaxed), 2);
     assert_eq!(stats.rejected.load(Ordering::Relaxed), 1);
     assert_eq!(stats.skipped.load(Ordering::Relaxed), 2);

@@ -1,56 +1,50 @@
 // SPDX-License-Identifier: Apache-2.0
-//! The seal envelope: detached Ed25519 signature prefixed to canonical bytes.
+//! The seal envelope: a detached Ed25519 signature prefixed to the canonical bytes.
 //!
 //! ```text
 //! sealed = ed25519_sign(signing_key, canonical_bytes) ++ canonical_bytes
-//!          └────────────── 64-byte detached signature ─────────────┘
 //! ```
-//!
-//! Each production connector holds its own signing key; Ajar registers the
-//! matching public key in the connector's profile. The seed used by the golden
-//! vectors is a published TEST seed — never sign production events with it.
 
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
+use thiserror::Error;
 
 /// Length in bytes of the Ed25519 signature prefix on a sealed envelope.
 pub const SEAL_SIGNATURE_LEN: usize = 64;
 
 /// Why a sealed envelope was not accepted.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum SealError {
     /// Shorter than the signature prefix, so it carries no canonical bytes.
+    #[error(
+        "sealed envelope is {len} bytes, shorter than the {}-byte signature",
+        SEAL_SIGNATURE_LEN
+    )]
     Truncated {
-        /// Length actually supplied.
+        /// Length supplied.
         len: usize,
     },
     /// The signature is not a well-formed Ed25519 signature.
+    #[error("signature prefix is not a valid Ed25519 signature")]
     MalformedSignature,
-    /// The signature did not verify: these bytes were not sealed by the holder of
-    /// the key they were checked against, or they were altered afterwards.
+    /// The signature did not verify under the key, or the bytes were altered.
+    #[error("signature did not verify under the given key")]
     Unverified,
 }
 
-impl std::fmt::Display for SealError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            SealError::Truncated { len } => write!(
-                f,
-                "sealed envelope is {len} bytes, shorter than the {SEAL_SIGNATURE_LEN}-byte signature"
-            ),
-            SealError::MalformedSignature => write!(f, "signature prefix is not a valid Ed25519 signature"),
-            SealError::Unverified => write!(f, "signature did not verify under the given key"),
-        }
-    }
-}
-
-impl std::error::Error for SealError {}
-
-/// Seals `canonical` bytes: signs them with `signing_key` and returns the
-/// 64-byte detached signature followed by the canonical bytes themselves.
+/// Seals `canonical` bytes: signs them with `signing_key` and returns the 64-byte
+/// detached signature followed by the canonical bytes.
+///
+/// ```text
+/// sealed = ed25519_sign(signing_key, canonical_bytes) ++ canonical_bytes
+/// ```
 ///
 /// The verifier splits at [`SEAL_SIGNATURE_LEN`], checks the signature over the
 /// remainder with the connector's registered verifying key, and recovers the
 /// canonical event from the suffix.
+///
+/// Each production connector holds its own signing key; Ajar registers the matching
+/// public key in the connector's profile. The seed used by the golden vectors is a
+/// published test seed: never sign production events with it.
 pub fn seal(canonical: &[u8], signing_key: &SigningKey) -> Vec<u8> {
     let signature = signing_key.sign(canonical);
     let mut out = Vec::with_capacity(SEAL_SIGNATURE_LEN + canonical.len());
@@ -60,19 +54,20 @@ pub fn seal(canonical: &[u8], signing_key: &SigningKey) -> Vec<u8> {
 }
 
 /// Verifies a sealed envelope against `verifying_key` and returns the canonical
-/// bytes it carries.
+/// bytes it carries. The inverse of [`seal`].
 ///
-/// This is the inverse of [`seal`] and the whole trust model in one call: it
-/// answers "were these exact bytes sealed by the holder of this key, and are they
-/// unaltered since". A caller who holds a connector's registered verifying key can
-/// establish provenance without the connector, the broker, or Ajar Core being
-/// present or trusted.
+/// It answers whether these exact bytes were sealed by the holder of this key,
+/// unaltered since. A caller holding a connector's registered verifying key can
+/// establish provenance without the connector, the broker or Ajar Core being present
+/// or trusted.
 ///
 /// The returned slice borrows from `sealed`, so verifying costs no copy. Decode it
-/// with [`crate::event::Event`]'s `prost::Message::decode` to recover the event.
+/// with `prost::Message::decode` to recover the [`crate::event::Event`]. A 64-byte
+/// envelope carries zero canonical bytes, which is well-formed; the caller decides
+/// whether an empty event is meaningful.
 ///
 /// ```
-/// use ajar_connector::{canonical_bytes, seal, verify, EventBuilder, SigningKey};
+/// use ajar_connector::{EventBuilder, SigningKey};
 ///
 /// let key = SigningKey::from_bytes(&[0x47; 32]);
 /// let event = EventBuilder::new("acme-radar-1", "mim:aircraft")
@@ -80,9 +75,9 @@ pub fn seal(canonical: &[u8], signing_key: &SigningKey) -> Vec<u8> {
 ///     .now()
 ///     .build()?;
 ///
-/// let sealed = seal(&canonical_bytes(&event), &key);
-/// let canonical = verify(&sealed, &key.verifying_key())?;
-/// assert_eq!(canonical, canonical_bytes(&event));
+/// let sealed = ajar_connector::seal(&ajar_connector::canonical_bytes(&event), &key);
+/// let canonical = ajar_connector::verify(&sealed, &key.verifying_key())?;
+/// assert_eq!(canonical, ajar_connector::canonical_bytes(&event));
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 pub fn verify<'a>(sealed: &'a [u8], verifying_key: &VerifyingKey) -> Result<&'a [u8], SealError> {
@@ -100,11 +95,14 @@ pub fn verify<'a>(sealed: &'a [u8], verifying_key: &VerifyingKey) -> Result<&'a 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ed25519_dalek::Verifier;
+
+    fn test_key() -> SigningKey {
+        SigningKey::from_bytes(&[0x47; 32])
+    }
 
     #[test]
     fn sealed_layout_is_signature_then_canonical() {
-        let key = SigningKey::from_bytes(&[0x47; 32]);
+        let key = test_key();
         let canonical = b"hello ajar";
         let sealed = seal(canonical, &key);
 
@@ -117,8 +115,8 @@ mod tests {
     }
 
     #[test]
-    fn verify_round_trips_seal_and_returns_the_canonical_bytes() {
-        let key = SigningKey::from_bytes(&[0x47; 32]);
+    fn verify_returns_the_canonical_bytes() {
+        let key = test_key();
         let canonical = b"hello ajar";
         let sealed = seal(canonical, &key);
         assert_eq!(verify(&sealed, &key.verifying_key()).unwrap(), canonical);
@@ -126,7 +124,7 @@ mod tests {
 
     #[test]
     fn verify_rejects_a_tampered_body() {
-        let key = SigningKey::from_bytes(&[0x47; 32]);
+        let key = test_key();
         let mut sealed = seal(b"hello ajar", &key);
         let last = sealed.len() - 1;
         sealed[last] ^= 0x01;
@@ -138,7 +136,7 @@ mod tests {
 
     #[test]
     fn verify_rejects_a_tampered_signature() {
-        let key = SigningKey::from_bytes(&[0x47; 32]);
+        let key = test_key();
         let mut sealed = seal(b"hello ajar", &key);
         sealed[0] ^= 0x01;
         assert!(matches!(
@@ -149,7 +147,7 @@ mod tests {
 
     #[test]
     fn verify_rejects_another_keys_seal() {
-        let mine = SigningKey::from_bytes(&[0x47; 32]);
+        let mine = test_key();
         let theirs = SigningKey::from_bytes(&[0x11; 32]);
         let sealed = seal(b"hello ajar", &theirs);
         assert_eq!(
@@ -160,7 +158,7 @@ mod tests {
 
     #[test]
     fn verify_rejects_a_truncated_envelope() {
-        let key = SigningKey::from_bytes(&[0x47; 32]);
+        let key = test_key();
         let sealed = seal(b"hello ajar", &key);
         let short = &sealed[..SEAL_SIGNATURE_LEN - 1];
         assert_eq!(
@@ -173,11 +171,17 @@ mod tests {
 
     #[test]
     fn an_empty_body_is_still_a_valid_seal() {
-        // A 64-byte envelope carries zero canonical bytes, which is degenerate but
-        // well-formed; the caller decides whether an empty event is meaningful.
-        let key = SigningKey::from_bytes(&[0x47; 32]);
+        let key = test_key();
         let sealed = seal(b"", &key);
         assert_eq!(sealed.len(), SEAL_SIGNATURE_LEN);
         assert_eq!(verify(&sealed, &key.verifying_key()).unwrap(), b"");
+    }
+
+    #[test]
+    fn truncated_error_names_both_lengths() {
+        assert_eq!(
+            SealError::Truncated { len: 10 }.to_string(),
+            "sealed envelope is 10 bytes, shorter than the 64-byte signature"
+        );
     }
 }
