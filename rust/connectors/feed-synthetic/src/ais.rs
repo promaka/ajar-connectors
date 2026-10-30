@@ -1,18 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
-//! AIS: the vessel's position and static reports as `!AIVDM` sentences, what
-//! the `ais-nmea` connector reads.
-//!
-//! What AIS carries, and therefore what this emits: identity (MMSI, callsign,
-//! name), position, course, heading, speed, navigational status. It does not
-//! carry accuracy in metres: AIS has a one-bit "better or worse than ten
-//! metres" flag and relays the ship's own GPS, so no accuracy is emitted.
-//!
-//! Two message types, because that is how a real transponder splits it: type 1
-//! is the position report every few seconds, type 5 is the static and voyage
-//! data every few minutes, and the decoder joins them on the MMSI. Type 5 is
-//! 424 bits, which does not fit one sentence, so it goes as a two-fragment
-//! multipart exactly as a receiver would relay it. A generator that emitted a
-//! single fat sentence would exercise a path no real receiver uses.
+//! AIS: the vessel as `!AIVDM` sentences, read by the `ais-nmea` connector.
+//! Type 1 position reports, and type 5 static and voyage data as a multipart
+//! the decoder joins onto the position by MMSI. AIS carries no accuracy in
+//! metres, so none is emitted.
 
 use crate::scenario::{Vessel, VesselState, MPS_TO_KN};
 
@@ -27,15 +17,12 @@ fn armour(six: u8) -> u8 {
 }
 
 /// A big-endian bit writer for an AIS payload.
+#[derive(Default)]
 struct Bits {
     bits: Vec<bool>,
 }
 
 impl Bits {
-    fn new() -> Self {
-        Bits { bits: Vec::new() }
-    }
-
     fn u(&mut self, value: u64, width: usize) -> &mut Self {
         for i in (0..width).rev() {
             self.bits.push((value >> i) & 1 == 1);
@@ -66,7 +53,7 @@ impl Bits {
     /// The armoured payload and the fill bits that pad it to whole characters.
     fn armoured(&self) -> (String, u8) {
         let fill = (6 - self.bits.len() % 6) % 6;
-        let mut out = String::new();
+        let mut out = String::with_capacity(self.bits.len().div_ceil(6));
         let mut i = 0;
         while i < self.bits.len() {
             let mut six = 0u8;
@@ -91,7 +78,7 @@ fn sentence(body: &str) -> String {
 }
 
 /// The sentences for one payload: one, or a multipart set sharing a sequence
-/// id, each of at most 56 payload characters as a receiver relays them.
+/// id.
 fn sentences(payload: &str, fill: u8, seq: u8, channel: char) -> Vec<String> {
     const MAX_CHARS: usize = 56;
     let chunks: Vec<&str> = {
@@ -121,21 +108,21 @@ fn sentences(payload: &str, fill: u8, seq: u8, channel: char) -> Vec<String> {
         .collect()
 }
 
-/// Type 1: a class A position report, the sentence every few seconds.
+/// Type 1: a class A position report.
 pub fn position_report(v: &VesselState, timestamp_s: u8) -> String {
-    let mut b = Bits::new();
+    let mut b = Bits::default();
     b.u(1, 6) // message type
         .u(0, 2) // repeat indicator
         .u(Vessel::MMSI as u64, 30)
         .u(Vessel::NAV_STATUS as u64, 4)
-        .i(0, 8) // rate of turn: 0, not turning
+        .i(0, 8) // rate of turn
         .u((v.speed_mps * MPS_TO_KN * 10.0).round() as u64, 10) // SOG, 1/10 kn
-        .u(1, 1) // position accuracy: better than 10 m (a flag, not a figure)
+        .u(1, 1) // position accuracy flag: better than 10 m
         .i((v.fix.lon * 600_000.0).round() as i64, 28) // 1/10000 min
         .i((v.fix.lat * 600_000.0).round() as i64, 27)
         .u((v.course_deg * 10.0).round() as u64, 12) // COG, 1/10 deg
         .u(v.course_deg.round() as u64 % 360, 9) // true heading: along the course
-        .u(timestamp_s as u64 % 60, 6) // UTC second of the report
+        .u(timestamp_s as u64 % 60, 6) // UTC second
         .u(0, 2) // manoeuvre indicator: not available
         .u(0, 3) // spare
         .u(0, 1) // RAIM not in use
@@ -146,7 +133,7 @@ pub fn position_report(v: &VesselState, timestamp_s: u8) -> String {
 
 /// Type 5: class A static and voyage data, as a two-fragment multipart.
 pub fn static_report(seq: u8) -> String {
-    let mut b = Bits::new();
+    let mut b = Bits::default();
     b.u(5, 6)
         .u(0, 2)
         .u(Vessel::MMSI as u64, 30)
@@ -172,6 +159,7 @@ pub fn static_report(seq: u8) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::fixtures::{attr, num, EVENT_TIME};
     use ajar_ais_nmea::AisParser;
     use ajar_connector_common::Enrichment;
 
@@ -180,7 +168,7 @@ mod tests {
     }
 
     #[test]
-    fn a_position_report_decodes_to_the_vessel_where_the_scenario_put_her() {
+    fn position_report_decodes_to_vessel() {
         let v = Vessel::at(90.0);
         let line = position_report(&v, 30);
         assert!(line.starts_with("!AIVDM,1,1,,A,"), "{line}");
@@ -194,26 +182,22 @@ mod tests {
         assert!((p.lon.unwrap() - v.fix.lon).abs() < 2e-6, "{:?}", p.lon);
         assert!((p.cog_deg.unwrap() - Vessel::COURSE_DEG).abs() < 0.11);
         assert!((p.heading_deg.unwrap() - Vessel::COURSE_DEG).abs() < 0.5);
-        // The decoder keeps the wire's knots on the position and converts to
-        // the contract's metres per second only in the event.
         assert!(
             (p.sog_kn.unwrap() - Vessel::SPEED_MPS * MPS_TO_KN).abs() < 0.06,
             "{:?}",
             p.sog_kn
         );
         assert_eq!(p.nav_status, Some("under-way-using-engine"));
-        let ev = decoder().to_event_at(&p, "2026-06-10T08:00:00Z").unwrap();
-        let speed: f64 = ev
-            .attributes
-            .iter()
-            .find(|a| a.key == "speed")
-            .map(|a| a.value.parse().unwrap())
-            .expect("speed is governed");
-        assert!((speed - Vessel::SPEED_MPS).abs() < 0.03, "{speed}");
+        let ev = decoder().to_event_at(p, EVENT_TIME).unwrap();
+        let speed = num(&ev, "speed");
+        assert!(
+            (speed - Vessel::SPEED_MPS).abs() < 0.03,
+            "{speed}: the event carries m/s"
+        );
     }
 
     #[test]
-    fn the_static_report_is_a_multipart_the_decoder_joins_onto_the_next_position() {
+    fn static_report_joins_onto_next_position() {
         let d = decoder();
         let stat = static_report(3);
         let lines: Vec<&str> = stat.lines().collect();
@@ -223,7 +207,6 @@ mod tests {
         for l in &lines {
             assert!(d.parse_sentence(l.as_bytes()).unwrap().is_none(), "{l}");
         }
-        // The next position carries the identity the static report gave it.
         let p = d
             .parse_sentence(position_report(&Vessel::at(0.0), 1).trim_end().as_bytes())
             .unwrap()
@@ -231,25 +214,19 @@ mod tests {
         assert_eq!(p.callsign.as_deref(), Some(Vessel::CALLSIGN));
         assert_eq!(p.name.as_deref(), Some(Vessel::NAME));
         assert_eq!(p.ship_type, Some("cargo"));
-        let ev = d.to_event_at(&p, "2026-06-10T08:00:00Z").unwrap();
+        let ev = d.to_event_at(p, EVENT_TIME).unwrap();
         assert_eq!(ev.entity_type, "mim:vessel");
-        let attr = |k: &str| {
-            ev.attributes
-                .iter()
-                .find(|a| a.key == k)
-                .map(|a| a.value.clone())
-        };
-        assert_eq!(attr("alt_id").as_deref(), Some("235009870"));
-        assert_eq!(attr("alt_id_standard").as_deref(), Some("AIS"));
-        assert_eq!(attr("callsign").as_deref(), Some("MSCL"));
+        assert_eq!(attr(&ev, "alt_id").as_deref(), Some("235009870"));
+        assert_eq!(attr(&ev, "alt_id_standard").as_deref(), Some("AIS"));
+        assert_eq!(attr(&ev, "callsign").as_deref(), Some("MSCL"));
         assert!(
-            attr("position_accuracy_h_m").is_none(),
+            attr(&ev, "position_accuracy_h_m").is_none(),
             "AIS has no accuracy in metres"
         );
     }
 
     #[test]
-    fn every_sentence_checksums_and_a_flipped_byte_is_refused() {
+    fn flipped_byte_fails_checksum() {
         let good = position_report(&Vessel::at(0.0), 0);
         let mut bad = good.trim_end().as_bytes().to_vec();
         bad[20] ^= 0x01;
@@ -257,7 +234,7 @@ mod tests {
     }
 
     #[test]
-    fn armouring_matches_the_published_alphabet() {
+    fn armouring_matches_alphabet() {
         assert_eq!(armour(0), b'0');
         assert_eq!(armour(39), b'W');
         assert_eq!(armour(40), b'`');

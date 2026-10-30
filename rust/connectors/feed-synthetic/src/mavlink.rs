@@ -1,29 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
-//! MAVLink: the uncrewed aircraft's telemetry as v1 frames, what the `mavlink`
-//! connector reads.
-//!
-//! MAVLink is what autopilots and ground stations speak, and the connector
-//! verifies the frame CRC before trusting a single field. Correctly: a corrupt
-//! frame that parsed anyway would put a drone somewhere it is not. So this
-//! builds real frames, CRC-16/MCRF4XX over everything after the magic byte
-//! finished with the message's CRC_EXTRA. A wrong CRC means nothing arrives,
-//! so [`self_check`] proves the encoder against the connector's reference
-//! frame before a single packet leaves.
-//!
-//! The CRC table and the frame layout are written here independently of the
-//! connector's decoder on purpose. Sharing them would make the round-trip
-//! tests circular: a wrong CRC_EXTRA on both sides would pass, and fail only
-//! against a real autopilot. The reference frame was produced outside both.
-//!
-//! Three messages, because that is what the connector maps and what a real
-//! link carries: HEARTBEAT says the vehicle exists and what state it is in,
-//! GLOBAL_POSITION_INT carries the fused position and heading, GPS_RAW_INT
-//! carries the raw fix with its uncertainty. That last one is why this is the
-//! only source here reporting every accuracy attribute: an autopilot knows its
-//! own GPS error, and most sensors do not.
-//!
-//! v1 framing (magic 0xFE) rather than v2, because it is the simpler of the two
-//! the connector accepts and nothing here needs v2's extensions or signing.
+//! MAVLink: the uncrewed aircraft's telemetry as v1 frames, read by the
+//! `mavlink` connector: HEARTBEAT, GLOBAL_POSITION_INT and GPS_RAW_INT. The CRC
+//! and frame layout are written independently of the connector's decoder, so
+//! the round-trip tests are not circular.
 
 use crate::scenario::{Uav, UavState};
 
@@ -31,8 +10,7 @@ const HEARTBEAT: u8 = 0;
 const GLOBAL_POSITION_INT: u8 = 33;
 const GPS_RAW_INT: u8 = 24;
 
-/// CRC_EXTRA and payload length per message, matching the connector's own table.
-fn spec(msg_id: u8) -> (u8, usize) {
+fn crc_extra_and_len(msg_id: u8) -> (u8, usize) {
     match msg_id {
         HEARTBEAT => (50, 9),
         GLOBAL_POSITION_INT => (104, 28),
@@ -53,27 +31,23 @@ fn crc(data: &[u8], extra: u8) -> u16 {
 }
 
 /// A frame builder holding the per-link sequence counter.
+#[derive(Default)]
 pub struct Link {
     seq: u8,
 }
 
 impl Link {
-    pub fn new() -> Self {
-        Link { seq: 0 }
-    }
-
     /// One v1 frame: magic, length, sequence, system id, component id,
     /// message id, payload padded to the message's full length, CRC.
     fn frame(&mut self, msg_id: u8, payload: &[u8]) -> Vec<u8> {
-        let (extra, len) = spec(msg_id);
-        let mut body = vec![len as u8, self.seq, Uav::SYSID, 1, msg_id];
+        let (extra, len) = crc_extra_and_len(msg_id);
+        let mut out = Vec::with_capacity(6 + len + 2);
+        // Magic 0xFE is v1: nothing here needs v2's extensions or signing.
+        out.extend_from_slice(&[0xFE, len as u8, self.seq, Uav::SYSID, 1, msg_id]);
         self.seq = self.seq.wrapping_add(1);
-        let mut p = payload.to_vec();
-        p.resize(len, 0);
-        body.extend_from_slice(&p);
-        let c = crc(&body, extra);
-        let mut out = vec![0xFE];
-        out.extend_from_slice(&body);
+        out.extend_from_slice(payload);
+        out.resize(6 + len, 0);
+        let c = crc(&out[1..], extra);
         out.extend_from_slice(&c.to_le_bytes());
         out
     }
@@ -82,7 +56,7 @@ impl Link {
     pub fn heartbeat(&mut self) -> Vec<u8> {
         let mut p = Vec::with_capacity(9);
         p.extend_from_slice(&0u32.to_le_bytes()); // custom_mode
-        p.push(2); // type: MAV_TYPE_QUADROTOR, which the connector reports as multirotor
+        p.push(2); // type: MAV_TYPE_QUADROTOR
         p.push(3); // autopilot: ArduPilot
         p.push(0x80); // base_mode: armed
         p.push(4); // system_status: active
@@ -90,9 +64,8 @@ impl Link {
         self.frame(HEARTBEAT, &p)
     }
 
-    /// GLOBAL_POSITION_INT: the fused position and heading. Velocity is split
-    /// into north and east components from the heading, as an autopilot reports
-    /// it, rather than a scalar the connector would have to invent a direction for.
+    /// GLOBAL_POSITION_INT: the fused position, north and east velocity, and
+    /// heading.
     pub fn global_position_int(&mut self, u: &UavState, boot_ms: u32) -> Vec<u8> {
         let (s, c) = u.heading_deg.to_radians().sin_cos();
         let mut p = Vec::with_capacity(28);
@@ -109,9 +82,7 @@ impl Link {
     }
 
     /// GPS_RAW_INT: the raw fix, then the v2 extension block carrying the
-    /// accuracies in millimetres and the heading accuracy in 1e-5 degrees. The
-    /// connector reads those extensions, which is where the accuracy attributes
-    /// come from.
+    /// accuracies in millimetres and the heading accuracy in 1e-5 degrees.
     pub fn gps_raw_int(&mut self, u: &UavState, boot_us: u64) -> Vec<u8> {
         let mut p = Vec::with_capacity(52);
         p.extend_from_slice(&boot_us.to_le_bytes());
@@ -133,46 +104,31 @@ impl Link {
     }
 }
 
-impl Default for Link {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-/// The connector's ground-truth HEARTBEAT, byte for byte. A silent CRC bug in
-/// the encoder would look exactly like a dead link, so the encoder proves
-/// itself against this before the feed starts.
-pub const REFERENCE_HEARTBEAT: &str = "fe0900010100000000000203800403be39";
-
-/// Verify the encoder against the reference frame. Panics on drift, so a
-/// generator whose frames the connector would refuse cannot start.
-pub fn self_check() {
-    let got: String = Link::new()
-        .heartbeat()
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect();
-    assert_eq!(
-        got, REFERENCE_HEARTBEAT,
-        "HEARTBEAT encoding drifted from the connector's reference frame"
-    );
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::fixtures::{attr, num, EVENT_TIME};
     use ajar_connector_common::Enrichment;
     use ajar_mavlink::MavParser;
 
     #[test]
-    fn the_heartbeat_matches_the_reference_frame_byte_for_byte() {
-        self_check();
+    fn heartbeat_matches_reference_frame() {
+        // Produced outside this encoder and the decoder, so a CRC_EXTRA wrong in both fails.
+        let hex: String = Link::default()
+            .heartbeat()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        assert_eq!(
+            hex, "fe0900010100000000000203800403be39",
+            "HEARTBEAT encoding drifted from the connector's reference frame"
+        );
     }
 
     #[test]
-    fn the_three_frames_decode_to_the_uav_with_every_accuracy() {
+    fn three_frames_decode_with_every_accuracy() {
         let d = MavParser::new("uav-1", Enrichment::default().with_hostility("Friend"));
-        let mut link = Link::new();
+        let mut link = Link::default();
         let u = Uav::at(45.0);
         assert!(d.parse_frame(&link.heartbeat()).unwrap().is_none());
         let pos = d
@@ -183,14 +139,8 @@ mod tests {
         assert!((pos.lon - u.fix.lon).abs() < 2e-7);
         assert_eq!(pos.state.vehicle_type, Some("multirotor"));
         assert_eq!(pos.state.armed, Some(true));
-        // The fused message is where the heading lives.
-        let fused = d.to_event_at(&pos, "2026-06-10T08:00:00Z").unwrap();
-        let hdg: f64 = fused
-            .attributes
-            .iter()
-            .find(|a| a.key == "heading")
-            .map(|a| a.value.parse().unwrap())
-            .expect("GLOBAL_POSITION_INT carries the heading");
+        let fused = d.to_event_at(pos, EVENT_TIME).unwrap();
+        let hdg = num(&fused, "heading");
         assert!(
             (hdg - u.heading_deg).abs() < 0.02,
             "{hdg} vs {}",
@@ -200,32 +150,23 @@ mod tests {
             .parse_frame(&link.gps_raw_int(&u, 45_000_000))
             .unwrap()
             .expect("a raw fix yields a track");
-        let ev = d.to_event_at(&raw, "2026-06-10T08:00:00Z").unwrap();
+        let ev = d.to_event_at(raw, EVENT_TIME).unwrap();
         assert_eq!(ev.entity_type, "mim:aircraft");
-        let attr = |k: &str| {
-            ev.attributes
-                .iter()
-                .find(|a| a.key == k)
-                .map(|a| a.value.parse::<f64>().unwrap())
-        };
-        assert!((attr("position_accuracy_h_m").unwrap() - Uav::H_ACC_M).abs() < 1e-3);
-        assert!((attr("position_accuracy_v_m").unwrap() - Uav::V_ACC_M).abs() < 1e-3);
-        assert!((attr("speed_accuracy").unwrap() - Uav::VEL_ACC_MPS).abs() < 1e-3);
-        assert!((attr("angle_accuracy").unwrap() - Uav::HDG_ACC_DEG).abs() < 1e-3);
-        // A raw fix carries course over ground, not the fused heading.
-        assert!(attr("heading").is_none());
-        let id = ev
-            .attributes
-            .iter()
-            .find(|a| a.key == "alt_id")
-            .map(|a| a.value.as_str());
-        assert_eq!(id, Some("1"));
+        assert!((num(&ev, "position_accuracy_h_m") - Uav::H_ACC_M).abs() < 1e-3);
+        assert!((num(&ev, "position_accuracy_v_m") - Uav::V_ACC_M).abs() < 1e-3);
+        assert!((num(&ev, "speed_accuracy") - Uav::VEL_ACC_MPS).abs() < 1e-3);
+        assert!((num(&ev, "angle_accuracy") - Uav::HDG_ACC_DEG).abs() < 1e-3);
+        assert!(
+            attr(&ev, "heading").is_none(),
+            "a raw fix carries course over ground, not heading"
+        );
+        assert_eq!(attr(&ev, "alt_id").as_deref(), Some("1"));
     }
 
     #[test]
-    fn a_flipped_bit_fails_the_crc_and_the_frame_is_refused() {
+    fn flipped_bit_fails_crc() {
         let d = MavParser::new("uav-1", Enrichment::default());
-        let mut f = Link::new().global_position_int(&Uav::at(0.0), 1);
+        let mut f = Link::default().global_position_int(&Uav::at(0.0), 1);
         f[10] ^= 0x01;
         assert!(d.parse_frame(&f).is_err());
     }

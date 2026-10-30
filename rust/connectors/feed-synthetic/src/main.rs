@@ -1,47 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
-//! `ajar-feed-synthetic`: one fixture, seven sensors, on every connector's real
-//! wire format.
-//!
-//! A conformance and commissioning source. A fusion consumer builds against
-//! it before any equipment arrives, and a site commissions its connectors
-//! against it before real feeds are switched in. Every sensor here is read by
-//! a real connector on its real wire format; only the thing plugged into each
-//! connector's input is synthesised, so replacing a generator with actual
-//! equipment changes nothing else. The seven render one shared fixture (see
-//! `scenario`), so the same vessel is seen by AIS and by radar, the same
-//! aircraft by ADS-B and by a system track, an emitter on the vessel by an
-//! ESM receiver, and the uncrewed aircraft by its autopilot and by a
-//! counter-UAS radar speaking SAPIENT.
-//!
-//! Each generator is proven against the decoder that reads it, in this
-//! workspace, so the two cannot drift apart without a test failing. Cadences
-//! are the protocols' own: an AIS static report every six minutes per ITU-R
-//! M.1371, a radar heartbeat once per rotation.
-//!
-//! ```text
-//! ajar-feed-synthetic all                 # every sensor, on its default port
-//! ajar-feed-synthetic ais adsb            # a subset
-//! ajar-feed-synthetic --dry-run --ticks 2 # print what would go on the wire, open nothing
-//! ```
-//!
-//! Where each feed goes, and which connector transport reads it:
-//!
-//! | sensor  | wire                         | connector | transport        |
-//! |---------|------------------------------|-----------|------------------|
-//! | asterix | UDP multicast 232.1.1.1:8600 | asterix   | udp-multicast    |
-//! | cot     | UDP multicast 239.2.3.1:6969 | tak-cot   | udp-multicast    |
-//! | mavlink | UDP to 127.0.0.1:14550       | mavlink   | udp              |
-//! | adsb    | TCP server on :30003         | adsb      | tcp-client, line |
-//! | ais     | TCP server on :30160         | ais-nmea  | tcp-client, line |
-//! | esm     | TCP server on :30155         | generic   | tcp-client, line |
-//! | sapient | TCP server on :30335         | sapient   | tcp-client, length-u32le (subscriber role) |
-//!
-//! `--bind IP` moves every TCP server and multicast send onto one interface,
-//! for a dual-homed box; `--mavlink-to HOST:PORT` retargets the one unicast
-//! feed; `--ais-static-every SECS` shortens the static-report cadence for a
-//! commissioning run that should not wait six minutes to learn who the ship
-//! is. Every synthetic connector's config should carry `[marking] caveats =
-//! ["EXERCISE"]`, so each track says what it is inside its signature.
+//! `ajar-feed-synthetic`: one shared fixture rendered on every connector's real
+//! wire format, for conformance and commissioning. Each generator is tested
+//! against the decoder that reads it.
 
 mod adsb;
 mod ais;
@@ -54,10 +14,11 @@ mod scenario;
 
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::Context;
+use socket2::{Domain, Protocol, Socket, Type};
 use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, UdpSocket};
 use tokio::sync::broadcast;
@@ -71,21 +32,17 @@ const AIS_PORT: u16 = 30160;
 const ESM_PORT: u16 = 30155;
 const SAPIENT_PORT: u16 = 30335;
 const MAVLINK_TO: &str = "127.0.0.1:14550";
-/// AIS static and voyage data cadence, seconds: every six minutes per ITU-R
-/// M.1371.
+/// AIS static and voyage data cadence, per ITU-R M.1371.
 const AIS_STATIC_EVERY: Duration = Duration::from_secs(360);
-/// The most attached readers one TCP feed serves. A scanner or a misconfigured
-/// balancer holding sockets open cannot exhaust the process.
+/// Readers one TCP feed serves at most, so held-open sockets cannot exhaust
+/// the process.
 const MAX_READERS: usize = 64;
-/// How long a reader may stall on a write before it is dropped. A connector
-/// that stopped reading, or a box whose cable was pulled, otherwise parks the
-/// task forever.
+/// A reader stalled on a write this long is dropped.
 const WRITE_DEADLINE: Duration = Duration::from_secs(10);
-/// How often the unicast target is re-resolved, so a connector container that
-/// restarted with a new address keeps receiving.
+/// The unicast target is re-resolved this often, so a peer that restarted on a
+/// new address keeps receiving.
 const RERESOLVE_EVERY: Duration = Duration::from_secs(30);
-/// Backoff after a failed accept, so a file-descriptor limit does not spin a
-/// worker at full load.
+/// Pause after a failed accept, so a file-descriptor limit does not spin.
 const ACCEPT_BACKOFF: Duration = Duration::from_millis(250);
 
 const ALL: [Sensor; 7] = [
@@ -146,7 +103,6 @@ fn parse_args() -> Options {
     if o.sensors.is_empty() {
         o.sensors.extend(ALL);
     }
-    // Keep the first occurrence of each, in the order given.
     let mut seen = Vec::new();
     o.sensors.retain(|s| {
         let new = !seen.contains(s);
@@ -165,20 +121,11 @@ enum Sink {
     Stdout(&'static str),
 }
 
-/// A unicast target re-resolved on a timer, so a peer that restarted with a
-/// new address keeps receiving.
-struct Unicast {
-    sock: UdpSocket,
-    host: String,
-    to: std::sync::Mutex<(SocketAddr, Instant)>,
-}
-
 impl Sink {
     async fn send(&self, bytes: &[u8]) {
         match self {
-            // No reader attached is not an error: the feed runs whether or not
-            // a connector is listening, as equipment does.
             Sink::Tcp(tx) => {
+                // No reader attached is not an error.
                 let _ = tx.send(Arc::from(bytes));
             }
             Sink::Multicast(sock, to) => {
@@ -202,9 +149,15 @@ impl Sink {
     }
 }
 
+struct Unicast {
+    sock: UdpSocket,
+    host: String,
+    to: Mutex<(SocketAddr, Instant)>,
+}
+
 impl Unicast {
     /// The current address, re-resolved when the last lookup is stale. A
-    /// lookup that fails keeps the previous address rather than stopping.
+    /// failed lookup keeps the previous address.
     async fn target(&self) -> SocketAddr {
         let (addr, at) = *self.to.lock().expect("target mutex");
         if at.elapsed() < RERESOLVE_EVERY {
@@ -219,7 +172,7 @@ impl Unicast {
                 fresh
             }
             Err(e) => {
-                tracing::warn!(error = %e, "re-resolving unicast target failed; keeping the last address");
+                tracing::warn!(error = %e, kept = %addr, "unicast target re-resolve failed");
                 self.to.lock().expect("target mutex").1 = Instant::now();
                 addr
             }
@@ -237,9 +190,8 @@ async fn resolve_v4(host: &str) -> anyhow::Result<SocketAddr> {
         .with_context(|| format!("{host} has no IPv4 address"))
 }
 
-/// A TCP server that fans every frame out to each attached reader. A reader
-/// that stalls on a write is dropped, and one that cannot keep up skips
-/// frames, so no single reader can hold the others back.
+/// A TCP server that fans every frame out to each attached reader. A stalled
+/// reader is dropped and a slow one skips frames, so none holds the others back.
 async fn tcp_fanout(bind: Ipv4Addr, port: u16, name: &'static str) -> anyhow::Result<Sink> {
     let listener = TcpListener::bind((bind, port))
         .await
@@ -253,13 +205,13 @@ async fn tcp_fanout(bind: Ipv4Addr, port: u16, name: &'static str) -> anyhow::Re
             let (mut conn, peer) = match listener.accept().await {
                 Ok(c) => c,
                 Err(e) => {
-                    tracing::warn!(feed = name, error = %e, "accept failed; backing off");
+                    tracing::warn!(feed = name, error = %e, "accept failed");
                     tokio::time::sleep(ACCEPT_BACKOFF).await;
                     continue;
                 }
             };
             if readers.load(Ordering::Relaxed) >= MAX_READERS {
-                tracing::warn!(feed = name, %peer, max = MAX_READERS, "reader limit reached; refusing");
+                tracing::warn!(feed = name, %peer, max = MAX_READERS, "reader limit reached, connection refused");
                 continue;
             }
             readers.fetch_add(1, Ordering::Relaxed);
@@ -275,13 +227,13 @@ async fn tcp_fanout(bind: Ipv4Addr, port: u16, name: &'static str) -> anyhow::Re
                                 Ok(Ok(())) => {}
                                 Ok(Err(_)) => break,
                                 Err(_) => {
-                                    tracing::warn!(feed = name, %peer, "reader stalled; dropping it");
+                                    tracing::warn!(feed = name, %peer, "reader stalled, dropped");
                                     break;
                                 }
                             }
                         }
                         Err(broadcast::error::RecvError::Lagged(n)) => {
-                            tracing::warn!(feed = name, %peer, skipped = n, "slow reader, skipping");
+                            tracing::warn!(feed = name, %peer, skipped = n, "slow reader skipped frames");
                         }
                         Err(broadcast::error::RecvError::Closed) => break,
                     }
@@ -299,18 +251,13 @@ async fn multicast(
     group: (Ipv4Addr, u16),
     name: &'static str,
 ) -> anyhow::Result<Sink> {
-    // socket2 rather than tokio's socket, because the outgoing interface for
-    // multicast is a socket option tokio does not expose, and on a dual-homed
-    // box the group has to leave on the surveillance network, not the default
-    // route.
-    use socket2::{Domain, Protocol, Socket, Type};
+    // socket2: tokio does not expose the outgoing multicast interface option.
     let sock = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))
         .with_context(|| format!("{name}: udp socket"))?;
     sock.bind(&SocketAddr::from((bind, 0)).into())
         .with_context(|| format!("{name}: binding {bind}"))?;
     sock.set_multicast_ttl_v4(2)?;
-    // Loopback on explicitly: a connector on the same box must hear the group
-    // even where the host's default is off.
+    // A connector on the same host must hear the group whatever the default.
     sock.set_multicast_loop_v4(true)?;
     if bind != Ipv4Addr::UNSPECIFIED {
         sock.set_multicast_if_v4(&bind)?;
@@ -331,11 +278,11 @@ async fn unicast(bind: Ipv4Addr, to: &str, name: &'static str) -> anyhow::Result
     Ok(Sink::Unicast(Unicast {
         sock,
         host: to.to_string(),
-        to: std::sync::Mutex::new((addr, Instant::now())),
+        to: Mutex::new((addr, Instant::now())),
     }))
 }
 
-/// Run one sensor until the tick budget runs out (never, in production).
+/// Run one sensor for `ticks` ticks, or forever.
 async fn run(
     sensor: Sensor,
     sink: Sink,
@@ -343,10 +290,10 @@ async fn run(
     ais_static_every: Duration,
     ticks: Option<u64>,
 ) {
-    let period = Duration::from_secs_f64(sensor.period());
+    let period = Duration::from_secs_f64(sensor.period_s());
     let mut interval = tokio::time::interval(period);
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    let mut link = mavlink::Link::new();
+    let mut link = mavlink::Link::default();
     let mut last_static: Option<Instant> = None;
     let mut n: u64 = 0;
     while ticks.map_or(true, |t| n < t) {
@@ -377,13 +324,12 @@ async fn run(
             }
             Sensor::Mavlink => {
                 let u = Uav::at(secs);
-                // The autopilot's clock: since boot, which is the start less
-                // this link's latency, never negative.
-                let boot = (secs - sensor.latency()).max(0.0);
+                // Autopilot time since boot: elapsed time less the link latency.
+                let boot_s = (secs - sensor.latency_s()).max(0.0);
                 sink.send(&link.heartbeat()).await;
-                sink.send(&link.global_position_int(&u, (boot * 1000.0) as u32))
+                sink.send(&link.global_position_int(&u, (boot_s * 1000.0) as u32))
                     .await;
-                sink.send(&link.gps_raw_int(&u, (boot * 1_000_000.0) as u64))
+                sink.send(&link.gps_raw_int(&u, (boot_s * 1_000_000.0) as u64))
                     .await;
             }
             Sensor::Cot => {
@@ -394,9 +340,6 @@ async fn run(
                     .await;
             }
             Sensor::Sapient => {
-                // A node registers when it comes up and re-registers now and
-                // then, reports status on its declared interval, and reports
-                // the aircraft every tick.
                 let registered = n % sapient::REGISTER_EVERY == 1;
                 if registered {
                     sink.send(&sapient::registration(observed)).await;
@@ -411,13 +354,13 @@ async fn run(
     }
 }
 
-/// SIGTERM or SIGINT, so a container stop is clean rather than a timeout.
+/// Resolves on SIGTERM or SIGINT.
 async fn shutdown_signal() {
     #[cfg(unix)]
     {
-        use tokio::signal::unix::{signal, SignalKind};
-        let mut term = signal(SignalKind::terminate()).expect("SIGTERM handler");
-        let mut int = signal(SignalKind::interrupt()).expect("SIGINT handler");
+        use tokio::signal::unix::{self, SignalKind};
+        let mut term = unix::signal(SignalKind::terminate()).expect("SIGTERM handler");
+        let mut int = unix::signal(SignalKind::interrupt()).expect("SIGINT handler");
         tokio::select! {
             _ = term.recv() => {}
             _ = int.recv() => {}
@@ -439,11 +382,6 @@ async fn main() -> anyhow::Result<()> {
         .with_writer(std::io::stderr)
         .init();
     let opts = parse_args();
-
-    // A wrong CRC would look exactly like a dead link, so the encoder proves
-    // itself against the connector's reference frame before a packet leaves.
-    mavlink::self_check();
-
     let start = Instant::now();
     let mut tasks = Vec::new();
     for s in &opts.sensors {
@@ -473,8 +411,7 @@ async fn main() -> anyhow::Result<()> {
         "synthetic feed running"
     );
 
-    // A generator that panics ends the process with an error rather than
-    // leaving five feeds up and one silently missing.
+    // A panicking generator ends the whole process, so no feed goes silently missing.
     let all = async {
         for t in tasks {
             t.await.context("a sensor task failed")?;
@@ -486,4 +423,45 @@ async fn main() -> anyhow::Result<()> {
         _ = shutdown_signal() => tracing::info!("stopping"),
     }
     Ok(())
+}
+
+/// Shared fixtures for the decoder round-trip tests.
+#[cfg(test)]
+mod fixtures {
+    use std::time::{Duration, SystemTime};
+
+    use ajar_connector::Event;
+
+    /// The observation time the generators are given.
+    pub fn observed() -> SystemTime {
+        SystemTime::UNIX_EPOCH + Duration::from_secs(1_780_000_000)
+    }
+
+    /// `observed()` as RFC 3339.
+    pub const OBSERVED: &str = "2026-05-28T20:26:40Z";
+
+    /// The time passed to the decoders' `to_event_at`.
+    pub const EVENT_TIME: &str = "2026-06-10T08:00:00Z";
+
+    pub fn attr(ev: &Event, key: &str) -> Option<String> {
+        ev.attributes
+            .iter()
+            .find(|a| a.key == key)
+            .map(|a| a.value.clone())
+    }
+
+    pub fn meta(ev: &Event, key: &str) -> Option<String> {
+        ev.metadata
+            .iter()
+            .find(|a| a.key == key)
+            .map(|a| a.value.clone())
+    }
+
+    /// A numeric attribute; panics if it is missing or not a number.
+    pub fn num(ev: &Event, key: &str) -> f64 {
+        attr(ev, key)
+            .unwrap_or_else(|| panic!("no {key}"))
+            .parse()
+            .unwrap_or_else(|e| panic!("{key}: {e}"))
+    }
 }

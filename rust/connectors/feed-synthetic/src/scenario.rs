@@ -1,24 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
-//! The fixture every feed renders: one set of objects, seen by six sensors.
-//!
-//! One shared world rather than six independent feeds, because a fusion
-//! consumer's task is deciding that two reports are the same object. The same
-//! vessel is seen by the coastal radar and by AIS, the same aircraft by ADS-B
-//! and by the radar's system track, and an emitter sits on the vessel, so
-//! association has work to do and a known answer.
-//!
-//! Each sensor emits only what that sensor carries: AIS has an identity and no
-//! accuracy, radar has accuracy and no identity, CoT has an identity and no
-//! kinematics, the ESM intercept has a bearing and no position.
-//!
-//! Latency is per sensor. The event's `timestamp` is when the source observed
-//! the object; Core stamps its own receipt time on arrival. The two diverge by
-//! the sensor's latency, as they do in the field.
-//!
-//! Every object runs a racetrack, so the fixture is bounded: the objects stay
-//! inside the radar's window and the association cases hold for as long as
-//! the feed runs. Everything is a pure function of seconds since start, so a
-//! generator and a decoder test see exactly the same world.
+//! The fixture every feed renders: one set of objects, each seen by the sensors
+//! that would see it, so association has a known answer. Every object runs a
+//! racetrack and everything is a pure function of seconds since start.
 
 use std::time::{Duration, SystemTime};
 
@@ -29,25 +12,22 @@ pub struct Fix {
     pub lon: f64,
 }
 
-/// The coastal radar site in the Solent approaches. Real geography, so bearings
-/// and ranges are sane and a consumer can sanity-check a plot on any chart. The
-/// ESM receiver is co-located with it.
+/// The coastal radar site in the Solent approaches. The ESM receiver is
+/// co-located with it.
 pub const RADAR: Fix = Fix {
     lat: 50.7900,
     lon: -1.1000,
 };
-/// Height of the radar site above the ellipsoid, metres.
+/// Above the ellipsoid.
 pub const RADAR_ALT_M: f64 = 30.0;
-/// The radar's ASTERIX data source identifier (SAC, SIC).
+/// ASTERIX data source identifier.
 pub const RADAR_SAC: u8 = 25;
 pub const RADAR_SIC: u8 = 10;
-/// The radar's antenna rotation period, seconds.
 pub const RADAR_SCAN_PERIOD_S: f64 = 2.5;
-/// The radar's declared polar window: range in nautical miles, azimuth in
-/// degrees. Seaward from the site, out to the horizon a 30 m mast sees.
+/// Range start and end in nautical miles, azimuth start and end in degrees.
+/// Seaward from the site, out to the radar horizon.
 pub const RADAR_WINDOW: (f64, f64, f64, f64) = (0.5, 12.0, 90.0, 270.0);
 
-/// The sensors in the scenario.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Sensor {
     Ais,
@@ -60,10 +40,9 @@ pub enum Sensor {
 }
 
 impl Sensor {
-    /// How late this sensor's reports reach the connector, seconds. A direct
-    /// radio link and an autopilot are near-instant; AIS goes via a shore
-    /// station; CoT via a TAK server.
-    pub fn latency(self) -> f64 {
+    /// Delay from observation to arrival at the connector.
+    pub fn latency_s(self) -> f64 {
+        // An autopilot link is near-instant; AIS goes via a shore station, CoT via a TAK server.
         match self {
             Sensor::Mavlink => 0.2,
             Sensor::Sapient => 0.3,
@@ -75,9 +54,7 @@ impl Sensor {
         }
     }
 
-    /// How often this sensor reports, seconds. A radar reports once per
-    /// rotation; a slow-moving shore party once every few seconds.
-    pub fn period(self) -> f64 {
+    pub fn period_s(self) -> f64 {
         match self {
             Sensor::Mavlink => 1.0,
             Sensor::Sapient => 1.0,
@@ -89,10 +66,9 @@ impl Sensor {
         }
     }
 
-    /// The source's own clock for a report emitted at `now`: behind by the
-    /// sensor's latency, which is what the event's timestamp carries.
+    /// The source's clock for a report emitted at `now`.
     pub fn observed(self, now: SystemTime) -> SystemTime {
-        now - Duration::from_secs_f64(self.latency())
+        now - Duration::from_secs_f64(self.latency_s())
     }
 
     /// The subcommand and log name.
@@ -109,8 +85,7 @@ impl Sensor {
     }
 }
 
-/// Advance a position along a course. Flat earth, adequate over these
-/// distances.
+/// Advance a position along a course on a flat earth.
 fn step(from: Fix, course_deg: f64, speed_mps: f64, secs: f64) -> Fix {
     let d = speed_mps * secs;
     let (s, c) = course_deg.to_radians().sin_cos();
@@ -120,17 +95,15 @@ fn step(from: Fix, course_deg: f64, speed_mps: f64, secs: f64) -> Fix {
     }
 }
 
-/// Metres per degree of latitude.
 pub const M_PER_DEG_LAT: f64 = 111_320.0;
 
-/// Unit factors, defined from the contract's base units so the encoders and
-/// the decoders' own constants agree to the last digit.
+// Defined from the base units so they match the decoders' constants exactly.
 pub const FT_PER_M: f64 = 1.0 / 0.3048;
 pub const MPS_TO_KN: f64 = 1.0 / 0.514_444;
 pub const FTMIN_PER_MPS: f64 = FT_PER_M * 60.0;
 
-/// A racetrack: out along `course` for `leg_s`, back along the reciprocal for
-/// `leg_s`, repeating. Position is continuous; the course flips each leg.
+/// Out along `course_deg` for `leg_s`, back along the reciprocal for `leg_s`,
+/// repeating.
 fn racetrack(start: Fix, course_deg: f64, speed_mps: f64, leg_s: f64, secs: f64) -> (Fix, f64) {
     let t = secs.rem_euclid(2.0 * leg_s);
     let far = step(start, course_deg, speed_mps, leg_s);
@@ -142,9 +115,8 @@ fn racetrack(start: Fix, course_deg: f64, speed_mps: f64, leg_s: f64, secs: f64)
     }
 }
 
-/// True bearing and range from one fix to another, degrees and metres, on the
-/// same flat earth the motion uses, so a bearing a sensor reports points at
-/// exactly where the scenario put the target.
+/// True bearing in degrees and range in metres from one fix to another, on the
+/// same flat earth as `step`.
 pub fn bearing_range(from: Fix, to: Fix) -> (f64, f64) {
     let dn = (to.lat - from.lat) * M_PER_DEG_LAT;
     let de = (to.lon - from.lon) * M_PER_DEG_LAT * from.lat.to_radians().cos();
@@ -152,13 +124,10 @@ pub fn bearing_range(from: Fix, to: Fix) -> (f64, f64) {
     (bearing, dn.hypot(de))
 }
 
-/// A container ship running a 15-minute racetrack in the Solent approaches.
-///
-/// Seen twice: by AIS, which states her identity, and by the coastal radar,
-/// which does not. The pair associates on position and time alone.
+/// A container ship in the Solent approaches, seen by AIS with her identity
+/// and by the coastal radar without it.
 pub struct Vessel;
 
-/// Where the vessel is and how she is moving.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct VesselState {
     pub fix: Fix,
@@ -171,14 +140,12 @@ impl Vessel {
     pub const CALLSIGN: &'static str = "MSCL";
     pub const NAME: &'static str = "MSC LEANNE";
     pub const COURSE_DEG: f64 = 118.0;
-    /// About 15.5 knots.
     pub const SPEED_MPS: f64 = 8.0;
-    /// AIS navigational status 0: under way using engine.
+    /// Under way using engine.
     pub const NAV_STATUS: u8 = 0;
-    /// AIS ship type 70: cargo, all ships of this type.
+    /// Cargo, all ships of this type.
     pub const SHIP_TYPE: u8 = 70;
-    /// One leg of the racetrack, seconds. 7.2 km at this speed, inside the
-    /// radar's window throughout.
+    /// One racetrack leg; the whole track stays inside the radar's window.
     pub const LEG_S: f64 = 900.0;
     const START: Fix = Fix {
         lat: 50.7700,
@@ -201,11 +168,8 @@ impl Vessel {
     }
 }
 
-/// An airliner holding at FL350 on a 4-minute racetrack.
-///
-/// Also seen twice: by ADS-B, cooperatively, and by the radar's system track.
-/// Both carry the ICAO 24-bit address, so this pair associates on identity as
-/// well as on position and time: the known-answer case.
+/// An airliner in a hold, seen by ADS-B and by the radar's system track. Both
+/// carry the ICAO 24-bit address, so the pair also associates on identity.
 pub struct Aircraft;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -223,15 +187,12 @@ impl Aircraft {
     pub const CALLSIGN: &'static str = "BAW117";
     pub const SQUAWK: &'static str = "1234";
     pub const COURSE_DEG: f64 = 271.0;
-    /// About 450 knots.
     pub const SPEED_MPS: f64 = 231.5;
     /// FL350.
     pub const ALT_M: f64 = 10_668.0;
-    /// About 500 feet per minute down.
     pub const VERTICAL_RATE_MPS: f64 = -2.54;
-    /// The radar's system track number for this aircraft.
+    /// The radar's system track number.
     pub const TRACK_NUMBER: u16 = 4095;
-    /// One leg of the hold, seconds: 55 km at this speed.
     pub const LEG_S: f64 = 240.0;
     const START: Fix = Fix {
         lat: 50.9300,
@@ -256,9 +217,8 @@ impl Aircraft {
     }
 }
 
-/// A small uncrewed aircraft orbiting the harbour mouth on a MAVLink link.
-/// The only source that reports its own GPS uncertainty, so the only one
-/// carrying every accuracy attribute.
+/// A small uncrewed aircraft orbiting the harbour mouth on a MAVLink link, the
+/// one source that reports its own GPS accuracy.
 pub struct Uav;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -274,8 +234,7 @@ impl Uav {
     pub const RADIUS_M: f64 = 900.0;
     pub const PERIOD_S: f64 = 240.0;
     pub const ALT_M: f64 = 120.0;
-    /// GPS accuracies the autopilot reports: horizontal and vertical metres,
-    /// velocity metres per second, heading degrees.
+    /// GPS accuracies the autopilot reports.
     pub const H_ACC_M: f64 = 1.8;
     pub const V_ACC_M: f64 = 2.5;
     pub const VEL_ACC_MPS: f64 = 0.4;
@@ -296,7 +255,7 @@ impl Uav {
         UavState {
             fix,
             alt_m: Self::ALT_M,
-            // Tangential heading, and the speed that carries it round the circle.
+            // Along the tangent.
             heading_deg: (ang.to_degrees() + 90.0) % 360.0,
             speed_mps: std::f64::consts::TAU * Self::RADIUS_M / Self::PERIOD_S,
         }
@@ -304,7 +263,7 @@ impl Uav {
 }
 
 /// A friendly shore party reporting itself over CoT: an identity and a
-/// position, no course, no speed, no accuracy.
+/// position, no kinematics.
 pub struct Unit;
 
 impl Unit {
@@ -319,18 +278,17 @@ impl Unit {
     pub const ALT_M: f64 = 12.0;
 }
 
-/// A navigation radar mounted on the vessel, intercepted by an ESM receiver
-/// ashore, co-located with the coastal radar: an emission with parameters and
-/// no identity of its own. The contract's platform link names the vessel.
+/// A navigation radar on the vessel, intercepted by the ESM receiver at the
+/// coastal radar site.
 pub struct Emitter;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct EmitterState {
-    /// Where the emitter really is: on the vessel. The bearing points here.
+    /// The vessel's position.
     pub fix: Fix,
-    /// True bearing from the receiver to the emitter, degrees.
+    /// True, from the receiver.
     pub bearing_deg: f64,
-    /// Received power, dBm, varying with range and aspect.
+    /// Received, varying with range and aspect.
     pub power_dbm: f64,
 }
 
@@ -343,7 +301,7 @@ impl Emitter {
     pub const ELNOT: &'static str = "G1234";
     pub const PRF_HZ: f64 = 2100.0;
     pub const PULSE_WIDTH_US: f64 = 0.08;
-    /// The receiver's own word for the scan; `scan_type` is governed free text.
+    /// `scan_type` is governed free text.
     pub const SCAN_TYPE: &'static str = "circular";
     pub const SCAN_PERIOD_S: f64 = 2.5;
     pub const BEARING_ACCURACY_DEG: f64 = 2.0;
@@ -351,7 +309,7 @@ impl Emitter {
     pub fn at(secs: f64) -> EmitterState {
         let v = Vessel::at(secs);
         let (bearing_deg, range_m) = bearing_range(RADAR, v.fix);
-        // Free-space path loss grows with range; a slow aspect wobble on top.
+        // Free-space path loss with range, plus a slow aspect wobble.
         let power_dbm =
             Self::POWER_DBM - 20.0 * (range_m / 5_000.0).log10() + 1.5 * (secs / 7.0).sin();
         EmitterState {
@@ -362,7 +320,7 @@ impl Emitter {
     }
 }
 
-/// RFC 3339 UTC to the second, the form every connector and the contract expect.
+/// RFC 3339 UTC to the second.
 pub fn rfc3339(t: SystemTime) -> String {
     let odt = time::OffsetDateTime::from(t)
         .replace_nanosecond(0)
@@ -388,26 +346,32 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_vessel_runs_her_racetrack_inside_the_radars_window() {
+    fn vessel_racetrack_stays_in_radar_window() {
         let a = Vessel::at(0.0);
         let b = Vessel::at(60.0);
         let (bearing, range) = bearing_range(a.fix, b.fix);
         assert!((bearing - Vessel::COURSE_DEG).abs() < 0.5, "{bearing}");
         assert!((range - 60.0 * Vessel::SPEED_MPS).abs() < 1.0, "{range}");
-        // The far end turns back along the reciprocal and returns to the start.
         let far = Vessel::at(Vessel::LEG_S);
         let back = Vessel::at(Vessel::LEG_S + 60.0);
-        assert!((back.course_deg - (Vessel::COURSE_DEG + 180.0) % 360.0).abs() < 1e-9);
+        assert!(
+            (back.course_deg - (Vessel::COURSE_DEG + 180.0) % 360.0).abs() < 1e-9,
+            "the far end turns back along the reciprocal"
+        );
         let (_, r) = bearing_range(far.fix, back.fix);
         assert!((r - 60.0 * Vessel::SPEED_MPS).abs() < 1.0);
         let home = Vessel::at(2.0 * Vessel::LEG_S);
-        assert!((home.fix.lat - a.fix.lat).abs() < 1e-6 && (home.fix.lon - a.fix.lon).abs() < 1e-6);
-        // Every point of the track is inside the radar's declared window, and
-        // within the range a CAT010 plot can carry, for as long as it runs.
+        assert!(
+            (home.fix.lat - a.fix.lat).abs() < 1e-6 && (home.fix.lon - a.fix.lon).abs() < 1e-6,
+            "a full lap returns to the start"
+        );
         let (_, r_end, a0, a1) = RADAR_WINDOW;
         for secs in (0..(2.0 * Vessel::LEG_S) as u32).step_by(10) {
             let (b, r) = bearing_range(RADAR, Vessel::at(secs as f64).fix);
-            assert!(r < r_end * 1852.0 && r < 65_535.0, "{secs}s: {r} m");
+            assert!(
+                r < r_end * 1852.0 && r < 65_535.0,
+                "{secs}s: {r} m outside the window or the CAT010 range field"
+            );
             assert!(b >= a0 && b <= a1, "{secs}s: bearing {b}");
         }
         let (_, r_air) = bearing_range(RADAR, Aircraft::at(Aircraft::LEG_S).fix);
@@ -418,7 +382,7 @@ mod tests {
     }
 
     #[test]
-    fn the_emitter_is_on_the_vessel_and_its_bearing_points_there() {
+    fn emitter_bearing_points_at_vessel() {
         for secs in [0.0, 30.0, 300.0] {
             let v = Vessel::at(secs);
             let e = Emitter::at(secs);
@@ -430,25 +394,27 @@ mod tests {
     }
 
     #[test]
-    fn the_uav_orbits_its_centre_and_heads_along_the_tangent() {
+    fn uav_orbits_centre_along_tangent() {
         let a = Uav::at(0.0);
         let b = Uav::at(Uav::PERIOD_S / 4.0);
         let (_, r) = bearing_range(Uav::CENTRE, a.fix);
         assert!((r - Uav::RADIUS_M).abs() < 1.0, "{r}");
-        // A quarter turn later the heading has turned a quarter.
-        assert!(((b.heading_deg - a.heading_deg + 360.0) % 360.0 - 90.0).abs() < 0.01);
+        assert!(
+            ((b.heading_deg - a.heading_deg + 360.0) % 360.0 - 90.0).abs() < 0.01,
+            "a quarter orbit turns the heading a quarter"
+        );
         let full = Uav::at(Uav::PERIOD_S);
         assert!((full.fix.lat - a.fix.lat).abs() < 1e-9);
     }
 
     #[test]
-    fn every_sensor_lags_by_its_own_latency() {
+    fn each_sensor_lags_by_its_latency() {
         let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_800_000_000);
         for s in [Sensor::Ais, Sensor::Mavlink, Sensor::Cot] {
             let lag = now.duration_since(s.observed(now)).unwrap().as_secs_f64();
-            assert!((lag - s.latency()).abs() < 1e-6, "{s:?}");
+            assert!((lag - s.latency_s()).abs() < 1e-6, "{s:?}");
         }
-        assert!(Sensor::Ais.latency() > Sensor::Mavlink.latency());
+        assert!(Sensor::Ais.latency_s() > Sensor::Mavlink.latency_s());
     }
 
     #[test]

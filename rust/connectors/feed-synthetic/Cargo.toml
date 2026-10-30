@@ -8,7 +8,7 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 publish = false
-description = "One scenario, six sensors: a synthetic multi-sensor feed a fusion partner can build against, on every connector's real wire format"
+description = "One scenario on every connector's real wire format: a synthetic multi-sensor feed a fusion partner can build against"
 
 [[bin]]
 name = "ajar-feed-synthetic"
@@ -26,8 +26,7 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 
 [dev-dependencies]
-# Every generator is proven against the decoder that will read it, in this
-# workspace, so the two cannot drift apart without a test failing.
+# The decoders each generator is tested against.
 ajar-adsb = { path = "../adsb" }
 ajar-ais-nmea = { path = "../ais-nmea" }
 ajar-asterix = { path = "../asterix" }

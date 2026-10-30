@@ -1,13 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
-//! The counter-UAS radar: a SAPIENT (BSI Flex 335) edge node at the coastal
-//! radar site, reporting the uncrewed aircraft by range and bearing, as a
-//! fusion node's output looks on the wire.
-//!
-//! The node registers, reports its status with its position every five
-//! seconds, and reports the aircraft once a second as a track. The same
-//! aircraft flies on MAVLink, so a fusion consumer gets the association work:
-//! one object, seen by its own autopilot and by a radar that does not know
-//! what it is. Every message is framed as the standard puts it on TCP.
+//! SAPIENT (BSI Flex 335): a counter-UAS radar node at the coastal radar site,
+//! read by the `sapient` connector. The node registers, reports its status and
+//! position, and reports the uncrewed aircraft by range and bearing as a track.
 
 use std::time::SystemTime;
 
@@ -16,11 +10,10 @@ use ajar_sapient_wire::v2::{self, detection_report, registration, status_report}
 
 use crate::scenario::{bearing_range, UavState, RADAR, RADAR_ALT_M};
 
-/// The radar node's identity, fixed so a consumer can name it.
+/// Fixed so a consumer can name the node.
 pub const NODE_ID: &str = "c0a5f1e2-6b3d-4f8a-9c1e-2d7b4a6f8e01";
-/// The one object the radar follows.
 pub const OBJECT_ID: &str = "01J9A0SYNTHUAV000000000001";
-/// Status reports per detection reports, and registrations per status.
+/// Detection ticks per status report and per registration.
 pub const STATUS_EVERY: u64 = 5;
 pub const REGISTER_EVERY: u64 = 60;
 
@@ -43,19 +36,15 @@ fn ulid(observed: SystemTime, seq: u64) -> String {
     String::from_utf8(out.to_vec()).expect("ASCII")
 }
 
-fn timestamp(observed: SystemTime) -> prost_types::Timestamp {
-    let d = observed
+fn envelope(observed: SystemTime, content: Content) -> Vec<u8> {
+    let since_epoch = observed
         .duration_since(SystemTime::UNIX_EPOCH)
         .unwrap_or_default();
-    prost_types::Timestamp {
-        seconds: d.as_secs() as i64,
-        nanos: d.subsec_nanos() as i32,
-    }
-}
-
-fn envelope(observed: SystemTime, content: Content) -> Vec<u8> {
     let m = v2::SapientMessage {
-        timestamp: Some(timestamp(observed)),
+        timestamp: Some(prost_types::Timestamp {
+            seconds: since_epoch.as_secs() as i64,
+            nanos: since_epoch.subsec_nanos() as i32,
+        }),
         node_id: Some(NODE_ID.into()),
         destination_id: None,
         content: Some(content),
@@ -236,7 +225,8 @@ pub fn detection(u: &UavState, observed: SystemTime, seq: u64) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::scenario::Uav;
+    use crate::fixtures::{num, observed, OBSERVED};
+    use crate::scenario::{Uav, M_PER_DEG_LAT};
     use ajar_connector_common::{Enrichment, FrameParser};
     use ajar_sapient::SapientParser;
 
@@ -249,9 +239,9 @@ mod tests {
     }
 
     #[test]
-    fn the_connector_places_the_radar_track_where_the_scenario_put_the_aircraft() {
+    fn radar_track_lands_on_the_aircraft() {
         let p = SapientParser::new("sapient-1", Enrichment::default());
-        let now = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_780_000_000);
+        let now = observed();
         let reg = parse(&p, &registration(now));
         assert_eq!(reg.entity_type, "sapient:sensor-status");
         let st = parse(&p, &status(now, 1, true));
@@ -262,35 +252,28 @@ mod tests {
         let ev = parse(&p, &detection(&u, now, 2));
         assert_eq!(ev.entity_type, "sapient:track");
         let loc = ev.location.as_ref().expect("geolocated against the radar");
-        // Flat-earth scenario geometry against the connector's spherical
-        // geolocation, at under a kilometre: within a couple of metres.
-        let dlat = (loc.latitude - u.fix.lat) * crate::scenario::M_PER_DEG_LAT;
-        let dlon = (loc.longitude - u.fix.lon)
-            * crate::scenario::M_PER_DEG_LAT
-            * u.fix.lat.to_radians().cos();
-        assert!(dlat.hypot(dlon) < 3.0, "{} m off", dlat.hypot(dlon));
+        let dlat = (loc.latitude - u.fix.lat) * M_PER_DEG_LAT;
+        let dlon = (loc.longitude - u.fix.lon) * M_PER_DEG_LAT * u.fix.lat.to_radians().cos();
+        assert!(
+            dlat.hypot(dlon) < 3.0,
+            "{} m off: flat-earth scenario vs spherical geolocation",
+            dlat.hypot(dlon)
+        );
         assert!((loc.altitude_m - u.alt_m).abs() < 1.0, "{}", loc.altitude_m);
-        let speed: f64 = ev
-            .attributes
-            .iter()
-            .find(|a| a.key == "speed")
-            .and_then(|a| a.value.parse().ok())
-            .expect("speed");
-        assert!((speed - u.speed_mps).abs() < 0.01);
+        assert!((num(&ev, "speed") - u.speed_mps).abs() < 0.01);
         assert!(ev
             .attributes
             .iter()
             .any(|a| a.key == "sapient_classification" && a.value == "UAV"));
-        assert_eq!(ev.timestamp, "2026-05-28T20:26:40Z");
+        assert_eq!(ev.timestamp, OBSERVED);
     }
 
     #[test]
-    fn identifiers_have_the_shape_the_standard_requires() {
-        let now = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_780_000_000);
-        let id = ulid(now, 7);
+    fn ulid_has_standard_shape() {
+        let id = ulid(observed(), 7);
         assert_eq!(id.len(), 26);
         assert!(id.bytes().all(|b| ALPHABET.contains(&b)));
-        assert_ne!(ulid(now, 8), id);
+        assert_ne!(ulid(observed(), 8), id);
         assert_eq!(OBJECT_ID.len(), 26);
     }
 }
