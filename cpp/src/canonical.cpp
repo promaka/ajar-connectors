@@ -9,16 +9,17 @@ namespace ajar {
 
 std::string canonical_bytes(const Event& event) {
   std::string out;
+  // cos and zos flush into `out` when this scope ends.
   {
     google::protobuf::io::StringOutputStream zos(&out);
     google::protobuf::io::CodedOutputStream cos(&zos);
-    // Deterministic = ascending tag order, map keys sorted (no maps here).
-    // The same wire shape prost (Rust) and Go's Deterministic marshaller emit.
+    // Ascending tag order, the same wire shape prost (Rust) and Go's
+    // Deterministic marshaller emit.
     cos.SetSerializationDeterministic(true);
     if (!event.SerializeToCodedStream(&cos)) {
       out.clear();
     }
-  }  // cos/zos flush into `out` on destruction
+  }
   return out;
 }
 

@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-// THE gate (C++): for every corpus fixture, reproduce the same canonicalSha256
-// + sealedSha256 the Rust and Go SDKs do, from the SAME
-// vendor/contract/vectors.json. Exit 0 iff all 12 hashes match.
+// Checks that the C++ SDK reproduces the canonicalSha256 and sealedSha256 of
+// every corpus fixture in vendor/contract/vectors.json. Exits 0 iff all match.
 
 #include <array>
 #include <cstdint>
@@ -86,9 +85,9 @@ std::string base64_decode(const std::string& in) {
   return out;
 }
 
-// Build a canonical Event from a corpus fixture JSON, verbatim (including
-// received_at, which a live connector leaves for Ajar to stamp) — bypassing
-// EventBuilder so byte-exact replay uses the raw fixture values.
+// Builds an Event from a corpus fixture verbatim, including received_at (which
+// a live connector leaves for Ajar to stamp), bypassing EventBuilder so the
+// bytes match the raw fixture values.
 ajar::Event fixture_to_event(const mini_json::Value& f) {
   ajar::Event e;
   e.set_schema_version(f.at("schemaVersion").str);
@@ -138,7 +137,7 @@ int main() {
     const auto seed = hex32(seed_hex);
     const ajar::SigningKey key = ajar::SigningKey::from_seed(seed);
 
-    // 1. verifying key derives from the TEST seed.
+    // The verifying key derives from the test seed.
     std::string got_vk;
     {
       static const char* d = "0123456789abcdef";
@@ -155,7 +154,7 @@ int main() {
       std::printf("ok   verifying key derives from TEST seed\n");
     }
 
-    // 2. each fixture: canonical + sealed hashes.
+    // Each fixture's canonical and sealed hashes.
     const mini_json::Value& v = vectors.at("vectors");
     for (const auto& kv : v.object) {
       const std::string& name = kv.first;

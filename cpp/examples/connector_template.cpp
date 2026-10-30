@@ -1,21 +1,24 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Connector template (C++): a copy-me starting point for a new Ajar connector.
-// Make the two edits marked EDIT 1 and EDIT 2 below, then build and run.
+// Make the two edits marked EDIT 1 and EDIT 2, then build and run.
 //
 // Build (from the repo root):
 //   cmake -S cpp -B cpp/build -DCMAKE_BUILD_TYPE=Release && cmake --build cpp/build -j
 //
-// See a sealed event right now — no key, no NATS, no feed. The demo input is one
+// Print a sealed event without a key, NATS or a feed. The demo input is one
 // record per line, "lat lon alt_m quality":
 //   echo "26.4 50.9 11000 0.9" | ./cpp/build/connector_template --dry-run
 //
-// Run for real (key from scripts/gen-connector-key.sh; mTLS materials + endpoint
-// issued by your operator). Publishing needs the cnats client, auto-detected by
-// CMake; without it the binary still builds and runs in --dry-run:
+// Run against NATS (key from scripts/gen-connector-key.sh; mTLS materials and
+// endpoint from your operator). Publishing needs the cnats client, detected by
+// CMake; without it the binary only runs in --dry-run:
 //   AJAR_TLS_CA=ca.pem AJAR_TLS_CERT=client.pem AJAR_TLS_KEY=client.key \
 //   AJAR_SIGNING_SEED=connector.seed AJAR_SOURCE_ID=acme-radar-1 \
 //   NATS_URL=tls://nats.you.mil:443  ./cpp/build/connector_template
+//
+// A malformed or unmappable record is logged and skipped, so one bad input cannot
+// stop the connector.
 
 #include <array>
 #include <cstdint>
@@ -37,10 +40,7 @@
 
 namespace {
 
-// ╔═══════════════════════════════════════════════════════════════════════════╗
-// ║ EDIT 1 — describe ONE record from your feed, and how to parse one line.   ║
-// ║ The demo reads "lat lon alt_m quality"; swap in YOUR feed's format.       ║
-// ╚═══════════════════════════════════════════════════════════════════════════╝
+// EDIT 1: one record from your feed and how to parse a line of it.
 struct MyRecord {
   double lat = 0, lon = 0, alt_m = 0, quality = 0;
 };
@@ -50,11 +50,8 @@ bool parse_record(const std::string& line, MyRecord& out) {
   return static_cast<bool>(is >> out.lat >> out.lon >> out.alt_m >> out.quality);
 }
 
-// ╔═══════════════════════════════════════════════════════════════════════════╗
-// ║ EDIT 2 — map your record into a canonical Event.                          ║
-// ║ Use the entity_type your operator assigned. Add .attribute(k, v) only for ║
-// ║ attributes that type's ontology schema defines.                          ║
-// ╚═══════════════════════════════════════════════════════════════════════════╝
+// EDIT 2: map a record to an Event. Use the entity_type your operator assigned,
+// and add .attribute(k, v) for attributes its ontology declares.
 ajar::Event to_event(const std::string& source_id, const MyRecord& r) {
   return ajar::EventBuilder(source_id, "mim:aircraft")
       .new_id()
@@ -64,17 +61,13 @@ ajar::Event to_event(const std::string& source_id, const MyRecord& r) {
       .build();
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// You usually don't need to touch anything below this line.
-// ─────────────────────────────────────────────────────────────────────────────
-
 std::string env_or(const char* key, const char* def) {
   const char* v = std::getenv(key);
   return (v && *v) ? std::string(v) : std::string(def);
 }
 
-// Load the 32-byte seed from the file named by AJAR_SIGNING_SEED; in --dry-run
-// with none set, fall back to a dev seed (never used for real publishing).
+// Loads the seed from the file named by AJAR_SIGNING_SEED; in --dry-run with
+// none set, mints a random ephemeral seed.
 std::array<std::uint8_t, 32> load_seed(bool dry_run) {
   const char* path = std::getenv("AJAR_SIGNING_SEED");
   if (path && *path) {
@@ -96,6 +89,8 @@ std::array<std::uint8_t, 32> load_seed(bool dry_run) {
 
 }  // namespace
 
+// Usually no edits are needed below here.
+
 int main(int argc, char** argv) {
   bool dry_run = false;
   bool check_only = false;
@@ -104,10 +99,8 @@ int main(int argc, char** argv) {
     if (std::strcmp(argv[i], "--check") == 0) check_only = true;
   }
 
-  // --check validates what EDIT 2 actually builds against the vendored
-  // ontology, then exits — no key, no feed, no network. Run it in CI so a
-  // mapping mistake fails the build instead of publishing events Ajar
-  // rejects or cannot govern.
+  // --check validates what to_event builds against the vendored ontology and
+  // exits, with no key, feed or network; run it in CI.
   if (check_only) {
     const ajar::Event probe = to_event("check", MyRecord{});
     const auto faults = ajar::validate(probe);
@@ -133,7 +126,7 @@ int main(int argc, char** argv) {
     natsOptions* opts = nullptr;
     natsOptions_Create(&opts);
     natsOptions_SetURL(opts, nats_url.c_str());
-    // mTLS when AJAR_TLS_CA/CERT/KEY are all set; plaintext for local dev.
+    // mTLS when AJAR_TLS_CA/CERT/KEY are all set, else plaintext.
     const char* ca = std::getenv("AJAR_TLS_CA");
     const char* cert = std::getenv("AJAR_TLS_CERT");
     const char* keyf = std::getenv("AJAR_TLS_KEY");
@@ -162,12 +155,11 @@ int main(int argc, char** argv) {
   std::fprintf(stderr, "[connector] source_id=%s  subject=%s%s\n", source_id.c_str(),
                subject.c_str(), dry_run ? "  [dry-run]" : "");
 
-  // Your feed: by default, one record per line on stdin ("lat lon alt_m quality").
-  // Swap this loop for your socket / file / API / serial port — the rest stays.
+  // EDIT: the feed is one record per line on stdin; swap this loop for your
+  // socket, file, API or serial port.
   std::string line;
   while (std::getline(std::cin, line)) {
     if (line.empty()) continue;
-    // Resilient: a bad record is logged and skipped, never fatal.
     MyRecord rec;
     if (!parse_record(line, rec)) {
       std::fprintf(stderr, "[connector] skip: malformed record: %s\n", line.c_str());

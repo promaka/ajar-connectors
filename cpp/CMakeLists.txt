@@ -12,7 +12,7 @@ endif()
 add_compile_options(-Wall -Wextra)
 
 # Prefer the modern CONFIG package (macOS/brew, recent Linux); fall back to the
-# CMake FindProtobuf module (older apt protobuf) so CI is portable.
+# CMake FindProtobuf module (older apt protobuf).
 find_package(protobuf CONFIG QUIET)
 if(protobuf_FOUND)
   set(AJAR_PROTOBUF_LIB protobuf::libprotobuf)
@@ -42,9 +42,8 @@ add_custom_command(
   DEPENDS ${PROTO}
   COMMENT "Generating C++ from vendored event.proto")
 
-# Embed the vendored ontology so mapping validation is offline and cannot
-# drift from the contract this build shipped with. Configure-time is right:
-# the file is hash-pinned and a change to it must rebuild the library.
+# Embed the vendored ontology so mapping validation is offline. A change to the
+# hash-pinned file reconfigures and rebuilds the library.
 file(READ ${CONTRACT_DIR}/ontology.json AJAR_ONTOLOGY_HEX HEX)
 string(REGEX REPLACE "([0-9a-f][0-9a-f])" "0x\\1," AJAR_ONTOLOGY_BYTES "${AJAR_ONTOLOGY_HEX}")
 configure_file(src/ontology_data.h.in ${GEN_DIR}/ontology_data.h @ONLY)
@@ -77,7 +76,7 @@ target_include_directories(ajar_connector PUBLIC
   $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
 target_link_libraries(ajar_connector PUBLIC ${AJAR_PROTOBUF_LIB} ajar_crypto)
 # Stable alias so in-tree consumers (add_subdirectory) and installed consumers
-# (find_package) use the SAME name: ajar_connector::ajar_connector.
+# (find_package) use the same name: ajar_connector::ajar_connector.
 add_library(ajar_connector::ajar_connector ALIAS ajar_connector)
 
 # Reference connector example.
@@ -107,9 +106,8 @@ target_link_libraries(consumer_test PRIVATE ajar_connector)
 add_executable(cot_roundtrip examples/cot_roundtrip.cpp)
 target_link_libraries(cot_roundtrip PRIVATE cot_connector)
 
-# Streaming example — uses the real NATS C client (cnats). Optional: only built
-# when cnats is found, so the SDK + conformance build needs no NATS client. The
-# transport dep is linked into this example only; the SDK stays transport-free.
+# Streaming example over the NATS C client (cnats), built only when cnats is
+# found. Only this example links it.
 find_package(cnats CONFIG QUIET)
 if(cnats_FOUND)
   # cnats' imported target pulls in OpenSSL + Threads; make those targets exist.
@@ -124,8 +122,8 @@ else()
 endif()
 
 # Minimal copy-me template (the C++ counterpart of rust/examples/connector-template).
-# Built ALWAYS so `--dry-run` works with no system NATS client; the publish path is
-# compiled in only when cnats is present (AJAR_WITH_NATS).
+# Always built, so `--dry-run` works without cnats; the publish path is compiled
+# in only when cnats is present (AJAR_WITH_NATS).
 add_executable(connector_template examples/connector_template.cpp)
 target_link_libraries(connector_template PRIVATE ajar_connector)
 if(cnats_FOUND)
@@ -133,10 +131,10 @@ if(cnats_FOUND)
   target_link_libraries(connector_template PRIVATE cnats::nats)
 endif()
 
-# --- Embedded (nanopb, no-heap) path -----------------------------------------
-# The nanopb runtime + generated static types. Links NO libprotobuf: this is the
-# radar/effector-controller path. event.pb.c is committed (regenerate with
-# scripts/gen-nanopb.sh); a build needs only the vendored runtime.
+# Embedded path: the nanopb runtime and generated static types, without
+# libprotobuf, for radar and effector controllers. event.pb.c is committed
+# (regenerate with scripts/gen-nanopb.sh); a build needs only the vendored
+# runtime.
 add_library(ajar_nanopb STATIC
   vendor/nanopb/pb_common.c
   vendor/nanopb/pb_encode.c
@@ -162,8 +160,7 @@ if(cnats_FOUND)
   add_test(NAME synthetic_radar_dry_run COMMAND synthetic_radar --dry-run --ticks 2)
 endif()
 
-# --- Install + find_package support ------------------------------------------
-# Lets a vendor consume the SDK idiomatically from their own CMake project:
+# Install and find_package support, for a vendor's own CMake project:
 #   find_package(ajar_connector CONFIG REQUIRED)
 #   target_link_libraries(my_connector PRIVATE ajar_connector::ajar_connector)
 # (See cpp/README.md. In-tree `add_subdirectory()` works without installing.)
@@ -177,7 +174,7 @@ install(TARGETS ajar_connector ajar_crypto
   INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 
 # Public API header (include/ajar/connector.hpp), the generated protobuf header
-# the API exposes, and the vendored crypto headers — all flattened under the
+# the API exposes, and the vendored crypto headers, flattened under the
 # install include dir so the INSTALL_INTERFACE include path resolves them.
 install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 install(FILES ${GEN_DIR}/event.pb.h DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})

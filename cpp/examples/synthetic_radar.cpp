@@ -2,17 +2,8 @@
 //
 // synthetic_radar: stream synthetic mim:aircraft tracks into a locally running
 // Ajar Core so a developer can watch the full path
-// connector -> NATS -> Core -> audit + Postgres.
-//
-// The shape every connector follows is the three steps in the loop below:
-//   1. normalize a native observation into a canonical Event (here we synthesise
-//      it; a real radar connector would parse a vendor frame),
-//   2. seal it (detached Ed25519 signature ++ canonical bytes),
-//   3. publish the sealed bytes to the connector's NATS ingest subject.
-//
-// This is a clearly-marked example: it carries a dev-only signing seed and picks
-// a transport (NATS, via the real nats.c / cnats client). The SDK itself stays
-// transport-free — the NATS client is linked only into this example.
+// connector -> NATS -> Core -> audit + Postgres. Each tick it builds, seals and
+// publishes one event per track over cnats, which only this example links.
 //
 // Run:
 //   ./synthetic_radar                 # publish to nats://127.0.0.1:4222
@@ -42,9 +33,7 @@
 namespace {
 
 // The seed file named by AJAR_SIGNING_SEED (the demo stack mints one), or an
-// ephemeral throwaway key for this run. No fixed key value exists in this
-// repository: an unregistered ephemeral key signs events a registry would
-// refuse, which is the honest default for an example.
+// ephemeral seed for this run, whose events a registry refuses.
 std::array<std::uint8_t, 32> load_seed() {
   std::array<std::uint8_t, 32> s{};
   if (const char* path = std::getenv("AJAR_SIGNING_SEED")) {
@@ -59,27 +48,25 @@ std::array<std::uint8_t, 32> load_seed() {
   return s;
 }
 
-// A synthetic platform moving over a region (around the Gulf, matching the
-// corpus fixtures). `entity_type` is a canonical MIM type the seed ontology
-// already knows (air / surface / ground), so a mixed multi-domain picture flows
-// through with no ontology change. heading in radians; speed_deg is deg per tick.
+// A synthetic platform moving over a region around the Gulf, matching the
+// corpus fixtures. heading is in radians; speed_deg is degrees per tick.
 struct Track {
-  const char* entity_type;  // mim:aircraft | mim:surface-vessel | mim:ground-vehicle
-  const char* affiliation;  // friendly | hostile | neutral | "" (unknown)
+  // mim:aircraft, mim:surface-vessel or mim:ground-vehicle.
+  const char* entity_type;
+  // friendly, hostile, neutral, or "" for unknown.
+  const char* affiliation;
   const char* label;
   double lat, lon, alt_m, heading, speed_deg;
-  // Stable per-track id (set once at startup). Reused as the event id every tick
-  // so a C2 (ATAK/iTAK) updates ONE moving marker per track instead of piling up
-  // a new contact each tick. (A production connector would model the track id as
-  // a dedicated attribute; here we reuse the event id for a clean demo picture.)
+  // Per-track id, set once at startup and reused as the event id every tick so
+  // a C2 (ATAK/iTAK) moves one marker per track instead of adding a contact.
+  // A demo shortcut: real connectors mint a fresh id and put this in metadata.
   std::string uid;
 
   void advance() {
     lat += std::cos(heading) * speed_deg;
     lon += std::sin(heading) * speed_deg;
-    // Bounce inside the region lat [25, 28], lon [49, 52]. A horizontal (lat) wall
-    // reflects the north-south component (heading -> PI - heading); a vertical
-    // (lon) wall reflects the east-west component (heading -> -heading).
+    // Bounce inside the region. A lat wall reflects the north-south component
+    // (heading -> PI - heading); a lon wall the east-west one (heading -> -heading).
     if (lat < 25.0 || lat > 28.0) {
       heading = M_PI - heading;
       lat = std::max(25.0, std::min(28.0, lat));
@@ -113,12 +100,10 @@ int main(int argc, char** argv) {
   const std::string prefix = env_or("AJAR_INGEST_PREFIX", "ajar.ingest");
   const std::string nats_url = env_or("NATS_URL", "nats://127.0.0.1:4222");
 
-  // source must equal the Core's AJAR_SOURCE_ID; the subject is the one the
-  // Core's ingest is listening on.
+  // source_id must equal Core's AJAR_SOURCE_ID; Core's ingest listens on subject.
   const std::string subject = prefix + "." + source_id;
   const ajar::SigningKey key = ajar::SigningKey::from_seed(load_seed());
 
-  // Connect the real NATS client (skipped in --dry-run, which needs no infra).
   natsConnection* conn = nullptr;
   if (dry_run) {
     std::fprintf(stderr, "[synthetic-radar] --dry-run: building + sealing events, not publishing\n");
@@ -127,9 +112,8 @@ int main(int argc, char** argv) {
     natsOptions* opts = nullptr;
     natsOptions_Create(&opts);
     natsOptions_SetURL(opts, nats_url.c_str());
-    // mTLS when AJAR_TLS_CA/CERT/KEY are all set (production; client-cert
-    // CN = source_id, mounted by the Helm chart under /etc/ajar/tls). Unset ->
-    // plaintext for local dev.
+    // mTLS when AJAR_TLS_CA/CERT/KEY are all set (the client-cert CN is the
+    // source_id; the Helm chart mounts them under /etc/ajar/tls), else plaintext.
     const char* ca = std::getenv("AJAR_TLS_CA");
     const char* cert = std::getenv("AJAR_TLS_CERT");
     const char* keyf = std::getenv("AJAR_TLS_KEY");
@@ -157,18 +141,12 @@ int main(int argc, char** argv) {
                "[synthetic-radar] Ctrl-C to stop.\n",
                source_id.c_str(), subject.c_str());
 
-  // A mixed multi-domain picture: air, surface, and ground over the Gulf. All
-  // three types exist in the seed ontology, so this flows through unchanged and
-  // renders as distinct air/sea/ground icons in ATAK/iTAK.
-  // A mixed multi-domain, mixed-affiliation picture. One track is left unknown
-  // (empty affiliation) on purpose — honest: a raw sensor hit may carry no IFF.
-  // ===== EDIT (data source) =====================================================
-  // Replace this synthetic track list + the t.advance() loop below with reads from
-  // YOUR feed (a socket / file / API / serial port), one record per iteration.
-  // ==============================================================================
+  // EDIT: replace this track list and the t.advance() loop below with reads
+  // from your feed (socket, file, API or serial), one record per iteration.
+  // Air, surface and ground tracks of mixed affiliation; AJX-02 has none, as a
+  // raw sensor hit may carry no IFF.
   std::vector<Track> tracks = {
-      // Air (alt in metres) — fastest.
-      // `uid` is deliberately empty here and assigned once at startup below.
+      // Air, fastest. uid is assigned below.
       {"mim:aircraft", "friendly", "AJX-01", 26.4, 50.9, 11000, 0.3 * M_PI, 0.020, {}},
       {"mim:aircraft", "", "AJX-02", 25.6, 51.4, 9500, 1.1 * M_PI, 0.018, {}},
       {"mim:aircraft", "hostile", "AJX-03", 27.2, 49.7, 12500, 1.7 * M_PI, 0.024, {}},
@@ -181,7 +159,7 @@ int main(int argc, char** argv) {
       {"mim:ground-vehicle", "hostile", "GND-02", 27.0, 50.2, 15, 1.9 * M_PI, 0.007, {}},
   };
 
-  // Assign each track a stable UUIDv7 once, up front (reused every tick below).
+  // One UUIDv7 per track, reused every tick.
   for (Track& t : tracks) {
     t.uid = ajar::EventBuilder(source_id, t.entity_type)
                 .new_id()
@@ -196,22 +174,18 @@ int main(int argc, char** argv) {
     for (Track& t : tracks) {
       t.advance();
 
-      // ===== EDIT (the mapping) ================================================
-      // 1. Normalize -> canonical Event. This is the only Ajar-specific code you
-      //    write: map one of YOUR records into an Event. Use the entity_type(s)
-      //    your operator registered, and add .attribute(k, v) ONLY for attributes
-      //    that type's ontology schema declares (else Core rejects it).
-      // =========================================================================
+      // 1. Normalize (synthesised here). EDIT: map one record to an Event. Use the
+      // entity_type your operator registered, and add .attribute(k, v) for
+      // attributes its ontology declares.
       ajar::Event event;
       try {
         ajar::EventBuilder builder(source_id, t.entity_type);
-        builder.id(t.uid)  // STABLE per-track id -> one moving marker per track
+        builder.id(t.uid)
             .now()
             .location(t.lat, t.lon, t.alt_m)
             .confidence(0.9)
             .policy_tag("air-defence");
-        // Affiliation is a governed attribute (seed ontology declares it optional);
-        // it drives the friend/foe colour the C2 renders. Omitted -> unknown.
+        // A track with no affiliation emits no attribute.
         if (t.affiliation && *t.affiliation) {
           builder.attribute("affiliation", t.affiliation);
         }
@@ -222,11 +196,11 @@ int main(int argc, char** argv) {
         break;
       }
 
-      // 2. Seal: detached Ed25519 signature ++ canonical bytes.
+      // 2. Seal.
       const std::string canonical = ajar::canonical_bytes(event);
       const std::vector<std::uint8_t> sealed = ajar::seal(canonical, key);
 
-      // 3. Publish the sealed bytes to the ingest subject.
+      // 3. Publish.
       if (conn != nullptr) {
         natsStatus st = natsConnection_Publish(conn, subject.c_str(), sealed.data(),
                                                static_cast<int>(sealed.size()));
@@ -243,8 +217,7 @@ int main(int argc, char** argv) {
     }
     if (rc != 0) break;
 
-    // Ensure messages are on the wire before we idle (and before exit in the
-    // bounded --ticks case).
+    // Flush before idling, and before exiting after --ticks.
     if (conn != nullptr) natsConnection_Flush(conn);
 
     if (max_ticks > 0 && tick + 1 >= max_ticks) break;

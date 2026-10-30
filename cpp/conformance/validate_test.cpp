@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-// Mapping validation against the vendored ontology: the same cases the Rust
-// runtime's tests pin, so the two implementations cannot quietly diverge on
-// what counts as a fault.
+// Mapping validation against the vendored ontology, with the same cases as the
+// Rust runtime's tests.
 
 #include <ajar/connector.hpp>
 
@@ -37,9 +36,9 @@ int main() {
         "a correct mapping passes");
 
   // The ontology lists every attribute a type allows, including the ones it
-  // shares with its parent, and Core reads only that list; so the deliberate
-  // narrowings are enforced: a sensor has no speed though its parent equipment
-  // does, and only a bare mim:object carries environment.
+  // shares with its parent, and Core reads only that list: a sensor has no
+  // speed though its parent equipment does, and only a bare mim:object carries
+  // environment.
   check(validate(mapping("mim:aircraft", {"hostility", "speed"})).empty(),
         "an aircraft lists hostility and speed itself");
   check(validate(mapping("mim:equipment", {"speed"})).empty(), "equipment has speed");
@@ -86,9 +85,8 @@ int main() {
     if (f.size() == 1)
       for (const auto& v : f[0].allowed)
         if (v == "Friend") in_allowed = true;
-    // "friendly" is a different word, not a case slip of "Friend", so no
-    // suggestion is correct; the allowed list is the answer. (A true case slip
-    // like "friend" would get the suggestion.)
+    // "friendly" is a different word from "Friend", so there is no case
+    // suggestion, only the allowed list.
     check(f.size() == 1 && f[0].kind == ValidationFault::Kind::NotInVocabulary &&
               f[0].value == "friendly" && in_allowed,
           "a lowercase hostility is answered with the valid values");
@@ -107,7 +105,7 @@ int main() {
         "every fault is reported in one call");
 
   {
-    // The event overload checks what a mapping actually built.
+    // The event overload checks what a mapping built.
     const ajar::Event event = ajar::EventBuilder("acme-radar-1", "mim:aircraft")
                                   .new_id()
                                   .now()

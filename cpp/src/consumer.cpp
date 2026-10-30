@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-// The security-critical middle of a consumer, transport-free: raw message in,
-// verified decoded event out. Everything that must not be skippable — the
-// Ed25519 check under the egress key, the decode, the guards, the counters —
-// lives here; the subscription loop stays the embedder's.
+// The transport-free part of a consumer: raw message in, verified decoded event
+// out. The Ed25519 check under the egress key, the decode, the guards and the
+// counters live here; the subscription loop is the embedder's.
 
 #include <ajar/connector.hpp>
 

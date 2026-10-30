@@ -1,10 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-// Mapping validation against the vendored ontology. Mirrors the Rust runtime's
-// checks so an embedder linking this SDK gets the same boot-time protection a
-// packaged connector has: unknown entity type, ungoverned attribute, or a value
-// outside a controlled vocabulary — each reported with the correction when the
-// mistake is a case error, and all of them in one call.
+// Mapping validation against the vendored ontology, mirroring the Rust
+// runtime's startup checks: unknown entity type, ungoverned attribute, or a
+// value outside a controlled vocabulary, all reported in one call, with the
+// correction when the mistake is a case error.
 
 #include <ajar/connector.hpp>
 
@@ -21,11 +20,13 @@ namespace {
 
 struct AttrDef {
   std::string name;
-  std::vector<std::string> values;  // empty: no controlled vocabulary
+  // Empty: no controlled vocabulary.
+  std::vector<std::string> values;
 };
 
 struct TypeDef {
-  std::string parent;  // empty at the root
+  // Empty at the root.
+  std::string parent;
   std::vector<AttrDef> attributes;
 };
 
@@ -67,8 +68,8 @@ std::string lower(const std::string& s) {
   return out;
 }
 
-// The same name in a different case is the mistake that costs most, so it is
-// answered with the correction rather than only the complaint.
+// The candidate equal to needle ignoring case, or empty, so a fault can name
+// the correct spelling.
 template <typename Range>
 std::string case_match(const std::string& needle, const Range& candidates) {
   const std::string want = lower(needle);
@@ -127,11 +128,8 @@ std::vector<ValidationFault> validate(const DeclaredMapping& mapping) {
     return faults;
   }
 
-  // Attributes are NOT inherited: Core looks an attribute up on the event's own
-  // entity type, so the type's own list is the whole truth and the narrowing in
-  // it is deliberate (a sensor has no speed though its parent equipment does;
-  // only a bare mim:object carries environment). A validator that walked the
-  // parent chain would accept mappings Core does not govern.
+  // Attributes are not inherited: Core looks an attribute up on the event's own
+  // entity type only (a sensor has no speed though its parent equipment does).
   std::map<std::string, const AttrDef*> governed;
   for (const auto& a : it->second.attributes) governed.emplace(a.name, &a);
 
@@ -139,8 +137,7 @@ std::vector<ValidationFault> validate(const DeclaredMapping& mapping) {
   names.reserve(governed.size());
   for (const auto& kv : governed) names.push_back(kv.first);
 
-  // The parent chain is read for one purpose: so the fault can name where an
-  // attribute is governed when it exists further up.
+  // The parent chain only names where an attribute is governed further up.
   const auto governed_on = [&](const std::string& attr) -> std::string {
     for (const TypeDef* t = &it->second; !t->parent.empty();) {
       const auto up = ont.types.find(t->parent);

@@ -10,7 +10,8 @@ namespace ajar {
 
 SigningKey SigningKey::from_seed(const std::array<std::uint8_t, 32>& seed) {
   SigningKey key;
-  std::array<std::uint8_t, 32> seed_copy = seed;  // key_pair wipes its seed arg
+  // crypto_ed25519_key_pair wipes its seed argument.
+  std::array<std::uint8_t, 32> seed_copy = seed;
   crypto_ed25519_key_pair(key.secret_.data(), key.public_.data(), seed_copy.data());
   return key;
 }
