@@ -1,35 +1,26 @@
 # SPDX-License-Identifier: Apache-2.0
 #
-# Governed events out of Ajar, delivered as consumer-shaped JSON. Copy, adjust:
-#   ajar-generic-egress ./generic-egress.toml
+# Governed events out of Ajar, delivered as consumer-shaped JSON over HTTP.
+# Run: ajar-generic-egress ./generic-egress.toml
 
-# Ajar's NATS endpoint; production is tls://… with this consumer's
-# subscribe-only client certificate (AJAR_TLS_* env, CN = registered identity).
+# tls:// in production, with this consumer's subscribe-only identity in AJAR_TLS_*.
 nats_url = "tls://ajar.example.mil:4222"
-
-# Governed egress subject: ajar.egress.<format>.<source>, or a wildcard under
-# it. Must sit under ajar.egress. — the effector cue channel is structurally
-# out of reach. The certificate decides what this consumer may actually see.
+# Must start with ajar.egress.; the certificate decides what is actually seen.
 subject = "ajar.egress.signed.>"
-
-# Core's egress verifying key, from the operator's handover pack (64-char hex,
-# or a path to the key file). REQUIRED: every payload is verified under this
-# key before it is mapped or delivered. There is no way to switch this off.
+# Core's egress verifying key from the handover pack: 64-char hex or a key file path.
 egress_verifying_key = "<64-char hex from the handover pack>"
 
 [deliver]
-# Each governed event is one HTTP POST of one JSON object.
+# One HTTP POST of one JSON object per event.
 url = "https://consumer.example.com/ajar/events"
-# attempts = 2                       # bounded; failures are counted, never silent
+# Attempts per event before it is counted as dropped.
+# attempts = 2
 [deliver.headers]
 Authorization = "Bearer <token the consumer issued>"
 
-# Consumer field name = event path. Paths: id, source_id, entity_type,
-# timestamp, lat, lon, alt_m, confidence, policy_tags, attr:<name>, meta:<name>.
-#
-# Three things are in EVERY delivered object regardless of this mapping: the
-# event id, the policy tags (markings), and the governance block. Mapping their
-# paths renames them; nothing removes them.
+# Consumer field name = event path: id, source_id, entity_type, timestamp, lat,
+# lon, alt_m, confidence, policy_tags, attr:<name>, meta:<name>. The event id,
+# policy tags and governance block are always delivered; mapping renames them.
 [mapping]
 trackId = "meta:source_uid"
 kind = "entity_type"
@@ -38,15 +29,9 @@ longitude = "lon"
 speedMs = "attr:speed"
 marking = "policy_tags"
 
-# Governed content the mapping does not name: "include" (delivered under
-# `unmapped`) or "refuse" (event rejected and counted). No silent drop exists.
+# Content the mapping does not name: "include" (under `unmapped`) or "refuse" (event rejected).
 # unmapped = "include"
 
-# Optional: add a STANAG 4774-shaped confidentiality label to every delivered
-# object, projected from the event's policy tags (class:* -> classification,
-# rel:*/releasable:* -> a Releasability category). Additive and opt-in: without
-# this block the delivered format is unchanged, and policy_tags remain in every
-# object either way. Set the identifier to the security policy your accreditor
-# names.
+# Adds a STANAG 4774-shaped label projected from the policy tags.
 # [confidentiality_label]
 # policy_identifier = "AJAR-DEPLOYMENT-POLICY"

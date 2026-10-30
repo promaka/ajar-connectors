@@ -1,16 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Governed egress by field mapping. See lib.rs for the pipeline; this binary
-//! is the wiring: config, NATS subscription, delivery loop, health.
+//! Generic egress binary: config, NATS subscription, delivery loop.
 //!
-//! There is no way to deliver an unverified payload. Verification has no off
-//! switch, the egress key is required config, and `--dry-run` (print instead of
-//! POST) verifies exactly the same way — the one relaxation is that dry-run
-//! without a configured key prints payload SIZES under an UNVERIFIED banner,
-//! never content mapped as if it were governed.
+//! `--dry-run` prints instead of POSTing and verifies the same way; without a
+//! configured key it prints payload sizes only.
 
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 
-use ajar_generic_egress::{accept, config::Config, map, Dedupe, EgressMetrics, DEDUPE_WINDOW};
+use ajar_generic_egress::config::Config;
+use ajar_generic_egress::{map, Dedupe, EgressMetrics, DEDUPE_WINDOW};
 use anyhow::Context;
 use futures_util::StreamExt;
 
@@ -36,7 +34,7 @@ async fn main() -> anyhow::Result<()> {
     let key = match cfg.verifying_key() {
         Ok(k) => Some(k),
         Err(e) if dry_run => {
-            tracing::warn!("UNVERIFIED dry-run: {e}; payload sizes only, no content");
+            tracing::warn!(error = %format!("{e:#}"), "unverified dry run, printing sizes only");
             None
         }
         Err(e) => return Err(e),
@@ -53,13 +51,11 @@ async fn main() -> anyhow::Result<()> {
     );
 
     let http = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
+        .timeout(Duration::from_secs(10))
         .build()?;
     let mut dedupe = Dedupe::new(DEDUPE_WINDOW);
-    let (mut received, mut heartbeat) = (
-        0u64,
-        tokio::time::interval(std::time::Duration::from_secs(15)),
-    );
+    let mut received = 0u64;
+    let mut heartbeat = tokio::time::interval(Duration::from_secs(15));
 
     loop {
         tokio::select! {
@@ -75,7 +71,7 @@ async fn main() -> anyhow::Result<()> {
                     println!("UNVERIFIED payload: {} bytes on {}", message.payload.len(), message.subject);
                     continue;
                 };
-                let event = match accept(&message.payload, key) {
+                let event = match ajar_generic_egress::accept(&message.payload, key) {
                     Ok(event) => event,
                     Err(e) => {
                         metrics.rejected.fetch_add(1, Ordering::Relaxed);
@@ -94,7 +90,7 @@ async fn main() -> anyhow::Result<()> {
                     cfg.confidentiality_label.as_ref(),
                 ) else {
                     metrics.gap_dropped.fetch_add(1, Ordering::Relaxed);
-                    tracing::warn!(id = %event.id, "event carries unmapped content and unmapped = \"refuse\"");
+                    tracing::warn!(id = %event.id, "unmapped content refused");
                     continue;
                 };
 
@@ -104,7 +100,6 @@ async fn main() -> anyhow::Result<()> {
                     continue;
                 }
 
-                // Bounded attempts with a short backoff; both outcomes counted.
                 let mut delivered = false;
                 for attempt in 0..cfg.deliver.attempts {
                     let mut req = http.post(&cfg.deliver.url).json(&body);
@@ -119,7 +114,7 @@ async fn main() -> anyhow::Result<()> {
                         Ok(resp) => tracing::warn!(status = %resp.status(), attempt, "consumer refused"),
                         Err(e) => tracing::warn!(error = %e, attempt, "delivery failed"),
                     }
-                    tokio::time::sleep(std::time::Duration::from_millis(500 * (attempt as u64 + 1))).await;
+                    tokio::time::sleep(Duration::from_millis(500 * (attempt as u64 + 1))).await;
                 }
                 if delivered {
                     metrics.delivered.fetch_add(1, Ordering::Relaxed);

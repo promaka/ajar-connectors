@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 [package]
 name = "ajar-generic-egress"
-description = "Governed events out of Ajar, delivered as consumer-shaped JSON over HTTP — verification before delivery, by field mapping rather than code."
+description = "Governed events out of Ajar, verified and delivered as consumer-shaped JSON over HTTP."
 version = "0.6.6"
 edition.workspace = true
 rust-version.workspace = true
@@ -26,13 +26,10 @@ toml.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 anyhow.workspace = true
+thiserror.workspace = true
 hex.workspace = true
-bytes.workspace = true
-prost = "0.14"
+prost.workspace = true
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-no-provider", "json"] }
-
-[dev-dependencies]
-tempfile = "3"
 
 # See CONTRIBUTING.md, "Releases".
 [package.metadata.ajar]

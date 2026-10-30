@@ -1,67 +1,131 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # ajar-generic-egress
 
-Governed events out of Ajar, delivered to your system as JSON in your field
-names. The egress counterpart of [`ajar-generic`](../generic): a mapping, no
-code.
+Egress connector from Ajar Core to an HTTP endpoint. It subscribes to governed
+events on NATS, verifies Core's egress signature, renders each event as one JSON
+object in the consumer's field names, and POSTs it. It is the egress counterpart
+of [`ajar-generic`](../generic): a mapping, no code.
 
 ```
-Ajar Core ──▶ ajar.egress.<format>.<source> ──▶ verify Core's egress signature ──▶ map ──▶ HTTP POST
-              (governed, re-signed by Core)      (mandatory, no off switch)              (your endpoint)
+Core ──▶ ajar.egress.<format>.<source> ──▶ verify egress signature ──▶ map ──▶ HTTP POST
 ```
 
-## What arrives at your endpoint
+## Input
 
-One POST per event, one JSON object per POST, shaped by your `[mapping]`. Three
-fields are present in every object no matter what the mapping says — a mapping
-can rename them, never remove them:
+NATS subject `subject`, which must start with `ajar.egress.`. Any other subject
+is refused at startup. This prefix rule keeps the effector cue channel
+(`ajar.cue.>`) out of reach of the connector. The NATS connection uses the
+`AJAR_TLS_CA`, `AJAR_TLS_CERT` and `AJAR_TLS_KEY` environment; the consumer's
+subscribe-only certificate decides what it can see under the prefix.
 
-| Always present | Default name | Content |
-|---|---|---|
-| Event identity | `event_id` | dedupe on this; delivery is at-most-once today, gap-possible, and becomes at-least-once when the durable leg lands |
-| Markings | `policy_tags` | classification and releasability, exactly as governed |
-| Governance | `governance` | `{"egress_signature": "verified"}` — set by verification, not configuration |
+Each message is a sealed envelope. It is verified under Core's egress key
+(`egress_verifying_key`, from the operator's handover pack) and decoded as an
+Ajar event. An envelope that fails verification or decoding is logged, counted
+as rejected and not delivered. Verification cannot be turned off.
 
-Governed content your mapping does not name is delivered under `unmapped`, or
-refused per event with `unmapped = "refuse"`. Silent dropping does not exist:
-a config file cannot strip markings off a track on its way out.
+Producer signatures do not reach the consumer. Core re-signs at egress because
+the payload is dropped on egress and identity may be dropped across coalitions,
+so the producer's signature would cover bytes that no longer exist. Provenance
+at the consumer is Core's egress signature. Full lineage to the original sealed
+envelope is in Ajar's audit chain.
 
-## Verification is not optional
+## Output
 
-Every payload is verified under Core's egress key (from your operator's
-handover pack) before it is mapped or delivered. A payload that does not verify
-is counted in `egress_rejected_total` and never leaves. There is no
-`verify = false`; `--dry-run` without a key prints payload sizes under an
-UNVERIFIED banner and nothing else.
+One HTTP POST per event, with one JSON object as body, to `deliver.url`. A 2xx
+response is a delivery. The object holds:
 
-Producer signatures do not survive egress by design — payload drops on all
-egress and identity may drop cross-coalition, so the producer's signature would
-be over bytes that no longer exist. Provenance at the consumer is Core's egress
-signature; full lineage to the original sealed envelope lives in Ajar's audit
-chain.
+- each `[mapping]` field, `consumer_name = "path"`. A path absent from the event
+  is left out of the object, not sent as null.
+- the event id as `event_id` and the policy tags as `policy_tags`, unless the
+  mapping names the `id` or `policy_tags` path, in which case they appear only
+  under the mapping's names. A mapping can rename them but not remove them.
+- `governance`: `{"egress_signature": "verified"}`, set by verification.
+- `unmapped`, when `unmapped = "include"`: every attribute and metadata entry the
+  mapping does not name, as `{"attributes": {...}, "metadata": {...}}`.
+- `confidentiality_label`, when configured and the event has a `class:` tag.
 
-## Delivery semantics, honestly
+The names `event_id`, `policy_tags`, `governance`, `unmapped` and
+`confidentiality_label` overwrite a mapping field of the same name.
 
-At-most-once on the live leg: a bounded in-memory buffer, oldest dropped and
-counted (`egress_gap_dropped_total`) when your endpoint is unreachable past its
-attempts. Make your endpoint idempotent on `event_id` now: redeliveries become
-normal when the JetStream-backed durable leg upgrades the guarantee to
-at-least-once, and duplicates within one connector run are already suppressed
-(`egress_deduped_total`).
+Mapping paths:
 
-## The cue channel is out of reach
+| Path | JSON value |
+|------|------------|
+| `id`, `source_id`, `entity_type`, `timestamp` | string |
+| `lat`, `lon` | number, WGS-84 degrees; absent without a location |
+| `alt_m` | number, metres; absent without a location |
+| `confidence` | number, 0 to 1 |
+| `policy_tags` | array of strings |
+| `attr:<name>` | string, the governed attribute's value in its declared unit |
+| `meta:<name>` | string, the metadata value (`meta:source_uid` is the native track id) |
 
-Subscriptions must sit under `ajar.egress.`. The effector cue channel
-(`ajar.cue.>`) is refused at config validation — structurally, then again
-explicitly — so a track-share tool cannot be one wildcard away from fire
-commands. This is tested, not just written.
+The event payload is never delivered. Core fields the mapping does not name
+(location, timestamp, source, entity type, confidence) are left out; only
+attributes and metadata fall under `unmapped`.
+
+**Confidentiality label.** With `[confidentiality_label]` set, the object gets a
+STANAG 4774-shaped label projected from the policy tags. It changes no
+enforcement, and `policy_tags` is still delivered as the source of truth. The
+label is bound to the data by the signature, because it is derived from policy
+tags inside the sealed envelope.
+
+| Label field | From |
+|-------------|------|
+| `policyIdentifier` | `policy_identifier` from config |
+| `classification` | the first non-empty `class:` tag, uppercased; no such tag means no label |
+| `categories` | one `Releasability` category, `PERMISSIVE`, from all `rel:` and `releasable:` tags, uppercased, sorted, deduplicated; left out when there are none |
+| `creationDateTime` | the event timestamp |
+
+Values are not reinterpreted: the deployment's policy owns the vocabulary.
+
+## Configuration
+
+Start from [`generic-egress.example.toml`](generic-egress.example.toml).
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `nats_url` | required | Ajar NATS, `tls://` in production |
+| `subject` | required | under `ajar.egress.`, wildcards allowed |
+| `egress_verifying_key` | required | Core's egress key: 64-char hex inline, or a path to a file of 32 raw bytes or hex |
+| `[deliver] url` | required | endpoint for the POSTs |
+| `[deliver] headers` | none | extra request headers, such as the consumer's bearer token |
+| `[deliver] attempts` | `2` | attempts per event, at least 1 |
+| `[mapping]` | required, non-empty | consumer field name = path; an unknown path is refused at startup |
+| `unmapped` | `include` | `include` or `refuse` |
+| `[confidentiality_label] policy_identifier` | none (no label) | the security policy the label's values are defined by |
+
+Unknown keys are refused, except inside `[mapping]`, where every key is a
+consumer field name.
+
+## Behaviour
+
+- Delivery is inline and in order: the next NATS message waits until the current
+  event is delivered or given up. Each POST times out after 10 s. After a failed
+  attempt (an error or a non-2xx status) the connector waits 500 ms times the
+  attempt number before the next. An event that fails every attempt is dropped.
+  Delivery is at-most-once; nothing is buffered or kept across a restart.
+- The last 4096 event ids are remembered, and an event whose id was seen is
+  skipped.
+- With `unmapped = "refuse"`, an event carrying any attribute or metadata the
+  mapping does not name is not delivered.
+- Every 15 s a heartbeat log line reports `received`, `delivered`, `rejected`
+  (verification or decoding failed), `deduped` and `gap_dropped` (refused by
+  `unmapped = "refuse"`, or not delivered within the attempts).
+
+Make the endpoint idempotent on the event id.
+
+## Limits
+
+- At-most-once only; no durable (JetStream) consumer.
+- HTTP POST of JSON is the only output.
 
 ## Run
 
 ```bash
 ajar-generic-egress ./generic-egress.toml
-ajar-generic-egress --dry-run ./generic-egress.toml   # print, don't POST
+ajar-generic-egress --dry-run ./generic-egress.toml
 ```
 
-Copy [`generic-egress.example.toml`](generic-egress.example.toml). Health and
-counters via `AJAR_HEALTH_ADDR` as on every connector.
+`--dry-run` connects and verifies as usual, then prints each mapped object to
+stdout instead of POSTing. If the egress key cannot be loaded, a dry run prints
+only `UNVERIFIED payload: <n> bytes on <subject>` per message and maps nothing.
