@@ -1,16 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
-//! UDP frame source — multicast or unicast. This covers the situational-awareness
-//! broadcast transports (CoT SA, ASTERIX, MAVLink over UDP); one datagram is one
-//! frame.
+//! UDP transport, multicast or unicast: one datagram is one frame.
 
-use socket2::{Domain, Protocol, Socket, Type};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4};
 
 use anyhow::Context as _;
+use socket2::{Domain, Protocol, Socket, Type};
 
 use crate::runtime::FrameSource;
 
-/// A UDP socket presented as a [`FrameSource`].
 pub struct UdpSource {
     sock: tokio::net::UdpSocket,
     describe: String,
@@ -26,22 +23,16 @@ impl FrameSource for UdpSource {
     }
 }
 
-/// Open a UDP source. With `group`, join that multicast group: bind the wildcard
-/// address on the group's port (binding the group address directly is
-/// non-portable) and join ON A SPECIFIC INTERFACE when one is known. A
-/// dual-homed box (management NIC plus surveillance LAN — the standard naval
-/// build) otherwise joins wherever the routing table points and hears nothing.
-/// The joining interface is, in order: the explicit `interface` field, else the
-/// bind address's own IP when it names one (so `bind = "10.1.1.5:8600"` means
-/// what it looks like it means), else the kernel's choice.
-///
-/// Without `group`, bind the address as given for unicast. Both paths set
-/// `SO_REUSEADDR`/`SO_REUSEPORT` so multiple receivers can share a group and a
-/// restart does not wait out `TIME_WAIT`.
+/// Open a UDP source. With `group`, bind the wildcard address on the bind port
+/// (binding the group address is non-portable) and join the group on
+/// `interface`, else on the bind IP, else where the kernel chooses: a
+/// dual-homed box otherwise joins wherever the routing table points. Without
+/// `group`, bind as given. `SO_REUSEADDR`/`SO_REUSEPORT` let several receivers
+/// share a group.
 pub fn open(bind: &str, group: Option<&str>, interface: Option<&str>) -> anyhow::Result<UdpSource> {
     let bind: SocketAddr = bind
         .parse()
-        .map_err(|e| anyhow::anyhow!("transport.bind '{bind}': {e}"))?;
+        .with_context(|| format!("transport.bind '{bind}'"))?;
     let bind_v4: Ipv4Addr = match bind.ip() {
         IpAddr::V4(v4) => v4,
         IpAddr::V6(_) => anyhow::bail!(
@@ -63,12 +54,13 @@ pub fn open(bind: &str, group: Option<&str>, interface: Option<&str>) -> anyhow:
         Some(group) => {
             let group: Ipv4Addr = group
                 .parse()
-                .map_err(|e| anyhow::anyhow!("transport.group '{group}': {e}"))?;
+                .with_context(|| format!("transport.group '{group}'"))?;
+            // 0.0.0.0 leaves the choice to the kernel.
             let iface: Ipv4Addr = match interface {
                 Some(i) => i
                     .parse()
-                    .map_err(|e| anyhow::anyhow!("transport.interface '{i}': {e}"))?,
-                None => bind_v4, // 0.0.0.0 = kernel's choice, an IP = that NIC
+                    .with_context(|| format!("transport.interface '{i}'"))?,
+                None => bind_v4,
             };
             let listen = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, port);
             sock.bind(&listen.into())

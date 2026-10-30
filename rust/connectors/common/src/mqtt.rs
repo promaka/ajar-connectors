@@ -1,13 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
-//! MQTT transport — subscribe to a topic and take each message payload as a frame.
-//! Common for IoT and modern sensor buses. Requires the `mqtt` feature. The client
-//! reconnects underneath us; one published message is one frame.
+//! MQTT transport: subscribe to a topic; each message payload is one frame. The
+//! client reconnects underneath, and the source resubscribes.
 
 use rumqttc::{AsyncClient, Event, EventLoop, MqttOptions, Packet, QoS};
 
 use crate::runtime::FrameSource;
 
-/// Subscribes to an MQTT topic and yields message payloads as frames.
 pub struct MqttSource {
     client: AsyncClient,
     eventloop: EventLoop,
@@ -32,10 +30,8 @@ impl FrameSource for MqttSource {
                     buf[..n].copy_from_slice(&p.payload[..n]);
                     return Ok(n);
                 }
-                // Keep-alives, acks, and the like — not frames.
                 Ok(_) => continue,
                 Err(e) => {
-                    // The event loop reconnects; re-subscribe when it does.
                     tracing::warn!(error = %e, "mqtt connection error, reconnecting");
                     self.subscribed = false;
                     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
@@ -49,8 +45,8 @@ impl FrameSource for MqttSource {
     }
 }
 
-/// Build an MQTT source. `host` is `host:port`; the connection opens lazily on the
-/// first read.
+/// Build an MQTT source. `host` is `host:port`, port 1883 when omitted; the
+/// connection opens on the first read.
 pub fn open(host: &str, topic: &str) -> anyhow::Result<MqttSource> {
     let (hostname, port) = match host.rsplit_once(':') {
         Some((h, p)) => (

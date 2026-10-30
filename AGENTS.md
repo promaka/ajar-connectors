@@ -86,10 +86,12 @@ Then add `"<name>"` to `members` in `rust/connectors/Cargo.toml`. Transports are
 config, not code — never write socket/file I/O; pick a `[transport]` kind in the
 TOML: `udp`, `udp-multicast`, `tcp-client`, `tcp-server`, `http-server`, `file`,
 `dir`, `exec`, `stdin`, `pcap-replay`, `serial`, `mqtt`, `rest-poll`, `ws-client`,
-`dds`. The README's transport table says what each needs. A stream transport
-takes a `framing`: `line`, `length-delimited` (2-byte big-endian prefix) or
-`length-u32le` (4-byte little-endian prefix); add a new framing in
-`common/src/stream.rs`, where every stream transport reads it.
+`dds`. The README's transport table says what each needs. `tcp-client`,
+`tcp-server`, `stdin` and `file` take a `framing`: `line`, `length-delimited`
+(2-byte big-endian prefix) or `length-u32le` (4-byte little-endian prefix);
+`exec`, `serial` and `dir` are line-only. Add a new framing in
+`common/src/stream.rs` and in `common/src/file.rs`, which parses length prefixes
+itself.
 
 Each connector is versioned and released on its own. Once it ships
 (`release = true`), every change that should reach a site bumps `version` in its

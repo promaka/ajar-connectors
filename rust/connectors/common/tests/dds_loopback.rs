@@ -1,9 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! The DDS transport end to end on one host: a publisher on a topic, the
-//! connector's source subscribed to it, and the frames the connector would
-//! parse. Discovery is real (multicast on the host's multicast-capable
-//! interface, looped back to this process), so the tests wait for it rather
-//! than assuming it.
+//! The DDS transport end to end on one host, with real discovery over a multicast-capable interface.
 #![cfg(feature = "dds")]
 
 use ajar_connector_common::dds::{self, Options};
@@ -15,9 +11,8 @@ use std::time::{Duration, Instant};
 
 const TYPE_NAME: &str = "Ajar::Octets";
 
-/// The tests share one DDS domain in one process; run them one at a time so
-/// no test's publisher is another test's evidence. The oversize and probe
-/// tests each saw the other's topic when they ran in parallel in CI.
+/// The tests share one DDS domain in one process; run one at a time so no
+/// test's publisher is another test's evidence.
 static ONE_AT_A_TIME: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// A publisher of `Vec<u8>` (a CDR `sequence<octet>`) on `topic`, with the
@@ -75,7 +70,7 @@ async fn roundtrip(topic: &str, payload: DdsPayload, payloads: &[&[u8]]) -> Vec<
     let mut got = Vec::new();
     let mut buf = vec![0u8; 4096];
     while got.len() < payloads.len() && Instant::now() < deadline {
-        // Keep publishing until the reader is matched and has caught up.
+        // Publish until the reader is matched and has caught up.
         for p in payloads {
             w.writer.write(p.to_vec(), None).expect("write");
         }
@@ -88,7 +83,7 @@ async fn roundtrip(topic: &str, payload: DdsPayload, payloads: &[&[u8]]) -> Vec<
                     }
                 }
                 Ok(Err(e)) => panic!("recv: {e}"),
-                Err(_) => break, // nothing yet; publish again
+                Err(_) => break,
             }
         }
     }
@@ -109,8 +104,7 @@ async fn octet_topics_arrive_as_the_bytes_the_publisher_sent() {
 async fn without_unwrapping_the_cdr_body_is_delivered_intact() {
     let got = roundtrip("AjarLoopbackBody", DdsPayload::Body, &[b"abc"]).await;
     assert!(!got.is_empty(), "no frames");
-    // CDR of a sequence<octet> "abc": u32 length 3, the bytes, then padding
-    // to a four-byte boundary. The body is delivered as serialized.
+    // CDR sequence<octet> "abc": u32 length 3, the bytes, padding.
     let body = &got[0];
     assert!(body.len() >= 7, "{body:?}");
     let len = u32::from_le_bytes(body[..4].try_into().unwrap());
@@ -127,7 +121,7 @@ async fn a_sample_larger_than_the_frame_limit_is_dropped_not_truncated() {
     let mut source =
         dds::open(&options("AjarLoopbackOversize", DdsPayload::Octets)).expect("source");
     let deadline = Instant::now() + Duration::from_secs(20);
-    let mut buf = vec![0u8; 64]; // a limit the big sample exceeds
+    let mut buf = vec![0u8; 64];
     let mut got = Vec::new();
     while got.is_empty() && Instant::now() < deadline {
         w.writer.write(big.clone(), None).expect("write");
@@ -138,9 +132,11 @@ async fn a_sample_larger_than_the_frame_limit_is_dropped_not_truncated() {
             got.push(buf[..n].to_vec());
         }
     }
-    // Only the small one is ever handed over; the big one is dropped whole,
-    // never cut to the buffer.
-    assert_eq!(got.first().map(Vec::as_slice), Some(&small[..]), "{got:?}");
+    assert_eq!(
+        got.first().map(Vec::as_slice),
+        Some(&small[..]),
+        "the big sample is dropped whole: {got:?}"
+    );
 }
 
 #[test]
@@ -175,10 +171,9 @@ fn the_probe_reports_a_match_and_a_sample_when_a_publisher_exists() {
 
 #[test]
 fn the_probe_reports_no_match_and_no_publishers_when_nobody_publishes() {
-    // A domain id nobody else in these tests uses, so no other test's
-    // publisher is heard: the list must be empty, not merely lacking the topic.
     let _serial = ONE_AT_A_TIME.blocking_lock();
     let mut o = options("AjarNobodyPublishesHere", DdsPayload::Body);
+    // A domain no other test publishes on.
     o.domain = 7;
     let probe = dds::probe(&o, Duration::from_secs(2)).expect("probe");
     assert!(!probe.matched, "{probe:?}");

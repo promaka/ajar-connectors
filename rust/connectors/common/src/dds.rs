@@ -1,36 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
-//! DDS transport: subscribe to one topic on a DDS domain and take each sample's
-//! serialized bytes as a frame. Requires the `dds` feature.
-//!
-//! DDS (OMG Data Distribution Service) is the brokerless publish-subscribe bus
-//! inside naval combat systems and under ROS 2. The connector joins the domain
-//! as one more reader on a topic the ship's own systems already publish;
-//! nothing on the ship changes, and the bytes are signed the moment they cross
-//! into Ajar. The two buses never meet: this source is the seam.
-//!
-//! What arrives is the sample's CDR body exactly as the publisher serialized
-//! it, without the four-byte encapsulation header (the encoding it named is
-//! kept alongside). A parser that understands the publisher's type reads it
-//! directly (`payload = "body"`). Two common shapes are unwrapped for it: a
-//! struct whose first field is a `sequence<octet>` of raw protocol bytes
-//! (`payload = "octets"`), and a struct whose first field is a `string`, such
-//! as a ROS 2 `std_msgs/String` or a JSON line (`payload = "string"`).
-//! Unwrapping is only done for plain CDR bodies; a delimited or parameter-list
-//! encoding carries headers before the first field and is skipped with a
-//! warning rather than misread.
-//!
-//! Matching in DDS needs the topic name and the registered type name to be
-//! equal on both sides, and a reader's reliability to be no stricter than the
-//! writer's; a mismatch produces silence, not an error. The doctor's transport
-//! step says which of those it is. Only the default partition is joined.
-//!
-//! Samples are buffered until the connector reads them, up to
-//! [`SAMPLE_BUFFER`] of them; beyond that the oldest are dropped, which is the
-//! only bound and is stated here rather than hidden.
+//! DDS transport: subscribe to one topic and hand the parser each sample's CDR
+//! body, or the single `sequence<octet>` or `string` field a plain CDR body
+//! carries (see [`DdsPayload`]). Topic and type names must match the
+//! publisher's exactly; a mismatch is silence, not an error.
 
 use std::convert::Infallible;
 use std::net::IpAddr;
 
+use anyhow::Context;
 use futures_util::StreamExt;
 use rustdds::no_key::{BareDataReaderStream, DataReader, DefaultDecoder, DeserializerAdapter};
 use rustdds::serialization::RepresentationIdentifier;
@@ -42,19 +19,18 @@ use rustdds::{
 use crate::config::{DdsPayload, DdsReliability};
 use crate::runtime::FrameSource;
 
-/// The transport's settings: the config's own struct, passed through.
 pub type Options = crate::config::DdsOptions;
 
 /// The highest DDS domain id: RTPS port numbers are 7400 + 250 * domain and
 /// must fit in 16 bits.
 pub const MAX_DOMAIN: u16 = 232;
 
-/// How many samples the reader holds for the connector before dropping the
-/// oldest. A surveillance radar's rotation is a burst of a few hundred blocks;
-/// this covers a rotation several times over while the runtime publishes.
+/// Samples the reader holds before dropping the oldest: several radar
+/// rotations' worth of blocks.
 pub const SAMPLE_BUFFER: i32 = 4096;
 
-/// One sample exactly as it came off the wire, plus the encoding it declared.
+/// One sample as it came off the wire, without the encapsulation header, and
+/// the encoding it declared.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RawSample {
     pub encoding: RepresentationIdentifier,
@@ -62,19 +38,17 @@ pub struct RawSample {
 }
 
 impl RawSample {
-    /// Whether the declared encoding is little-endian (every `*_LE` variant).
     pub fn little_endian(&self) -> bool {
         LITTLE_ENDIAN.contains(&self.encoding)
     }
-    /// Whether the body is plain CDR: the first field starts at byte 0, with
-    /// no delimiter header or parameter list before it.
+    /// Whether the first field starts at byte 0, with no delimiter header or
+    /// parameter list before it.
     pub fn plain_cdr(&self) -> bool {
         PLAIN_CDR.contains(&self.encoding)
     }
 }
 
-/// An adapter that refuses to interpret: it accepts every CDR encoding and
-/// hands the body back untouched. Interpretation is the parser's job.
+/// Accepts every CDR encoding and hands the body back untouched.
 pub struct RawAdapter;
 
 #[derive(Clone)]
@@ -146,11 +120,9 @@ impl DefaultDecoder<RawSample> for RawAdapter {
     const DECODER: RawDecoder = RawDecoder;
 }
 
-/// The bytes of a `struct { sequence<octet> data; }` sample: the length prefix
-/// read in the sample's own byte order, then exactly that many bytes, followed
-/// by nothing but CDR padding. `None` when the body is not plain CDR, the
-/// prefix runs past the body, or more than padding follows: a sample that does
-/// not have that shape.
+/// The bytes of a `struct { sequence<octet> data; }` sample: a length prefix in
+/// the sample's byte order, that many bytes, then at most CDR padding. `None`
+/// for any other shape.
 pub fn unwrap_octets(sample: &RawSample) -> Option<&[u8]> {
     if !sample.plain_cdr() {
         return None;
@@ -167,9 +139,8 @@ pub fn unwrap_octets(sample: &RawSample) -> Option<&[u8]> {
     (trailing < 4).then_some(data)
 }
 
-/// The text of a `struct { string s; }` sample: like `unwrap_octets`, then the
-/// terminating NUL the CDR string length counts is dropped. `None` when the
-/// body does not have that shape or the string is not NUL-terminated.
+/// The text of a `struct { string s; }` sample, without the terminating NUL
+/// the CDR length counts. `None` for any other shape.
 pub fn unwrap_string(sample: &RawSample) -> Option<&[u8]> {
     match unwrap_octets(sample)?.split_last() {
         Some((0, text)) => Some(text),
@@ -177,7 +148,6 @@ pub fn unwrap_string(sample: &RawSample) -> Option<&[u8]> {
     }
 }
 
-/// What the parser is handed for one sample under a payload setting.
 pub fn frame_of(sample: &RawSample, payload: DdsPayload) -> Option<&[u8]> {
     match payload {
         DdsPayload::Body => Some(&sample.bytes),
@@ -186,12 +156,11 @@ pub fn frame_of(sample: &RawSample, payload: DdsPayload) -> Option<&[u8]> {
     }
 }
 
-/// The reader, its stream, and everything that must stay alive around it.
 pub struct DdsSource {
     stream: BareDataReaderStream<RawSample, RawAdapter>,
     describe: String,
     payload: DdsPayload,
-    // Dropping these tears the reader down; they are held, not used.
+    // Held: dropping these tears the reader down.
     _topic: Topic,
     _subscriber: Subscriber,
     _participant: DomainParticipant,
@@ -204,7 +173,7 @@ impl FrameSource for DdsSource {
             let sample = match self.stream.next().await {
                 Some(Ok(sample)) => sample,
                 Some(Err(e)) => {
-                    tracing::warn!(error = ?e, "dds sample could not be read; skipped");
+                    tracing::warn!(error = ?e, "dds sample unreadable, skipped");
                     continue;
                 }
                 None => return Err(std::io::Error::other("dds reader stream ended")),
@@ -214,18 +183,15 @@ impl FrameSource for DdsSource {
                     len = sample.bytes.len(),
                     encoding = ?sample.encoding,
                     payload = ?self.payload,
-                    "dds sample does not have the configured payload shape; skipped (a typed \
-                     struct wants payload = \"body\")"
+                    "dds sample not in the payload shape, skipped"
                 );
                 continue;
             };
-            // Fail closed on size, never truncate: half a record would parse
-            // into a wrong event under a valid signature.
             if bytes.len() > buf.len() {
                 tracing::warn!(
                     len = bytes.len(),
                     limit = buf.len(),
-                    "dds sample larger than the frame limit; dropped"
+                    "dds sample over the frame limit, dropped"
                 );
                 continue;
             }
@@ -239,7 +205,6 @@ impl FrameSource for DdsSource {
     }
 }
 
-/// The reader QoS for a reliability choice.
 pub fn reader_qos(reliability: DdsReliability) -> QosPolicies {
     let reliability = match reliability {
         DdsReliability::BestEffort => policy::Reliability::BestEffort,
@@ -247,11 +212,8 @@ pub fn reader_qos(reliability: DdsReliability) -> QosPolicies {
             max_blocking_time: rustdds::Duration::from_secs(1),
         },
     };
-    // Keep samples until the connector has read them: a radar publishes in
-    // bursts, and the DDS default of keeping only the latest would drop the
-    // rest of a burst before the reader takes them. KeepAll alone is bounded
-    // by the stack's own default of 64 samples, so the bound is set here,
-    // explicitly, to SAMPLE_BUFFER.
+    // KeepAll, since keep-latest drops the rest of a burst before the reader
+    // takes it; the explicit limit replaces the stack's small default bound.
     QosPolicyBuilder::new()
         .reliability(reliability)
         .history(policy::History::KeepAll)
@@ -275,12 +237,12 @@ pub fn participant(domain: u16, interface_ip: Option<&str>) -> anyhow::Result<Do
     if let Some(ip) = interface_ip {
         let ip: IpAddr = ip
             .parse()
-            .map_err(|_| anyhow::anyhow!("dds interface_ip {ip:?} is not an IP address"))?;
+            .with_context(|| format!("dds interface_ip {ip:?} is not an IP address"))?;
         builder = builder.with_only_networks([ip]);
     }
     builder
         .build()
-        .map_err(|e| anyhow::anyhow!("joining DDS domain {domain}: {e:?}"))
+        .with_context(|| format!("joining DDS domain {domain}"))
 }
 
 /// A raw reader on `topic` with `type_name`, in the default partition.
@@ -298,18 +260,18 @@ pub fn raw_reader(
             &qos,
             TopicKind::NoKey,
         )
-        .map_err(|e| anyhow::anyhow!("dds topic {topic:?}: {e:?}"))?;
+        .with_context(|| format!("dds topic {topic:?}"))?;
     let subscriber = participant
         .create_subscriber(&qos)
-        .map_err(|e| anyhow::anyhow!("dds subscriber: {e:?}"))?;
+        .context("dds subscriber")?;
     let reader = subscriber
         .create_datareader_no_key::<RawSample, RawAdapter>(&topic, None)
-        .map_err(|e| anyhow::anyhow!("dds reader on {topic:?}: {e:?}"))?;
+        .with_context(|| format!("dds reader on {topic:?}"))?;
     Ok((topic, subscriber, reader))
 }
 
-/// Join the domain and subscribe. Discovery runs underneath; the first frame
-/// arrives once a publisher with the same topic and type name is found.
+/// Join the domain and subscribe. The first frame arrives once discovery finds
+/// a publisher with the same topic and type name.
 pub fn open(opts: &Options) -> anyhow::Result<DdsSource> {
     let participant = participant(opts.domain, opts.interface_ip.as_deref())?;
     let (topic, subscriber, reader) =
@@ -324,23 +286,19 @@ pub fn open(opts: &Options) -> anyhow::Result<DdsSource> {
     })
 }
 
-/// What a preflight can learn about a topic in a bounded time, for the doctor.
+/// What a bounded wait learns about a topic, for the doctor.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct Probe {
     /// A publisher with the same topic and type name was matched.
     pub matched: bool,
-    /// Bytes of the first sample received after matching, if any arrived.
     pub first_sample_len: Option<usize>,
-    /// Remote publishers seen on the domain during the wait, as (topic name,
-    /// type name). This reader's own topic is never in it, so an empty list
-    /// means nothing on the domain publishes anything this box can hear.
+    /// Remote publishers heard during the wait, as (topic name, type name).
+    /// This reader's own topic is never in it.
     pub publishers: Vec<(String, String)>,
 }
 
-/// Join the domain, subscribe, and wait up to `wait` for a match and then a
-/// sample. Never blocks longer than `wait`; the caller decides what each
-/// outcome means. Read-only on the wire like every doctor step: a reader
-/// announces itself, publishes nothing.
+/// Join the domain, subscribe, and wait at most `wait` for a match and then a
+/// sample. Publishes nothing.
 pub fn probe(opts: &Options, wait: std::time::Duration) -> anyhow::Result<Probe> {
     use rustdds::{DataReaderStatus, StatusEvented};
     let participant = participant(opts.domain, opts.interface_ip.as_deref())?;
@@ -391,7 +349,7 @@ mod tests {
     }
 
     #[test]
-    fn octets_unwrap_in_the_samples_own_byte_order() {
+    fn octets_unwrap_in_the_samples_byte_order() {
         let le = sample(
             RepresentationIdentifier::CDR_LE,
             &[3, 0, 0, 0, 0xAA, 0xBB, 0xCC, 0],
@@ -404,39 +362,42 @@ mod tests {
     }
 
     #[test]
-    fn a_body_that_is_not_a_bare_sequence_is_refused_not_misread() {
-        // Length claims more than is there: a typed struct, or a torn sample.
+    fn body_that_is_not_a_bare_sequence_is_refused() {
         let short = sample(RepresentationIdentifier::CDR_LE, &[9, 0, 0, 0, 1, 2]);
-        assert_eq!(unwrap_octets(&short), None);
+        assert_eq!(unwrap_octets(&short), None, "length past the body");
         let tiny = sample(RepresentationIdentifier::CDR_LE, &[1, 0]);
         assert_eq!(unwrap_octets(&tiny), None);
         let empty = sample(RepresentationIdentifier::CDR_LE, &[0, 0, 0, 0]);
         assert_eq!(unwrap_octets(&empty), Some(&[][..]));
-        // A struct { uint32 id; sequence<octet> block; } with id = 7: the
-        // first field is not the sequence, so the "length" 7 is followed by
-        // far more than padding. Refused rather than handed to a parser.
+        // struct { uint32 id; sequence<octet> block; } with id = 7.
         let other_first = sample(
             RepresentationIdentifier::CDR_LE,
             &[
                 7, 0, 0, 0, 12, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12,
             ],
         );
-        assert_eq!(unwrap_octets(&other_first), None);
-        // A delimited or parameter-list body carries headers before the first
-        // field; unwrapping would misread them. Refused, whatever it holds.
+        assert_eq!(
+            unwrap_octets(&other_first),
+            None,
+            "more than padding follows"
+        );
         for enc in [
             RepresentationIdentifier::D_CDR2_LE,
             RepresentationIdentifier::PL_CDR_LE,
             RepresentationIdentifier::PL_XCDR2_BE,
         ] {
             let s = sample(enc, &[3, 0, 0, 0, 1, 2, 3, 0]);
-            assert_eq!(unwrap_octets(&s), None, "{enc:?}");
+            assert_eq!(
+                unwrap_octets(&s),
+                None,
+                "headers precede the field: {enc:?}"
+            );
             assert_eq!(frame_of(&s, DdsPayload::Body).map(<[u8]>::len), Some(8));
         }
     }
 
     #[test]
-    fn strings_drop_their_terminating_nul_and_nothing_else() {
+    fn strings_drop_only_their_terminating_nul() {
         let s = sample(
             RepresentationIdentifier::CDR_LE,
             &[6, 0, 0, 0, b'h', b'e', b'l', b'l', b'o', 0, 0, 0],
@@ -445,14 +406,13 @@ mod tests {
         assert_eq!(frame_of(&s, DdsPayload::String), Some(&b"hello"[..]));
         assert_eq!(frame_of(&s, DdsPayload::Octets), Some(&b"hello\0"[..]));
         assert_eq!(frame_of(&s, DdsPayload::Body).map(<[u8]>::len), Some(12));
-        // A binary payload that happens to end in zero is not a string.
         let bin = sample(RepresentationIdentifier::CDR_LE, &[2, 0, 0, 0, 0xFF, 0x01]);
-        assert_eq!(unwrap_string(&bin), None);
+        assert_eq!(unwrap_string(&bin), None, "no NUL terminator");
         assert_eq!(unwrap_octets(&bin), Some(&[0xFF, 0x01][..]));
     }
 
     #[test]
-    fn the_raw_adapter_keeps_bytes_and_encoding_verbatim() {
+    fn raw_adapter_keeps_bytes_and_encoding() {
         let s = <RawAdapter as DeserializerAdapter<RawSample>>::from_bytes(
             &[0xDE, 0xAD],
             RepresentationIdentifier::PL_CDR2_BE,
@@ -469,7 +429,7 @@ mod tests {
     }
 
     #[test]
-    fn bad_domains_and_interfaces_are_named_before_any_socket_opens() {
+    fn bad_domain_and_interface_are_named() {
         let err = participant(233, None).unwrap_err().to_string();
         assert!(err.contains("233") && err.contains("0 to 232"), "{err}");
         let err = participant(0, Some("not-an-ip")).unwrap_err().to_string();
@@ -477,7 +437,7 @@ mod tests {
     }
 
     #[test]
-    fn the_reader_keeps_a_stated_number_of_samples_not_the_stacks_default() {
+    fn reader_keeps_sample_buffer_samples() {
         let qos = reader_qos(DdsReliability::BestEffort);
         assert_eq!(qos.history(), Some(policy::History::KeepAll));
         assert_eq!(

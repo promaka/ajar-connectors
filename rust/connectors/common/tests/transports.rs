@@ -1,19 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
-//! The transport layer against real I/O: sockets, files, directories and child
-//! processes, no mocks. Each transport is exercised on its happy path and on
-//! the failure branch a field deployment actually hits: rotation, disconnect,
-//! a process that dies. The live CI gates prove one happy path each; the
-//! rest is proven here.
+//! The transports against real sockets, files, directories and processes.
 
-use ajar_connector_common::{dir, exec, file, health, tcp, tcp_server, FrameSource, Framing};
 use std::io::Write as _;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
-fn tmp(name: &str) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!("ajar-transport-{}-{}", name, std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
-}
+use ajar_connector_common::{dir, exec, file, health, tcp, tcp_server, udp, FrameSource, Framing};
 
 async fn recv_string(src: &mut (impl FrameSource + ?Sized)) -> String {
     let mut buf = vec![0u8; 64 * 1024];
@@ -26,7 +19,8 @@ async fn recv_string(src: &mut (impl FrameSource + ?Sized)) -> String {
 
 #[tokio::test]
 async fn file_tails_appends_and_survives_rotation() {
-    let path = tmp("file").join("feed.log");
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("feed.log");
     std::fs::write(&path, "old line\n").unwrap();
 
     let mut src = file::open(path.to_str().unwrap(), false, Framing::Line)
@@ -40,8 +34,7 @@ async fn file_tails_appends_and_survives_rotation() {
     });
     assert_eq!(recv_string(&mut src).await, "first");
 
-    // Rotation: replaced with a shorter file; the tail must reopen from the
-    // start rather than sleeping on a stale offset forever.
+    // Rotation: a shorter file replaces it.
     let p = path.clone();
     tokio::task::spawn_blocking(move || {
         std::thread::sleep(Duration::from_millis(300));
@@ -52,7 +45,8 @@ async fn file_tails_appends_and_survives_rotation() {
 
 #[tokio::test]
 async fn file_from_start_replays_existing_content() {
-    let path = tmp("file-replay").join("feed.log");
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("feed.log");
     std::fs::write(&path, "already here\n").unwrap();
     let mut src = file::open(path.to_str().unwrap(), true, Framing::Line)
         .await
@@ -69,9 +63,9 @@ async fn file_open_refuses_a_missing_path() {
 
 #[tokio::test]
 async fn dir_delivers_a_dropped_file_once_settled() {
-    let drop_dir = tmp("dir");
-    let mut src = dir::open(drop_dir.to_str().unwrap(), false).unwrap();
-    let d = drop_dir.clone();
+    let drop_dir = tempfile::tempdir().unwrap();
+    let mut src = dir::open(drop_dir.path().to_str().unwrap(), false).unwrap();
+    let d = drop_dir.path().to_path_buf();
     tokio::task::spawn_blocking(move || {
         std::thread::sleep(Duration::from_millis(300));
         std::fs::write(d.join("drop-001.json"), "{\"lat\":1.0}\n").unwrap();
@@ -88,8 +82,7 @@ async fn exec_reads_the_child_stdout_line_by_line() {
 
 #[tokio::test]
 async fn exec_respawns_when_the_command_exits() {
-    // The documented contract: a command that exits is respawned. One shot of
-    // output per run, so a second delivery proves a second spawn.
+    // One line per run, so a second delivery proves a second spawn.
     let mut src = exec::open("/bin/sh", &["-c".into(), "printf 'shot\n'".into()]).unwrap();
     assert_eq!(recv_string(&mut src).await, "shot");
     assert_eq!(recv_string(&mut src).await, "shot");
@@ -97,8 +90,6 @@ async fn exec_respawns_when_the_command_exits() {
 
 #[tokio::test]
 async fn exec_retries_a_missing_binary_without_panicking() {
-    // A missing binary is retried like any down feed, never a crash and never
-    // a delivery. Not receiving within the window IS the contract.
     let mut src = exec::open("/nonexistent-binary", &[]).unwrap();
     let mut buf = vec![0u8; 64];
     match tokio::time::timeout(Duration::from_secs(3), src.recv(&mut buf)).await {
@@ -117,7 +108,8 @@ async fn tcp_client_receives_line_framed_data_and_reconnects() {
         tokio::io::AsyncWriteExt::write_all(&mut s, b"one\n")
             .await
             .unwrap();
-        drop(s); // force a reconnect
+        // Force a reconnect.
+        drop(s);
         let (mut s, _) = listener.accept().await.unwrap();
         tokio::io::AsyncWriteExt::write_all(&mut s, b"two\n")
             .await
@@ -150,8 +142,6 @@ async fn tcp_server_accepts_a_pusher_and_frames_lines() {
 
 #[tokio::test]
 async fn health_serves_healthz_and_counters() {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    use std::sync::Arc;
     let counter = Arc::new(AtomicU64::new(0));
     counter.store(41, Ordering::Relaxed);
 
@@ -186,15 +176,12 @@ async fn health_serves_healthz_and_counters() {
 
 #[tokio::test]
 async fn udp_delivers_a_datagram_per_frame() {
-    use ajar_connector_common::udp;
     let mut src = udp::open("127.0.0.1:19316", None, None).unwrap();
-    // The IPv4-only guard names the fix instead of "Invalid argument (os error 22)".
     let err = match udp::open("[::]:19317", None, None) {
         Err(e) => e.to_string(),
         Ok(_) => panic!("IPv6 bind must be refused"),
     };
     assert!(err.contains("IPv4-only"), "{err}");
-    // A bad multicast interface is named as transport.interface, not a bare errno.
     let err = match udp::open("0.0.0.0:19318", Some("239.9.9.9"), Some("not-an-ip")) {
         Err(e) => e.to_string(),
         Ok(_) => panic!("a bad interface must be refused"),
@@ -212,9 +199,6 @@ async fn udp_delivers_a_datagram_per_frame() {
 #[tokio::test]
 async fn serial_retries_a_missing_device_without_delivering() {
     use ajar_connector_common::serial;
-    // Open is lazy and a missing device is retried like any down feed, the
-    // same contract as every transport. Pinned here: no delivery and no panic
-    // while the device is absent.
     let mut src = serial::open("/dev/nonexistent-tty", 4800).unwrap();
     let mut buf = vec![0u8; 64];
     match tokio::time::timeout(Duration::from_secs(3), src.recv(&mut buf)).await {

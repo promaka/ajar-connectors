@@ -529,9 +529,14 @@ Set `AJAR_HEALTH_ADDR=0.0.0.0:9090` on any method. Gives `/healthz` and
 `/metrics` with counters for received, published, rejected and
 backpressure-dropped events, the spool (`connector_spooled_total`,
 `connector_drained_total`, `connector_spool_failed_total`,
-`connector_spool_corrupt_total`, `connector_spool_dropped_segments_total`)
-and any connector-specific counters (e.g. `asterix_test_targets_total`,
-`ttm_non_tracking_total`).
+`connector_spool_corrupt_total`, `connector_spool_dropped_segments_total`),
+`connector_ungoverned_total` (events carrying an attribute their entity type
+does not govern) and any connector-specific counters (e.g.
+`asterix_test_targets_total`, `ttm_non_tracking_total`).
+
+Sustained growth in `connector_spooled_total`, or in
+`connector_dropped_backpressure_total` without a spool, means the link is the
+bottleneck, not the source.
 
 ### 7e. Intermittent links (store-and-forward)
 
@@ -566,6 +571,23 @@ and counts it. Spool activity appears on `/metrics`: spooled, drained,
 failed appends, and segments dropped at the bound (the bound is enforced
 per segment, so reconcile loss against
 `connector_spool_dropped_segments_total`, not an event count).
+
+The spool protects against link loss. Against power loss it is best-effort:
+segments reach the disk on rotation and shutdown, not on every append, and a torn
+last record is truncated on reopen.
+
+A crash between a replay and its cursor update replays that record, and a lost
+cursor replays from the oldest byte. The broker drops those duplicates inside the
+duplicate window on Core's ingest stream, 120 s by Core's setting. Beyond the
+window a duplicate is stored again and shows in Core's audit plane.
+
+Keep `drain_rate` under the registered rate because Core's per-source token
+bucket acknowledges and discards over-rate events, and live traffic shares that
+bucket. The cursor has already advanced on the broker's acknowledgement, so a
+discarded event is not replayed.
+
+The bound drops the oldest because the newest observations are worth the most in
+a tactical picture, and hours-old events already render stale downstream.
 
 ### 7f. Mark what you publish
 
@@ -772,7 +794,8 @@ stations and TAK devices.
 ### Transport is orthogonal to protocol
 
 Parsing and delivery are separate concerns. No connector hard-codes how bytes
-arrive, so any connector runs on any transport by config:
+arrive, so any connector runs on any transport by config. Every key, default and
+limit is in [docs/transports.md](docs/transports.md).
 
 | `kind` | Method | Notes |
 |--------|--------|-------|

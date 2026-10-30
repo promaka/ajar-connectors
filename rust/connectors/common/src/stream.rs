@@ -1,15 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Shared framing for byte-stream transports (TCP, serial, exec, stdin).
-//!
-//! A datagram transport (UDP) delivers one frame per packet, but a *stream*
-//! delivers an undelimited flow of bytes. [`Framing`] says how to cut it into
-//! frames — newline-delimited text or a length-prefixed binary record — and
-//! [`StreamSource`] applies it over any async reader, so every stream transport
-//! shares exactly one framing implementation.
-//!
-//! Both framings are **bounded by the caller's buffer**: a stream that never
-//! sends a newline (or claims an enormous length) cannot grow memory without
-//! limit — the over-long frame is drained and rejected, and the stream resyncs.
+//! Framing for byte-stream transports, bounded by the caller's buffer. A longer
+//! line is drained and rejected, and the stream resyncs at the next newline. An
+//! oversize length prefix is rejected before its payload is read, so the next
+//! read takes payload bytes as a prefix.
 
 use std::io::{Error, ErrorKind, Result};
 
@@ -18,17 +11,15 @@ use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncRead, AsyncReadExt, BufReade
 use crate::config::Framing;
 use crate::runtime::FrameSource;
 
-/// Read one newline-delimited frame (without its terminator) into `buf`, bounded
-/// by `buf.len()`. A line longer than the buffer is drained up to its newline and
-/// rejected with `InvalidData`, so a newline-less flood cannot exhaust memory and
-/// the stream resynchronises at the next line.
+/// Read one newline-delimited frame, without its terminator or trailing CRs,
+/// into `buf`. A longer line is drained to its newline and rejected with
+/// `InvalidData`.
 pub(crate) async fn read_line<R: AsyncBufRead + Unpin>(
     reader: &mut R,
     buf: &mut [u8],
 ) -> Result<usize> {
     let mut len = 0usize;
     let mut overflow = false;
-    let saw_newline;
     loop {
         // Copy out of the borrowed chunk, then release the borrow before consuming.
         let (consumed, done, eof) = {
@@ -49,11 +40,9 @@ pub(crate) async fn read_line<R: AsyncBufRead + Unpin>(
             if len == 0 && !overflow {
                 return Err(Error::new(ErrorKind::UnexpectedEof, "stream closed"));
             }
-            saw_newline = false;
             break;
         }
         if done {
-            saw_newline = true;
             break;
         }
     }
@@ -63,16 +52,14 @@ pub(crate) async fn read_line<R: AsyncBufRead + Unpin>(
             "line exceeds frame buffer; dropped and resynchronised",
         ));
     }
-    let _ = saw_newline;
-    // Trim a trailing CR (CRLF line endings).
     while len > 0 && buf[len - 1] == b'\r' {
         len -= 1;
     }
     Ok(len)
 }
 
-/// Copy `src` into `buf[len..]`, advancing `len`. If it would overflow the buffer,
-/// copy what fits and set `overflow` — the caller keeps draining to the newline.
+/// Copy `src` into `buf[len..]`, advancing `len`. What does not fit is dropped
+/// and `overflow` set.
 fn copy_bounded(buf: &mut [u8], len: &mut usize, overflow: &mut bool, src: &[u8]) {
     let room = buf.len().saturating_sub(*len);
     if src.len() > room {
@@ -85,48 +72,25 @@ fn copy_bounded(buf: &mut [u8], len: &mut usize, overflow: &mut bool, src: &[u8]
     }
 }
 
-/// Read one length-delimited frame: a 2-byte big-endian length prefix, then that
-/// many payload bytes into `buf`. A length larger than the buffer is rejected.
-pub(crate) async fn read_length_delimited<R: AsyncRead + Unpin>(
+/// Read `n` payload bytes into `buf`, refusing before any read when `n` does
+/// not fit.
+async fn read_payload<R: AsyncRead + Unpin>(
     reader: &mut R,
     buf: &mut [u8],
+    n: usize,
+    framing: &str,
 ) -> Result<usize> {
-    let mut len = [0u8; 2];
-    reader.read_exact(&mut len).await?;
-    let n = u16::from_be_bytes(len) as usize;
     if n > buf.len() {
         return Err(Error::new(
             ErrorKind::InvalidData,
-            format!("length-delimited frame {n} exceeds buffer {}", buf.len()),
+            format!("{framing} frame {n} exceeds buffer {}", buf.len()),
         ));
     }
     reader.read_exact(&mut buf[..n]).await?;
     Ok(n)
 }
 
-/// Read one frame with a 4-byte little-endian length prefix, the framing BSI
-/// Flex 335 (SAPIENT) uses, then that many payload bytes into `buf`. A length
-/// larger than the buffer is rejected before any payload is read, so a hostile
-/// prefix cannot make the reader allocate or wait for gigabytes.
-pub(crate) async fn read_length_u32le<R: AsyncRead + Unpin>(
-    reader: &mut R,
-    buf: &mut [u8],
-) -> Result<usize> {
-    let mut len = [0u8; 4];
-    reader.read_exact(&mut len).await?;
-    let n = u32::from_le_bytes(len) as usize;
-    if n > buf.len() {
-        return Err(Error::new(
-            ErrorKind::InvalidData,
-            format!("length-u32le frame {n} exceeds buffer {}", buf.len()),
-        ));
-    }
-    reader.read_exact(&mut buf[..n]).await?;
-    Ok(n)
-}
-
-/// Read one frame as `framing` says. The one dispatch every stream transport
-/// shares, so a new framing is added here and nowhere else.
+/// Read one frame as `framing` says, for `tcp-client`, `tcp-server` and `stdin`.
 pub(crate) async fn read_frame<R: AsyncBufRead + Unpin>(
     reader: &mut R,
     framing: Framing,
@@ -134,8 +98,18 @@ pub(crate) async fn read_frame<R: AsyncBufRead + Unpin>(
 ) -> Result<usize> {
     match framing {
         Framing::Line => read_line(reader, buf).await,
-        Framing::LengthDelimited => read_length_delimited(reader, buf).await,
-        Framing::LengthU32le => read_length_u32le(reader, buf).await,
+        Framing::LengthDelimited => {
+            let mut len = [0u8; 2];
+            reader.read_exact(&mut len).await?;
+            let n = u16::from_be_bytes(len) as usize;
+            read_payload(reader, buf, n, "length-delimited").await
+        }
+        Framing::LengthU32le => {
+            let mut len = [0u8; 4];
+            reader.read_exact(&mut len).await?;
+            let n = u32::from_le_bytes(len) as usize;
+            read_payload(reader, buf, n, "length-u32le").await
+        }
     }
 }
 
@@ -199,21 +173,21 @@ mod tests {
 
     #[tokio::test]
     async fn overlong_line_is_rejected_then_stream_resyncs() {
-        // A 100-byte line with an 8-byte buffer: rejected, then the next line
-        // (within the cap) is delivered.
         let mut input = vec![b'x'; 100];
         input.push(b'\n');
         input.extend_from_slice(b"ok\n");
         let got = lines(&input, 8).await;
-        assert!(got[0].is_err()); // overlong, dropped
-        assert_eq!(got[1].as_ref().unwrap(), b"ok"); // resynced
+        assert!(got[0].is_err(), "a line longer than the buffer is rejected");
+        assert_eq!(
+            got[1].as_ref().unwrap(),
+            b"ok",
+            "the next line is delivered"
+        );
     }
 
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(2048))]
 
-        /// The line reader must never panic and never exceed the buffer, whatever
-        /// the byte stream and buffer size.
         #[test]
         fn read_line_never_panics_or_overflows(
             data in proptest::collection::vec(any::<u8>(), 0..4096),

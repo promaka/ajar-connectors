@@ -1,13 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Stdin transport — read this process's standard input, one line per frame. Pipe
-//! from anything: `producer | ajar-<connector>`. The simplest possible glue for a
-//! source that can already print to a pipe.
+//! Stdin transport: read this process's standard input, framed per config.
 
 use crate::config::Framing;
 use crate::runtime::FrameSource;
 use crate::stream::StreamSource;
 
-/// Build a stdin source (line-framed).
 pub fn open(framing: Framing) -> anyhow::Result<impl FrameSource> {
     Ok(StreamSource::new(
         tokio::io::stdin(),

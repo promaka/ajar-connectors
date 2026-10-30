@@ -1,29 +1,25 @@
 // SPDX-License-Identifier: Apache-2.0
-//! The connector's NATS connection, with mTLS and a fail-closed TLS policy.
-//!
-//! Policy, in order:
-//!  - All of `AJAR_TLS_CA` / `AJAR_TLS_CERT` / `AJAR_TLS_KEY` set → mTLS (the
-//!    production path; the client certificate, CN = `source_id`, is the
-//!    connector's transport identity).
-//!  - *Some but not all* set → hard error. A partial TLS config is a slip, and a
-//!    slip must never silently downgrade a defence link to cleartext.
-//!  - None set, and TLS is required (`AJAR_REQUIRE_TLS` truthy, or the URL is
-//!    `tls://…`) → hard error.
-//!  - None set, TLS not required → plaintext with a loud warning (local dev only).
+//! The connector's NATS connection. All of `AJAR_TLS_CA`, `AJAR_TLS_CERT` and
+//! `AJAR_TLS_KEY` set means mTLS; some but not all is an error; none is
+//! plaintext, refused when `AJAR_REQUIRE_TLS` is truthy or a URL is `tls://`.
 
-use anyhow::{bail, Context};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
-/// Connect to NATS per the TLS policy above. The initial connect is retried and
-/// the client auto-reconnects after a drop.
+use anyhow::Context;
+
+/// Seconds between repeated "cannot reach" warnings.
+const UNREACHABLE_WARN_EVERY_S: u64 = 30;
+
+/// Connect to NATS per the TLS policy. The initial connect retries forever and
+/// the client reconnects after a drop.
 pub async fn connect(url: &str) -> anyhow::Result<async_nats::Client> {
     install_crypto_provider();
 
-    // The initial connect retries forever so a connector survives a broker
-    // that is not up yet (and spools meanwhile). The cost is that a wrong URL
-    // or a closed firewall looks like patience unless somebody says so: the
-    // event callback says so, once, then every 30 seconds.
+    // Retrying forever makes a wrong URL or a closed firewall look like
+    // patience, so a client error is logged, rate-limited.
     let urls = url.to_string();
-    let last_warn = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let last_warn = Arc::new(AtomicU64::new(0));
     let mut opts = async_nats::ConnectOptions::new()
         .retry_on_initial_connect()
         .event_callback(move |event| {
@@ -32,62 +28,53 @@ pub async fn connect(url: &str) -> anyhow::Result<async_nats::Client> {
             async move {
                 match event {
                     async_nats::Event::Connected => {
-                        tracing::info!("connected to NATS at {urls}");
+                        tracing::info!(url = %urls, "connected to nats");
                     }
                     async_nats::Event::Disconnected => {
-                        tracing::warn!(
-                            "disconnected from NATS at {urls}; reconnecting, sealed events \
-                             spool meanwhile when a spool is configured"
-                        );
+                        tracing::warn!(url = %urls, "disconnected from nats, reconnecting");
                     }
                     async_nats::Event::ClientError(e) => {
-                        if warn_due(&last_warn, 30) {
+                        if warn_due(&last_warn, UNREACHABLE_WARN_EVERY_S) {
                             tracing::warn!("{}", unreachable_message(&urls, &e.to_string()));
                         }
                     }
                     async_nats::Event::ServerError(e) => {
-                        tracing::warn!("NATS server error from {urls}: {e}");
+                        tracing::warn!(url = %urls, error = %e, "nats server error");
                     }
-                    other => tracing::debug!("NATS event: {other}"),
+                    other => tracing::debug!(event = %other, "nats event"),
                 }
             }
         });
 
-    let ca = non_empty_env("AJAR_TLS_CA");
-    let cert = non_empty_env("AJAR_TLS_CERT");
-    let key = non_empty_env("AJAR_TLS_KEY");
-    let set = [&ca, &cert, &key].iter().filter(|v| v.is_some()).count();
-
-    match set {
-        3 => {
-            tracing::info!("mTLS enabled (client cert = connector identity)");
+    match (
+        non_empty_env("AJAR_TLS_CA"),
+        non_empty_env("AJAR_TLS_CERT"),
+        non_empty_env("AJAR_TLS_KEY"),
+    ) {
+        (Some(ca), Some(cert), Some(key)) => {
+            tracing::info!("mTLS enabled");
             opts = opts
                 .require_tls(true)
-                .add_root_certificates(ca.expect("checked").into())
-                .add_client_certificate(
-                    cert.expect("checked").into(),
-                    key.expect("checked").into(),
-                );
+                .add_root_certificates(ca.into())
+                .add_client_certificate(cert.into(), key.into());
         }
-        0 => {
+        (None, None, None) => {
             if tls_required(url) {
-                bail!(
+                anyhow::bail!(
                     "TLS is required (AJAR_REQUIRE_TLS or a tls:// URL) but \
-                     AJAR_TLS_CA/AJAR_TLS_CERT/AJAR_TLS_KEY are not set — refusing \
+                     AJAR_TLS_CA/AJAR_TLS_CERT/AJAR_TLS_KEY are not set; refusing \
                      to connect in cleartext"
                 );
             }
-            tracing::warn!("no AJAR_TLS_* set — connecting WITHOUT TLS (dev only)");
+            tracing::warn!("no AJAR_TLS_* set, connecting without tls");
         }
-        _ => bail!(
+        _ => anyhow::bail!(
             "partial TLS configuration: set all of AJAR_TLS_CA, AJAR_TLS_CERT and \
-             AJAR_TLS_KEY (or none, for local dev) — refusing to guess"
+             AJAR_TLS_KEY (or none, for local dev); refusing to guess"
         ),
     }
 
-    // A comma-separated nats_url is a failover list: the client connects to
-    // one endpoint and moves to the next when it dies (the two-box gate pins
-    // this against real brokers). A single URL is the one-element case.
+    // A comma-separated nats_url is a failover list.
     let servers: Vec<async_nats::ServerAddr> = url
         .split(',')
         .map(|s| s.trim().parse())
@@ -96,8 +83,8 @@ pub async fn connect(url: &str) -> anyhow::Result<async_nats::Client> {
     opts.connect(servers).await.context("connecting to NATS")
 }
 
-/// What a stranger needs to read when the broker cannot be reached: which
-/// address, what the OS said, that the connector keeps trying, and what to do.
+/// The broker address, the OS error, that the connector keeps trying, and
+/// what to check.
 fn unreachable_message(urls: &str, err: &str) -> String {
     format!(
         "cannot reach NATS at {urls}: {err}. Retrying; sealed events spool meanwhile when \
@@ -106,24 +93,22 @@ fn unreachable_message(urls: &str, err: &str) -> String {
     )
 }
 
-/// True once per `every` seconds: the first time, then after the interval.
-fn warn_due(last: &std::sync::atomic::AtomicU64, every: u64) -> bool {
-    use std::sync::atomic::Ordering::Relaxed;
+/// True the first time, then once `every_s` seconds have passed.
+fn warn_due(last: &AtomicU64, every_s: u64) -> bool {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    let prev = last.load(Relaxed);
-    if prev == 0 || now.saturating_sub(prev) >= every {
-        last.store(now.max(1), Relaxed);
+    let prev = last.load(Ordering::Relaxed);
+    if prev == 0 || now.saturating_sub(prev) >= every_s {
+        last.store(now.max(1), Ordering::Relaxed);
         true
     } else {
         false
     }
 }
 
-/// Whether the deployment demands TLS: `AJAR_REQUIRE_TLS` set truthy, or a
-/// `tls://` endpoint.
+/// `AJAR_REQUIRE_TLS` set truthy, or any `tls://` endpoint.
 fn tls_required(url: &str) -> bool {
     let flagged = std::env::var("AJAR_REQUIRE_TLS")
         .map(|v| {
@@ -131,7 +116,6 @@ fn tls_required(url: &str) -> bool {
             !(v.is_empty() || v == "0" || v == "false" || v == "no")
         })
         .unwrap_or(false);
-    // Any tls:// entry in a failover list demands TLS for the connection.
     flagged
         || url
             .split(',')
@@ -142,16 +126,9 @@ fn non_empty_env(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|v| !v.trim().is_empty())
 }
 
-/// Install the process-wide rustls crypto provider.
-///
-/// rustls 0.23 picks a provider from crate features only while exactly one is
-/// compiled in. A dependency that pulls in a second one turns that into an
-/// ambiguity resolved at runtime, and a connector that cannot build a TLS config
-/// fails before it reaches the network: locally, in under a millisecond, with the
-/// server logging nothing but an EOF. Installing one explicitly removes the
-/// ambiguity whatever the dependency graph does later.
-///
-/// Idempotent and safe to call from every connector; a second call is ignored.
+/// Install ring as the process-wide rustls crypto provider. rustls picks one
+/// from crate features only while exactly one is compiled in; with two, a TLS
+/// config fails to build before any I/O and the server sees only an EOF.
 fn install_crypto_provider() {
     static ONCE: std::sync::Once = std::sync::Once::new();
     ONCE.call_once(|| {
@@ -169,7 +146,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_unreachable_message_names_address_cause_and_fix() {
+    fn unreachable_message_names_address_cause_and_fix() {
         let m = unreachable_message("nats://10.0.0.5:4222", "connection refused");
         assert!(m.contains("nats://10.0.0.5:4222"));
         assert!(m.contains("connection refused"));
@@ -177,31 +154,28 @@ mod tests {
     }
 
     #[test]
-    fn the_warning_fires_first_time_then_waits() {
-        let last = std::sync::atomic::AtomicU64::new(0);
+    fn warning_fires_first_time_then_waits() {
+        let last = AtomicU64::new(0);
         assert!(warn_due(&last, 30));
         assert!(!warn_due(&last, 30));
         assert!(warn_due(&last, 0));
     }
 
-    // Env-var tests share process state, so one test walks every case in
-    // sequence rather than racing siblings.
     #[test]
-    fn a_failover_list_demands_tls_when_any_entry_does() {
-        // Reads no environment beyond what the URL says, so it is safe to
-        // run alongside the policy walk below.
+    fn failover_list_demands_tls_when_any_entry_does() {
+        // The policy test below sets AJAR_REQUIRE_TLS concurrently.
         assert!(
-            super::tls_required("tls://a:4222,nats://b:4222")
-                || std::env::var("AJAR_REQUIRE_TLS").is_ok()
+            tls_required("tls://a:4222,nats://b:4222") || std::env::var("AJAR_REQUIRE_TLS").is_ok()
         );
         assert!(
-            super::tls_required("nats://a:4222, tls://b:4222")
+            tls_required("nats://a:4222, tls://b:4222")
                 || std::env::var("AJAR_REQUIRE_TLS").is_ok()
         );
     }
 
+    // Env vars are process state, so one test walks every case in sequence.
     #[tokio::test]
-    async fn the_tls_policy_fails_closed_in_every_partial_state() {
+    async fn tls_policy_refuses_every_partial_state() {
         for k in [
             "AJAR_TLS_CA",
             "AJAR_TLS_CERT",
@@ -211,19 +185,16 @@ mod tests {
             std::env::remove_var(k);
         }
 
-        // tls:// demands TLS material; refusing beats silent cleartext.
         let err = connect("tls://bus.example:4222")
             .await
             .unwrap_err()
             .to_string();
         assert!(err.contains("refusing"), "{err}");
 
-        // The flag alone demands it too.
         std::env::set_var("AJAR_REQUIRE_TLS", "1");
         assert!(connect("nats://bus.example:4222").await.is_err());
         std::env::remove_var("AJAR_REQUIRE_TLS");
 
-        // A partial set is a slip, not a downgrade.
         std::env::set_var("AJAR_TLS_CA", "/etc/ajar/ca.pem");
         let err = connect("nats://bus.example:4222")
             .await
