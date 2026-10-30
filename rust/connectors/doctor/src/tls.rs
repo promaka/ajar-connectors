@@ -1,12 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
-//! The TLS half of the doctor: the same fail-closed policy table the runtime
-//! applies (`ajar_connector_common::nats`), then a live handshake that turns
-//! rustls errors into named causes with a fix.
+//! The TLS checks: the runtime's `AJAR_TLS_*` policy table
+//! (`ajar_connector_common::nats`), then a live handshake that turns rustls
+//! errors into named causes with a fix.
 
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
-use anyhow::anyhow;
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::client::WebPkiServerVerifier;
 use rustls::{AlertDescription, CertificateError, ClientConfig, RootCertStore, SignatureScheme};
@@ -17,90 +16,69 @@ use tokio_rustls::TlsConnector;
 use crate::certs::{self, CertInfo};
 use crate::net::{self, Endpoint};
 
-/// Which of the `AJAR_TLS_*` triple is set, resolved exactly the way the
-/// runtime resolves it (all-or-none, whitespace is unset).
+const TLS_VARS: [&str; 3] = ["AJAR_TLS_CA", "AJAR_TLS_CERT", "AJAR_TLS_KEY"];
+
+/// The `AJAR_TLS_*` triple as the runtime resolves it: all or none, and
+/// whitespace counts as unset.
 #[derive(Debug)]
 pub enum Policy {
-    /// All three set: mTLS, the production path.
     Mtls {
         ca: String,
         cert: String,
         key: String,
     },
-    /// None set. `required` mirrors AJAR_REQUIRE_TLS / a tls:// URL; when it
-    /// is true the runtime refuses to start, so the doctor fails the same way.
+    /// `required` is AJAR_REQUIRE_TLS or a tls:// URL; the runtime then
+    /// refuses to start.
     Cleartext { required: bool },
-    /// Some but not all set: the runtime refuses to guess, and so do we.
+    /// Some but not all set; the runtime refuses to start.
     Partial {
         set: Vec<&'static str>,
         missing: Vec<&'static str>,
     },
 }
 
-/// Read the policy from the environment, given whether the URL demands TLS.
 pub fn policy(url_demands_tls: bool) -> Policy {
-    let vars = [
-        ("AJAR_TLS_CA", non_empty_env("AJAR_TLS_CA")),
-        ("AJAR_TLS_CERT", non_empty_env("AJAR_TLS_CERT")),
-        ("AJAR_TLS_KEY", non_empty_env("AJAR_TLS_KEY")),
-    ];
-    let set: Vec<_> = vars.iter().filter(|(_, v)| v.is_some()).collect();
-    match set.len() {
-        3 => Policy::Mtls {
-            ca: vars[0].1.clone().expect("checked"),
-            cert: vars[1].1.clone().expect("checked"),
-            key: vars[2].1.clone().expect("checked"),
-        },
-        0 => Policy::Cleartext {
-            required: url_demands_tls || require_tls_flag(),
-        },
-        _ => Policy::Partial {
-            set: vars
-                .iter()
-                .filter(|(_, v)| v.is_some())
-                .map(|(n, _)| *n)
-                .collect(),
-            missing: vars
-                .iter()
-                .filter(|(_, v)| v.is_none())
-                .map(|(n, _)| *n)
-                .collect(),
-        },
+    let values = TLS_VARS.map(|name| std::env::var(name).ok().filter(|v| !v.trim().is_empty()));
+    match values.clone() {
+        [Some(ca), Some(cert), Some(key)] => Policy::Mtls { ca, cert, key },
+        [None, None, None] => {
+            let require_tls = std::env::var("AJAR_REQUIRE_TLS")
+                .map(|v| {
+                    let v = v.trim().to_ascii_lowercase();
+                    !(v.is_empty() || v == "0" || v == "false" || v == "no")
+                })
+                .unwrap_or(false);
+            Policy::Cleartext {
+                required: url_demands_tls || require_tls,
+            }
+        }
+        _ => {
+            let (set, missing): (Vec<_>, Vec<_>) =
+                TLS_VARS.iter().zip(&values).partition(|(_, v)| v.is_some());
+            Policy::Partial {
+                set: set.into_iter().map(|(n, _)| *n).collect(),
+                missing: missing.into_iter().map(|(n, _)| *n).collect(),
+            }
+        }
     }
 }
 
-fn require_tls_flag() -> bool {
-    std::env::var("AJAR_REQUIRE_TLS")
-        .map(|v| {
-            let v = v.trim().to_ascii_lowercase();
-            !(v.is_empty() || v == "0" || v == "false" || v == "no")
-        })
-        .unwrap_or(false)
-}
-
-fn non_empty_env(name: &str) -> Option<String> {
-    std::env::var(name).ok().filter(|v| !v.trim().is_empty())
-}
-
-/// A named cause with its remedy, ready for the report.
 #[derive(Debug, Clone)]
 pub struct Diagnosis {
     pub problem: String,
     pub fix: String,
 }
 
-/// What the live handshake established.
 #[derive(Debug)]
 pub struct Handshake {
-    /// The server's leaf certificate, captured even when verification fails,
-    /// so the clock check and the name lists work on the failure path too.
+    /// The server's leaf, captured even when verification fails.
     pub server_cert: Option<CertInfo>,
-    /// Ok carries a plain-words description of how far we got.
+    /// Ok says how far the probe got.
     pub outcome: Result<String, Diagnosis>,
 }
 
-/// Records the server's leaf before delegating to the real webpki verifier,
-/// so a failed handshake still tells us what the server presented.
+/// Records the server's leaf before delegating to webpki, so a failed
+/// handshake still shows what the server presented.
 #[derive(Debug)]
 struct RecordingVerifier {
     inner: Arc<WebPkiServerVerifier>,
@@ -144,16 +122,9 @@ impl ServerCertVerifier for RecordingVerifier {
     }
 }
 
-fn install_crypto_provider() {
-    static ONCE: OnceLock<()> = OnceLock::new();
-    ONCE.get_or_init(|| {
-        let _ = rustls::crypto::ring::default_provider().install_default();
-    });
-}
-
-/// Attempt the full TLS path against a fresh connection: cleartext INFO
-/// preflight, handshake under the given CA and client identity, then a PING
-/// to force any deferred rejection into the open. Never publishes anything.
+/// The full TLS path on a fresh connection: cleartext INFO preflight,
+/// handshake under the given CA and client identity, then a PING to surface a
+/// deferred rejection.
 pub async fn probe(
     ep: &Endpoint,
     ca_path: &str,
@@ -161,19 +132,22 @@ pub async fn probe(
     source_id: &str,
     timeout: Duration,
 ) -> anyhow::Result<Handshake> {
-    install_crypto_provider();
+    static CRYPTO_PROVIDER: OnceLock<()> = OnceLock::new();
+    CRYPTO_PROVIDER.get_or_init(|| {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+    });
 
     let mut roots = RootCertStore::empty();
     for cert in certs::load_pem_certs(ca_path)? {
-        roots
-            .add(cert)
-            .map_err(|e| anyhow!("a certificate in {ca_path} was rejected as a trust root: {e}"))?;
+        roots.add(cert).map_err(|e| {
+            anyhow::anyhow!("a certificate in {ca_path} was rejected as a trust root: {e}")
+        })?;
     }
 
     let provider = Arc::new(rustls::crypto::ring::default_provider());
     let inner = WebPkiServerVerifier::builder_with_provider(Arc::new(roots), provider.clone())
         .build()
-        .map_err(|e| anyhow!("building a verifier from {ca_path}: {e}"))?;
+        .map_err(|e| anyhow::anyhow!("building a verifier from {ca_path}: {e}"))?;
     let recorder = Arc::new(RecordingVerifier {
         inner,
         seen: Mutex::new(None),
@@ -186,7 +160,7 @@ pub async fn probe(
         .with_custom_certificate_verifier(recorder.clone());
     let config = match client {
         Some((chain, key)) => builder.with_client_auth_cert(chain, key).map_err(|e| {
-            anyhow!(
+            anyhow::anyhow!(
                 "AJAR_TLS_CERT and AJAR_TLS_KEY do not form a usable pair: {e}. \
                  The key file must be the private key for the certificate; \
                  check the two paths are not swapped and belong together"
@@ -195,17 +169,17 @@ pub async fn probe(
         None => builder.with_no_client_auth(),
     };
 
-    // Fresh connection for the probe.
     let mut tcp = match net::dial(ep, timeout).await {
         net::Dial::Connected(s) => s,
         net::Dial::NoDns(e) | net::Dial::NoAnswer(e) => {
-            return Err(anyhow!("could not reconnect for the TLS probe: {e}"))
+            return Err(anyhow::anyhow!(
+                "could not reconnect for the TLS probe: {e}"
+            ))
         }
     };
 
-    // Standard NATS speaks INFO in cleartext before the upgrade; TLS-first
-    // servers stay silent. Both are fine, but a server that answers INFO with
-    // tls_required=false and no TLS on offer will never handshake.
+    // A TLS-first server stays silent; one whose INFO offers no TLS at all
+    // will never handshake.
     let greeting = net::read_info(&mut tcp, Duration::from_millis(1500)).await;
     if let Ok(Some(info)) = &greeting {
         if !info.tls_required && !info.tls_available {
@@ -226,7 +200,7 @@ pub async fn probe(
     }
 
     let server_name = ServerName::try_from(ep.host.clone())
-        .map_err(|_| anyhow!("{:?} is not usable as a TLS server name", ep.host))?;
+        .map_err(|_| anyhow::anyhow!("{:?} is not usable as a TLS server name", ep.host))?;
     let connector = TlsConnector::from(Arc::new(config));
     let handshake = tokio::time::timeout(timeout, connector.connect(server_name, tcp)).await;
 
@@ -240,10 +214,20 @@ pub async fn probe(
     let mut tls = match handshake {
         Ok(Ok(stream)) => stream,
         Ok(Err(e)) => {
+            let diagnosis = match e.get_ref().and_then(|i| i.downcast_ref::<rustls::Error>()) {
+                Some(rustls_err) => classify_rustls_error(rustls_err, ep, seen.as_ref(), source_id),
+                None => Diagnosis {
+                    problem: format!("the TLS handshake failed: {e}"),
+                    fix: "The error above is not a certificate problem. If the endpoint is not \
+                          a NATS server on a TLS port, fix nats_url; otherwise send this exact \
+                          message to the operator."
+                        .into(),
+                },
+            };
             return Ok(Handshake {
-                server_cert: seen.clone(),
-                outcome: Err(classify_handshake_error(&e, ep, seen.as_ref(), source_id)),
-            })
+                server_cert: seen,
+                outcome: Err(diagnosis),
+            });
         }
         Err(_) => {
             return Ok(Handshake {
@@ -259,8 +243,8 @@ pub async fn probe(
         }
     };
 
-    // Force any deferred client-certificate rejection into the open: under
-    // TLS 1.3 the server only alerts after the handshake "succeeds".
+    // Under TLS 1.3 a server rejects a client certificate only after the
+    // handshake completes, so the PING surfaces it.
     let _ = tls.write_all(b"PING\r\n").await;
     let mut buf = vec![0u8; 4096];
     let post = tokio::time::timeout(Duration::from_millis(2000), tls.read(&mut buf)).await;
@@ -290,7 +274,16 @@ pub async fn probe(
                 ))
             }
         }
-        Ok(Err(e)) => Err(classify_post_handshake_error(&e, source_id)),
+        Ok(Err(e)) => Err(Diagnosis {
+            problem: match e.get_ref().and_then(|i| i.downcast_ref::<rustls::Error>()) {
+                Some(rustls::Error::AlertReceived(alert)) => format!(
+                    "the server accepted the handshake, then rejected this connector's client \
+                     certificate ({alert:?})"
+                ),
+                _ => format!("the connection failed right after the handshake: {e}"),
+            },
+            fix: client_cert_fix(source_id),
+        }),
         Err(_) => Ok(
             "TLS established; the server accepted the connection and stayed quiet \
              (some servers wait for CONNECT)"
@@ -304,25 +297,7 @@ pub async fn probe(
     })
 }
 
-fn classify_handshake_error(
-    e: &std::io::Error,
-    ep: &Endpoint,
-    seen: Option<&CertInfo>,
-    source_id: &str,
-) -> Diagnosis {
-    let Some(rustls_err) = e.get_ref().and_then(|i| i.downcast_ref::<rustls::Error>()) else {
-        return Diagnosis {
-            problem: format!("the TLS handshake failed: {e}"),
-            fix: "The error above is not a certificate problem. If the endpoint is not a NATS \
-                  server on a TLS port, fix nats_url; otherwise send this exact message to the \
-                  operator."
-                .into(),
-        };
-    };
-    classify_rustls_error(rustls_err, ep, seen, source_id)
-}
-
-/// Turn a rustls error into the onboarding step that actually failed.
+/// The onboarding step a rustls error points at.
 pub fn classify_rustls_error(
     err: &rustls::Error,
     ep: &Endpoint,
@@ -332,14 +307,12 @@ pub fn classify_rustls_error(
     use rustls::Error as E;
     match err {
         E::InvalidCertificate(ce) => match ce {
-            // UnknownIssuer: no trusted root matches. BadSignature: a root
-            // matches by name but the signature does not check out (a re-keyed
-            // CA with the same DN). To the partner both mean the same thing:
-            // the CA file does not validate this server.
+            // BadSignature is a root that matches by name but not by key (a
+            // re-keyed CA with the same DN): the same wrong CA file.
             CertificateError::UnknownIssuer | CertificateError::BadSignature => Diagnosis {
                 problem: "the server's certificate is not signed by the CA in AJAR_TLS_CA".into(),
                 fix: "You have the wrong CA file for this endpoint. Get the operator's current \
-                      CA bundle (the one that signed the SERVER certificate) and point \
+                      CA bundle (the one that signed the server certificate) and point \
                       AJAR_TLS_CA at it."
                     .into(),
             },
@@ -421,24 +394,6 @@ pub fn classify_rustls_error(
     }
 }
 
-fn classify_post_handshake_error(e: &std::io::Error, source_id: &str) -> Diagnosis {
-    if let Some(rustls::Error::AlertReceived(alert)) =
-        e.get_ref().and_then(|i| i.downcast_ref::<rustls::Error>())
-    {
-        return Diagnosis {
-            problem: format!(
-                "the server accepted the handshake, then rejected this connector's client \
-                 certificate ({alert:?})"
-            ),
-            fix: client_cert_fix(source_id),
-        };
-    }
-    Diagnosis {
-        problem: format!("the connection failed right after the handshake: {e}"),
-        fix: client_cert_fix(source_id),
-    }
-}
-
 fn client_cert_fix(source_id: &str) -> String {
     format!(
         "The usual causes, in order: (1) your client certificate is not issued by the CA the \
@@ -474,7 +429,7 @@ mod tests {
     }
 
     #[test]
-    fn a_wrong_ca_names_the_ca_file_not_the_handshake() {
+    fn wrong_ca_names_the_ca_file() {
         let d = classify_rustls_error(
             &rustls::Error::InvalidCertificate(CertificateError::UnknownIssuer),
             &ep(),
@@ -486,7 +441,7 @@ mod tests {
     }
 
     #[test]
-    fn a_san_mismatch_lists_what_the_certificate_does_cover() {
+    fn san_mismatch_lists_covered_names() {
         let d = classify_rustls_error(
             &rustls::Error::InvalidCertificate(CertificateError::NotValidForName),
             &ep(),
@@ -498,7 +453,7 @@ mod tests {
     }
 
     #[test]
-    fn a_san_less_certificate_is_called_out_explicitly() {
+    fn san_less_certificate_called_out() {
         let d = classify_rustls_error(
             &rustls::Error::InvalidCertificate(CertificateError::NotValidForName),
             &ep(),
@@ -509,7 +464,7 @@ mod tests {
     }
 
     #[test]
-    fn expiry_and_not_yet_valid_both_point_at_the_clock() {
+    fn expired_certificate_points_at_the_clock() {
         let d = classify_rustls_error(
             &rustls::Error::InvalidCertificate(CertificateError::Expired),
             &ep(),
@@ -517,6 +472,10 @@ mod tests {
             "s",
         );
         assert!(d.fix.contains("date -u"));
+    }
+
+    #[test]
+    fn not_yet_valid_certificate_points_at_a_slow_clock() {
         let d = classify_rustls_error(
             &rustls::Error::InvalidCertificate(CertificateError::NotValidYet),
             &ep(),
@@ -527,7 +486,7 @@ mod tests {
     }
 
     #[test]
-    fn a_server_alert_blames_the_client_certificate_with_the_cn_rule() {
+    fn server_alert_blames_client_certificate() {
         let d = classify_rustls_error(
             &rustls::Error::AlertReceived(AlertDescription::BadCertificate),
             &ep(),
@@ -540,10 +499,8 @@ mod tests {
     }
 
     #[test]
-    fn the_policy_table_matches_the_runtime_exactly() {
-        // Serialized against other env-reading tests by using unique names is
-        // not possible here (the runtime's names are fixed), so this test owns
-        // all three variables and restores the world after itself.
+    fn policy_table_matches_the_runtime() {
+        // These names are fixed and process-global, so no other unit test sets them.
         let saved: Vec<_> = [
             "AJAR_TLS_CA",
             "AJAR_TLS_CERT",
@@ -588,9 +545,11 @@ mod tests {
         std::env::set_var("AJAR_TLS_KEY", "/x/key.pem");
         assert!(matches!(policy(false), Policy::Mtls { .. }));
 
-        // Whitespace counts as unset, exactly like the runtime.
         std::env::set_var("AJAR_TLS_KEY", "   ");
-        assert!(matches!(policy(false), Policy::Partial { .. }));
+        assert!(
+            matches!(policy(false), Policy::Partial { .. }),
+            "whitespace counts as unset"
+        );
 
         for (n, v) in saved {
             match v {

@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-//! CLI wrapper around the doctor library. Exit 0 when everything the doctor
-//! can check from here is fine, 1 when at least one check failed, 2 on usage
-//! errors, so it drops into scripts and support runbooks unchanged.
+//! CLI for the doctor. Exit 0 when every check passes, 1 when one failed, 2 on
+//! usage errors.
 
 use std::time::Duration;
 
