@@ -6,17 +6,16 @@ import "github.com/promaka/ajar-connectors/go/eventpb"
 
 // Connector is an inbound connector: it turns a source system's native bytes
 // into a canonical Event. Implementations parse native (CoT XML, a CSV row, a
-// vendor binary frame, ...) and return a fully-populated event — ideally via
-// EventBuilder so the canonical invariants hold by construction.
+// vendor binary frame, ...) and return a fully-populated event, typically via
+// EventBuilder, which enforces the canonical invariants.
 type Connector interface {
 	Normalize(native []byte) (*eventpb.Event, error)
 }
 
-// OutboundProfile renders a governed Event into a target system's format. Its
-// honesty is the ModeledFields / LossyFields declaration: which canonical fields
-// survive translation and which are dropped or approximated. Round-trip
-// conformance (canonical -> target -> canonical over the modeled fields) checks
-// that claim; see the example package.
+// OutboundProfile renders a governed Event into a target system's format.
+// ModeledFields and LossyFields declare which canonical fields survive the
+// translation and which are dropped or approximated; a round-trip test
+// (canonical -> target -> canonical over the modeled fields) checks them.
 type OutboundProfile interface {
 	// Target is the human-readable name of the target system (e.g. "TAK").
 	Target() string

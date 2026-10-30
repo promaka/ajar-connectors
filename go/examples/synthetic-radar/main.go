@@ -2,19 +2,9 @@
 
 // Command synthetic-radar streams synthetic mim:aircraft tracks into a locally
 // running Ajar Core so a developer can watch the full path
-// connector -> NATS -> Core -> audit + Postgres.
-//
-// The shape every connector follows is the three steps in the loop below:
-//
-//  1. normalize a native observation into a canonical Event (here we synthesise
-//     it; a real radar connector would parse a vendor frame),
-//  2. seal it (detached Ed25519 signature ++ canonical bytes),
-//  3. publish the sealed bytes to the connector's NATS ingest subject.
-//
-// This is a clearly-marked example: it carries a dev-only signing seed and picks
-// a transport (NATS, via the real nats.go client). The ajarconnector package
-// itself stays minimal and transport-free — the NATS client lives here, and the
-// examples are their own Go module so this dependency never lands in the SDK.
+// connector -> NATS -> Core -> audit + Postgres. Each tick it builds, seals and
+// publishes one event per track. The examples are their own Go module, so the
+// nats.go dependency stays out of the SDK.
 //
 // Run (from go/examples):
 //
@@ -48,9 +38,8 @@ var (
 	publishErrorsTotal atomic.Uint64
 )
 
-// spawnHealth starts a tiny health/metrics HTTP server if AJAR_HEALTH_ADDR is
-// set (e.g. 0.0.0.0:9090). GET /healthz -> liveness; GET /metrics -> Prometheus
-// text. Stdlib only — no impact unless you opt in.
+// spawnHealth serves GET /healthz (liveness) and GET /metrics (Prometheus text)
+// on AJAR_HEALTH_ADDR (e.g. 0.0.0.0:9090), and does nothing when it is unset.
 func spawnHealth() {
 	addr := os.Getenv("AJAR_HEALTH_ADDR")
 	if addr == "" {
@@ -76,10 +65,9 @@ func spawnHealth() {
 	}()
 }
 
-// loadSeed reads the 32-byte seed file named by AJAR_SIGNING_SEED (the demo
-// stack mints one); unset, it mints an ephemeral throwaway key for this run.
-// No fixed key value exists in this repository: an unregistered ephemeral key
-// signs events a registry would refuse, which is the honest default.
+// loadSeed reads the Ed25519 seed file named by AJAR_SIGNING_SEED (the demo
+// stack mints one); unset, it mints an ephemeral seed for this run, whose
+// events a registry refuses.
 func loadSeed() []byte {
 	if path := os.Getenv("AJAR_SIGNING_SEED"); path != "" {
 		seed, err := os.ReadFile(path)
@@ -111,7 +99,6 @@ type track struct {
 func (t *track) advance() {
 	t.lat += math.Cos(t.heading) * t.speedDeg
 	t.lon += math.Sin(t.heading) * t.speedDeg
-	// Region: lat [25, 28], lon [49, 52].
 	if t.lat < 25.0 || t.lat > 28.0 {
 		t.heading = -t.heading
 		t.lat = math.Max(25.0, math.Min(28.0, t.lat))
@@ -122,9 +109,8 @@ func (t *track) advance() {
 	}
 }
 
-// EDIT (data source): replace these synthetic tracks + the advance() loop in
-// main() with reads from YOUR feed (socket / file / API / serial), one record
-// per iteration.
+// EDIT: replace these synthetic tracks and the advance() loop in main() with
+// reads from your feed (socket, file, API or serial), one record per iteration.
 func initialTracks() []*track {
 	const pi = math.Pi
 	return []*track{
@@ -150,29 +136,26 @@ func main() {
 	prefix := envOr("AJAR_INGEST_PREFIX", "ajar.ingest")
 	natsURL := envOr("NATS_URL", "nats://127.0.0.1:4222")
 
-	// source must equal the Core's AJAR_SOURCE_ID; the subject is the one the
-	// Core's ingest is listening on.
+	// sourceID must equal Core's AJAR_SOURCE_ID; Core's ingest listens on subject.
 	subject := prefix + "." + sourceID
 	key := ed25519.NewKeyFromSeed(loadSeed())
 
-	spawnHealth() // no-op unless AJAR_HEALTH_ADDR is set
+	spawnHealth()
 
-	// Connect the real NATS client (skipped in -dry-run, which needs no infra).
 	var nc *nats.Conn
 	if *dryRun {
 		log.Println("[synthetic-radar] -dry-run: building + sealing events, not publishing")
 	} else {
 		log.Printf("[synthetic-radar] connecting to NATS at %s", natsURL)
 		var err error
-		// Tolerate NATS not being up yet (pod ordering) and reconnect after a drop.
+		// NATS may start after this pod.
 		opts := []nats.Option{
 			nats.RetryOnFailedConnect(true),
 			nats.MaxReconnects(-1),
 			nats.ReconnectWait(time.Second),
 		}
-		// mTLS when AJAR_TLS_CA/CERT/KEY are all set (production; client-cert
-		// CN = source_id, mounted by the Helm chart under /etc/ajar/tls). Unset
-		// -> plaintext for local dev.
+		// mTLS when AJAR_TLS_CA/CERT/KEY are all set (the client-cert CN is the
+		// source_id; the Helm chart mounts them under /etc/ajar/tls), else plaintext.
 		if ca, cert, key := os.Getenv("AJAR_TLS_CA"), os.Getenv("AJAR_TLS_CERT"), os.Getenv("AJAR_TLS_KEY"); ca != "" && cert != "" && key != "" {
 			log.Println("[synthetic-radar] mTLS enabled (client cert = source identity)")
 			opts = append(opts, nats.ClientCert(cert, key), nats.RootCAs(ca))
@@ -196,12 +179,11 @@ func main() {
 		for _, t := range tracks {
 			t.advance()
 
-			// EDIT (the mapping): the only Ajar-specific code you write — map one
-			// of YOUR records into an Event. Use the entity_type(s) your operator
-			// registered; add .Attribute(k, v) ONLY for attributes that type's
-			// ontology schema declares (else Core rejects it as UnknownAttribute).
+			// 1. Normalize (synthesised here). EDIT: map one record to an Event. Use
+			// the entity_type your operator registered, and add .Attribute(k, v) for
+			// attributes its ontology declares.
 			event, err := ajarconnector.NewEventBuilder(sourceID, "mim:aircraft").
-				NewID(). // fresh UUIDv7 per event
+				NewID().
 				Now().
 				Location(t.lat, t.lon, t.altM).
 				Confidence(0.9).
@@ -211,17 +193,15 @@ func main() {
 				log.Fatalf("build event: %v", err)
 			}
 
-			// 2. Seal: detached Ed25519 signature ++ canonical bytes.
+			// 2. Seal.
 			canonical, err := ajarconnector.CanonicalBytes(event)
 			if err != nil {
 				log.Fatalf("canonical bytes: %v", err)
 			}
 			sealed := ajarconnector.Seal(canonical, key)
 
-			// 3. Publish the sealed bytes to the ingest subject, with
-			//    Nats-Msg-Id = event id so the broker's duplicate window can
-			//    drop retransmissions. Non-fatal: a transport blip is logged
-			//    and skipped, the connector keeps going.
+			// 3. Publish. The broker's duplicate window drops retransmissions keyed on the
+			// Nats-Msg-Id header; a failed publish is logged and skipped.
 			if nc != nil {
 				msg := &nats.Msg{
 					Subject: subject,
@@ -244,8 +224,7 @@ func main() {
 				event.GetId(), t.label, t.lat, t.lon, t.altM, subject, len(sealed), suffix)
 		}
 
-		// Ensure messages are on the wire before we idle (and before we exit in
-		// the bounded -ticks case).
+		// Flush before idling, and before exiting after -ticks.
 		if nc != nil {
 			if err := nc.Flush(); err != nil {
 				log.Fatalf("flush: %v", err)

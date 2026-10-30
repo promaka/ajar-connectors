@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # synthetic-radar (Go example)
 
-Streams synthetic `mim:aircraft` tracks into a locally running **Ajar Core** so
+Streams synthetic `mim:aircraft` tracks into a locally running Ajar Core so
 you can watch the whole path end to end:
 
 ```
@@ -10,14 +10,14 @@ synthetic-radar ──PUB──▶ NATS ──▶ Core ──▶ accepted ──
 ```
 
 Each tick (~1/sec) it advances a few tracks over the Gulf region, builds the
-event with the SDK's `EventBuilder`, **seals** it, and publishes the sealed
+event with the SDK's `EventBuilder`, seals it, and publishes the sealed
 bytes to NATS subject `ajar.ingest.<source>` via the real
 [`nats.go`](https://github.com/nats-io/nats.go) client.
 
-> **Example only.** Signs with the seed file named by `AJAR_SIGNING_SEED`, or
+> Example only. Signs with the seed file named by `AJAR_SIGNING_SEED`, or
 > an ephemeral throwaway key when unset, and picks a transport (NATS). The `ajarconnector` package stays minimal and
-> transport-free — the NATS client lives here. The examples are a **separate Go
-> module** (`go/examples/`, with `replace … => ../`) so `nats.go` never lands in
+> transport-free; the NATS client lives here. The examples are a separate Go
+> module (`go/examples/`, with `replace … => ../`) so `nats.go` never lands in
 > the SDK module's `go.mod`.
 
 ## Run
@@ -25,7 +25,7 @@ bytes to NATS subject `ajar.ingest.<source>` via the real
 ```bash
 cd go/examples
 
-# Dry run — build + seal + print, no NATS needed (and CI-friendly):
+# Dry run: build + seal + print, no NATS needed (and CI-friendly):
 go run ./synthetic-radar -dry-run
 go run ./synthetic-radar -dry-run -ticks 3   # bounded, exits after 3 ticks
 
@@ -40,19 +40,21 @@ Environment overrides:
 | `NATS_URL` | `nats://127.0.0.1:4222` | NATS server URL |
 | `AJAR_SOURCE_ID` | `demo-connector` | must equal the Core's `AJAR_SOURCE_ID` |
 | `AJAR_INGEST_PREFIX` | `ajar.ingest` | subject prefix (full subject is `<prefix>.<source>`) |
+| `AJAR_SIGNING_SEED` | unset | seed file; unset, an ephemeral key whose events a registry refuses |
+| `AJAR_TLS_CA` / `AJAR_TLS_CERT` / `AJAR_TLS_KEY` | unset | all three set: mutual TLS to NATS |
+| `AJAR_HEALTH_ADDR` | unset | serve `/healthz` and `/metrics`, e.g. `0.0.0.0:9090` |
 
 ## Why these exact choices
 
-The defaults reach a stock local Core with **zero core changes**:
+The defaults reach a stock local Core with zero core changes:
 
-- **`source` = `demo-connector`** matches the Core's `AJAR_SOURCE_ID`, so the
+- `source` = `demo-connector` matches the Core's `AJAR_SOURCE_ID`, so the
   subject (`ajar.ingest.demo-connector`) is the one Core is listening on.
-- **`AJAR_SIGNING_SEED`** names the seed whose public half the receiving
+- `AJAR_SIGNING_SEED` names the seed whose public half the receiving
   registry has registered, so the sealed signature verifies. The demo stack
   mints one at startup; none lives in this repository.
-- **`entity_type = "mim:aircraft"`** with a **`location`** (the seed ontology
-  requires position for aircraft) and **no attributes** (the seed `mim:aircraft`
-  has no attribute schema yet, so any attribute is rejected as
-  `UnknownAttribute`). `received_at` is left empty — Core stamps it.
+- `entity_type = "mim:aircraft"` with a `location` (the seed ontology
+  requires position for aircraft) and no attributes (the seed `mim:aircraft`
+  has no attribute schema yet, so any attribute is rejected). `received_at` is left empty: Core stamps it.
 - The default policy accepts anything whose `entity_type` starts with `mim:`, so
   these flow straight through to `accepted → stored + audited`.

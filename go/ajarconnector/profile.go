@@ -10,10 +10,9 @@ import (
 	"strings"
 )
 
-// ConnectorProfile is a connector's published self-declaration: what it is
-// allowed to emit and how Ajar authenticates it. It is a declaration, not
-// policy — core decides what to do with it. The SDK serializes it
-// deterministically, projecting the verifying key to lowercase hex.
+// ConnectorProfile is a connector's published self-declaration: what it may
+// emit and how Ajar authenticates it. Core decides what to do with it. It
+// serializes deterministically, with the verifying key as lowercase hex.
 type ConnectorProfile struct {
 	// SourceID is the stable source identity this connector signs as.
 	SourceID string
@@ -68,10 +67,9 @@ type profileWire struct {
 	VerifyingKeyHex    string    `json:"verifying_key_hex"`
 }
 
-// jsonFloat renders an integer-valued float with a trailing ".0" (e.g. 20.0,
-// not 20) so the profile JSON is byte-identical to the Rust SDK's serde output.
-// The profile is a debug projection — never hashed — so this is cosmetic
-// cross-language consistency, not a wire requirement.
+// jsonFloat renders an integer-valued float with a trailing ".0" (20.0 for 20)
+// so the profile JSON matches the Rust SDK's serde output. The profile is
+// never hashed, so this only keeps the SDKs' output identical.
 type jsonFloat float64
 
 func (f jsonFloat) MarshalJSON() ([]byte, error) {

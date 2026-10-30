@@ -39,14 +39,12 @@ type ConsumerStats struct {
 	Skipped  uint64
 }
 
-// VerifyingHandler wraps a per-event handler so that verification is
-// structurally unskippable: the returned function is given raw egress
-// messages (payload + subject, e.g. from a NATS subscription) and calls
-// `handle` only for events whose Ed25519 signature verifies under the
+// VerifyingHandler wraps a per-event handler: the returned function takes raw
+// egress messages (payload and subject, e.g. from a NATS subscription) and
+// calls handle only for events whose Ed25519 signature verifies under the
 // deployment's egress key. Everything else is counted and dropped.
 //
-// The SDK deliberately has no transport dependency, so the subscription is
-// yours; the security-critical middle is this function's:
+// The SDK has no transport dependency, so the subscription is yours:
 //
 //	sub, _ := nc.Subscribe("ajar.egress.signed.>", func(m *nats.Msg) {
 //	    deliver(m.Data, m.Subject)

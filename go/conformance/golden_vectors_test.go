@@ -1,9 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
-// Package conformance is the Go side of THE gate: for every corpus fixture the
-// SDK must reproduce the same canonicalSha256 + sealedSha256 the Rust SDK does,
-// from the SAME vendor/contract/vectors.json. One vendored contract, three
-// language harnesses, identical hashes — that is the proof of byte-compatibility.
+// Package conformance checks that the Go SDK reproduces the canonicalSha256 and
+// sealedSha256 of every corpus fixture in vendor/contract/vectors.json.
 package conformance
 
 import (
