@@ -96,6 +96,9 @@ for (const auto& fault : ajar::validate(event))
   std::fprintf(stderr, "%s\n", fault.message().c_str());
 ```
 
+Prefer the built event. It checks what your code really produces, and a declared
+mapping can drift from that.
+
 The connector template wires this to a flag, so your CI can hold the mapping to
 the contract:
 

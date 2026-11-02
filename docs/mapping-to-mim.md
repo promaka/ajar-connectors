@@ -140,7 +140,9 @@ sorted.
 
 ## 2. What to map to: entity types
 
-The class of the thing being reported. What the shipped connectors emit:
+The class of the thing being reported. On the picture, `entity_type` picks a
+track's symbol and the `hostility` attribute its colour. What the shipped
+connectors emit:
 
 | `entity_type` | Use for |
 |---|---|
@@ -173,6 +175,8 @@ case-sensitive.
 observed, and `alt_id_standard`, the standard that minted it. Set both or
 neither. The Ajar-shipped connectors emit ICAO addresses, MMSIs, ASTERIX track
 numbers, MAVLink system ids, STANAG 4676 track UUIDs and CoT uids this way.
+The event `id` is fresh per event, so without a governed identity a consumer sees
+every observation as a new track.
 
 **Uncertainty** (revision 2): `position_accuracy_h_m`, `position_accuracy_v_m`
 (metres), `speed_accuracy` (m/s), `angle_accuracy` (degrees). Emit only what

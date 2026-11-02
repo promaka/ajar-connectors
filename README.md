@@ -182,7 +182,7 @@ The prebuilt connectors set it automatically.
 **The same three steps in Rust:**
 
 ```rust
-use ajar_connector::{canonical_bytes, seal, EventBuilder, SigningKey};
+use ajar_connector::{EventBuilder, SigningKey};
 
 let seed: [u8; 32] = std::fs::read("acme-radar-1.seed")?.try_into().expect("a 32-byte seed");
 let key = SigningKey::from_bytes(&seed);
@@ -196,7 +196,7 @@ let event = EventBuilder::new("acme-radar-1", "mim:aircraft")
     .payload(frame)
     .build()?;
 
-let sealed = seal(&canonical_bytes(&event), &key);
+let sealed = ajar_connector::seal(&ajar_connector::canonical_bytes(&event), &key);
 ```
 
 **And in Go:**
@@ -290,6 +290,9 @@ group = "239.2.3.1"
 
 Any connector runs on any transport. The full list is in
 [section 10](#transport-is-orthogonal-to-protocol).
+
+A second feed is a second copy of this file with its own `source_id`, key and
+`[transport]`, run as a second process. Nothing is rebuilt.
 
 **Step 4. Run it once locally.** The seed file from section 1 must exist at
 the path you gave; nothing else is needed yet.
@@ -618,13 +621,19 @@ flows.
 ### 7g. When nothing flows
 
 `ajar-doctor connector.toml` checks the setup step by step (config, signing
-key, marking, registration, endpoint, TLS, clock) and says which onboarding step is
+key, spool, marking, transport, registration, endpoint, TLS, clock) and says which onboarding step is
 broken and what to do, reading the same config and `AJAR_TLS_*` environment
 the connector uses. With no config file it reads `NATS_URL`, `AJAR_SOURCE_ID`
 and `AJAR_SIGNING_SEED` instead, so a connector embedded in your own code
 (option A) is diagnosed with zero files. Read-only on the wire, so it is safe
 against a production endpoint. Ships in the release binaries next to the
 connectors.
+
+The transport step joins the multicast group, opens the serial device, probes
+the DDS domain or parses the pcap capture the config names. With a failover
+`nats_url` it dials every endpoint and warns about a standby that does not
+answer. Exit status is 0 when no check fails, 1 when one does, and 2 on a usage
+error.
 
 ---
 
@@ -639,9 +648,23 @@ cargo build --release --manifest-path rust/Cargo.toml -p conformance --bin ajar-
 ```
 
 **Step 2. Write an adapter** that reads a fixture on stdin and writes raw bytes
-on stdout. Three lines. Copy
+on stdout. Copy
 [the Python one](python/examples/conformance_adapter.py) or
 [the Rust one](rust/examples/conformance-adapter/).
+
+The harness runs it once per fixture in each of two modes, passed as the last
+argument:
+
+- `canonical`: write the event's canonical bytes.
+- `sealed`: write the 64-byte signature followed by the canonical bytes. The
+  32-byte test seed arrives as hex in `AJAR_TEST_SIGNING_SEED`.
+
+A fixture is an event as JSON: camelCase field names, with `payload` in base64.
+Keep every field as given, including `receivedAt`. A live connector leaves that
+field for Core to stamp, but the vectors hash the fixture as Core did. The SDK
+builders have no setter for it, so construct the event directly.
+
+Only stdout is hashed. Stderr is shown when a fixture fails.
 
 **Step 3. Run it.**
 

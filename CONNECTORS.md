@@ -191,9 +191,10 @@ a fusion consumer association work with a known answer.
 
 Each sensor emits only what that sensor carries: AIS has an identity and no
 accuracy, the radar plot has accuracy and no identity, CoT has an identity and
-no kinematics, the ESM intercept has a bearing and no position. Every
-generator lags by its own sensor's latency, so observation time and arrival
-time diverge as they do in the field. Cadences are the protocols' own: the AIS
+no kinematics, the ESM intercept has a bearing and no position. The times on
+the wire lag by each sensor's latency. CoT, ESM and SAPIENT events take their
+timestamp from the wire; the radar, AIS, ADS-B and MAVLink connectors stamp the
+time of receipt. Cadences are the protocols' own: the AIS
 static report every six minutes per ITU-R M.1371 (shorten it for a
 commissioning run with `--ais-static-every`), the radar heartbeat once per
 rotation. The ESM intercept carries the full contract revision 4 emitter
@@ -203,7 +204,8 @@ long as the feed runs.
 
 Each generator is proven against the decoder that reads it, in the same
 workspace, so the two cannot drift apart without a test failing. `--dry-run`
-prints one tick of every sensor and opens nothing.
+prints what would go on the wire and opens nothing; `--ticks N` stops it after
+N ticks.
 
 ```
 ajar-feed-synthetic all --bind 192.0.2.10     # every sensor on one interface

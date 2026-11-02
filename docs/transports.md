@@ -206,9 +206,8 @@ process_existing = false
 | `process_existing` | `false` | Also read files present at startup. Unset, they are skipped |
 
 A file is read once its size is the same on two consecutive polls, about a
-second apart. A transfer that stalls for that long looks finished: the file is
-read as it stands, and what arrives later is not read. Have the source write
-elsewhere and rename into the directory if its transfers can stall.
+second apart, so have the source write elsewhere and rename into the directory
+if its transfers can stall.
 
 Read files are remembered by name, in memory, up to 100,000 names. The oldest is
 then forgotten, and read again if it is still there. Clean the directory as part
@@ -392,6 +391,9 @@ payload = "body"
 
 A mismatch in topic, type name or reliability produces silence, not an error.
 `ajar-doctor` says which it is. Only the default partition is joined.
+
+CI runs this transport against ROS 2 Jazzy publishers of `std_msgs/String`, one on
+Fast DDS and one on Cyclone DDS.
 
 | `payload` | The parser receives |
 |---|---|
