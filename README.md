@@ -110,16 +110,16 @@ Your process, your deployment. The SDK builds, seals and verifies. You publish.
 package registries in step 2. C++ builds from source:
 
 ```bash
-git clone --depth 1 --branch v0.6.5 https://github.com/promaka/ajar-connectors
+git clone --depth 1 --branch v0.6.6 https://github.com/promaka/ajar-connectors
 ```
 
 **Step 2. Add it to your build.**
 
 | Language | Command |
 |---|---|
-| Rust | `ajar-connector = "0.6.5"` |
-| Python | `pip install ajar-connector==0.6.5` |
-| Go | `go get github.com/promaka/ajar-connectors/go/ajarconnector@v0.6.5` |
+| Rust | `ajar-connector = "0.6.6"` |
+| Python | `pip install ajar-connector==0.6.6` |
+| Go | `go get github.com/promaka/ajar-connectors/go/ajarconnector@v0.6.6` |
 | C++ | `cmake -S cpp -B build && cmake --build build && cmake --install build --prefix /opt/ajar` |
 
 C++ then links with:
@@ -478,7 +478,7 @@ architecture. Add `--platform linux/arm64` for an ARM edge box.
 ```bash
 docker build -f deploy/docker/Dockerfile.build \
   --build-arg WSDIR=rust/connectors --build-arg PKG=ajar-asterix \
-  -t ajar-connector-asterix:0.6.5 .
+  -t ajar-connector-asterix:0.6.7 .
 ```
 
 A connector you wrote in section 6a is the same command with its crate name,
@@ -490,7 +490,7 @@ A connector you wrote in section 6a is the same command with its crate name,
 docker run \
   -v ./asterix.toml:/etc/ajar/connector.toml:ro \
   -v ./acme-radar-1.seed:/etc/ajar/seed:ro \
-  ajar-connector-asterix:0.6.5 /etc/ajar/connector.toml
+  ajar-connector-asterix:0.6.7 /etc/ajar/connector.toml
 ```
 
 Set `signing_key_path = "/etc/ajar/seed"` in the mounted config. Prebuilt
@@ -516,7 +516,7 @@ kubectl create secret generic radar-seed --from-file=seed=acme-radar-1.seed
 
 helm install radar deploy/helm/connector \
   --set connector.name=asterix \
-  --set image.tag=0.6.5 \
+  --set image.tag=0.6.7 \
   --set signingSeed.existingSecret=radar-seed \
   --set-file connector.config=./asterix.toml
 ```
@@ -924,7 +924,7 @@ The SDK API (`EventBuilder`, `seal` and the rest) is a convenience for building
 those bytes. If it changes, only a deliberate rebuild is affected, never a
 running binary.
 
-Pin the released tag `v0.6.5`, not a branch.
+Pin the released tag `v0.6.6`, not a branch.
 
 Three things carry a version, and each moves on its own:
 

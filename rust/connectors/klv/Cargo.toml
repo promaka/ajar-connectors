@@ -2,7 +2,7 @@
 [package]
 name = "ajar-klv"
 description = "Ajar ingress connector for STANAG 4609 / MISB ST 0601 UAS Datalink Local Set (KLV) metadata."
-version = "0.6.6"
+version = "0.6.7"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

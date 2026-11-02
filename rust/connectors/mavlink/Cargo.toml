@@ -2,7 +2,7 @@
 [package]
 name = "ajar-mavlink"
 description = "Ajar ingress connector for MAVLink vehicle position telemetry (UAS / drones)."
-version = "0.6.6"
+version = "0.6.7"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

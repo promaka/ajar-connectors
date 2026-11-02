@@ -2,7 +2,7 @@
 [package]
 name = "ajar-doctor"
 description = "Preflight diagnostics for Ajar connectors: checks the config, key, registration, endpoint, TLS and clock, and says which onboarding step failed in plain words."
-version = "0.6.6"
+version = "0.6.7"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

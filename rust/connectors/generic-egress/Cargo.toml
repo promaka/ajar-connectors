@@ -2,7 +2,7 @@
 [package]
 name = "ajar-generic-egress"
 description = "Governed events out of Ajar, verified and delivered as consumer-shaped JSON over HTTP."
-version = "0.6.6"
+version = "0.6.7"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

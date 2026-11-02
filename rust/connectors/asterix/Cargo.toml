@@ -2,7 +2,7 @@
 [package]
 name = "ajar-asterix"
 description = "Ajar ingress connector for EUROCONTROL ASTERIX CAT021 (ADS-B), CAT048 (monoradar) and CAT062 (system track) reports."
-version = "0.6.6"
+version = "0.6.7"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

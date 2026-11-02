@@ -2,7 +2,7 @@
 [package]
 name = "ajar-sapient"
 description = "Ajar ingress connector for SAPIENT (BSI Flex 335): detections, tracks, sensor status and alerts from edge nodes or a fusion node, as signed events."
-version = "0.6.6"
+version = "0.6.7"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
