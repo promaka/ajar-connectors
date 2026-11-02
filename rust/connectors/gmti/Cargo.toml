@@ -32,8 +32,8 @@ thiserror.workspace = true
 ed25519-dalek.workspace = true
 hex.workspace = true
 serde_json.workspace = true
-proptest = "1"
-uuid = "1"
+proptest.workspace = true
+uuid.workspace = true
 
 # See CONTRIBUTING.md, "Releases".
 [package.metadata.ajar]

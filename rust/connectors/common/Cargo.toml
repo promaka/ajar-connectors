@@ -53,7 +53,7 @@ tokio-tungstenite = { version = "0.30", default-features = false, features = [
 ], optional = true }
 
 [dev-dependencies]
-rcgen = { version = "0.14", default-features = false, features = ["ring", "pem"] }
-proptest = "1"
+rcgen.workspace = true
+proptest.workspace = true
 tempfile.workspace = true
 futures-util.workspace = true

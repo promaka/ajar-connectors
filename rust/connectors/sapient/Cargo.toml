@@ -33,13 +33,13 @@ tracing-subscriber.workspace = true
 anyhow.workspace = true
 thiserror.workspace = true
 async-trait.workspace = true
-uuid = { version = "1", features = ["v4"] }
+uuid = { workspace = true, features = ["v4"] }
 
 [dev-dependencies]
 ed25519-dalek.workspace = true
 hex.workspace = true
 serde_json.workspace = true
-proptest = "1"
+proptest.workspace = true
 
 # See CONTRIBUTING.md, "Releases".
 [package.metadata.ajar]

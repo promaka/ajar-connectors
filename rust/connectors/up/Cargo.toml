@@ -33,11 +33,11 @@ toml.workspace = true
 anyhow.workspace = true
 hex.workspace = true
 ed25519-dalek.workspace = true
-prost = "0.14"
+prost.workspace = true
 # Reads the operator's packet: a tar of manifest + signature + files.
 tar = "0.4"
 # Verifies the per-file checksums the manifest pins.
-sha2 = "0.11"
+sha2.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

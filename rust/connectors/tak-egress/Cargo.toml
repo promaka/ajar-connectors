@@ -31,7 +31,7 @@ anyhow.workspace = true
 
 [dev-dependencies]
 # ring only, so the process has one rustls crypto provider.
-rcgen = { version = "0.14", default-features = false, features = ["ring", "pem"] }
+rcgen.workspace = true
 tempfile.workspace = true
 
 # See CONTRIBUTING.md, "Releases".
