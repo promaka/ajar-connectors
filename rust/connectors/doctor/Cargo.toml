@@ -31,7 +31,7 @@ serde_json.workspace = true
 anyhow.workspace = true
 hex.workspace = true
 # Subject CN, SAN list and validity window, which rustls does not expose.
-x509-parser = "0.17"
+x509-parser = "0.18"
 
 [dev-dependencies]
 # Throwaway PKI for the failure matrix; ring only, like the rest of the workspace.
