@@ -131,7 +131,7 @@ pub async fn open(
                      plaintext listener is sent in the clear with every delivery"
                 );
             }
-            tracing::warn!("http-server plaintext, protected segments only");
+            tracing::warn!(bind = %bind, "http-server has no tls, data readable on the network");
             None
         }
         _ => anyhow::bail!("http-server: set both tls_cert and tls_key, or neither"),

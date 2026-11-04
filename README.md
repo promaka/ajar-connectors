@@ -825,7 +825,7 @@ limit is in [docs/transports.md](docs/transports.md).
 | `udp-multicast`, `udp` | UDP datagrams | one packet per frame (SA broadcast) |
 | `tcp-client` | TCP stream (dial out) | `framing = "line"`, `"length-delimited"` (2-byte big-endian prefix) or `"length-u32le"` (4-byte little-endian prefix, as SAPIENT frames), auto-reconnect |
 | `tcp-server` | TCP listen | sources that push to a configured address; multiple pushers |
-| `http-server` | HTTP(S) listen (webhooks) | sources that only POST to a URL; optional TLS and client certs; refuses with 503 when saturated so the sender retries |
+| `http-server` | HTTP(S) listen (webhooks) | sources that only POST to a URL; optional TLS and client certs; refuses with 503 when saturated so the sender retries. Without TLS, data is readable on the network: use only on a physically protected segment |
 | `file` | tail a file | follows appends, handles rotation; `framing` as for TCP, so a binary capture replays from the start |
 | `dir` | watch a drop directory | batch file drops (SFTP exports); reads files once settled |
 | `exec` | run a CLI tool | reads its stdout; wraps any vendor binary |

@@ -166,7 +166,7 @@ pub(super) fn decode(items: &[(Item, &[u8])]) -> AsterixTarget {
                 t.track_angle_deg = Some(vx.atan2(vy).to_degrees().rem_euclid(360.0));
             }
             Item(60) => t.squawk = Some(mode_3a(u16::from_be_bytes([item[0], item[1]]))),
-            Item(245) => t.callsign = aircraft_id(&item[1..7]),
+            Item(245) => t.callsign = item.get(1..7).and_then(aircraft_id),
             Item(380) => {
                 for (sub, bytes) in walk_compound(&SUB_380, item) {
                     match sub {

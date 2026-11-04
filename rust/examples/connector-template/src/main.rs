@@ -14,7 +14,10 @@ use ajar_connector::{BuildError, Event, EventBuilder, SigningKey};
 use serde::Deserialize;
 use tokio::io::{AsyncBufReadExt, BufReader};
 
-// EDIT 1: describe one record from your feed. These fields match the README demo.
+// =============================================================================
+// EDIT 1: describe one record from your feed. These fields match the README
+// demo; change them to match your data.
+// =============================================================================
 #[derive(Debug, Deserialize)]
 struct MyRecord {
     lat: f64,
@@ -23,7 +26,10 @@ struct MyRecord {
     quality: f64,
 }
 
-// EDIT 2: map your record to an Event of your entity type and its schema's attributes.
+// =============================================================================
+// EDIT 2: map your record to an Event. Use the entity type your operator
+// assigned, and add .attribute(k, v) for attributes its schema declares.
+// =============================================================================
 fn to_event(source_id: &str, r: &MyRecord) -> Result<Event, BuildError> {
     EventBuilder::new(source_id, "mim:aircraft")
         .new_id()
@@ -33,7 +39,10 @@ fn to_event(source_id: &str, r: &MyRecord) -> Result<Event, BuildError> {
         .build()
 }
 
-// Usually no edits are needed below here.
+// =============================================================================
+// Nothing below this line usually needs changing, except the feed reader
+// marked EDIT.
+// =============================================================================
 
 #[derive(Default)]
 struct Metrics {

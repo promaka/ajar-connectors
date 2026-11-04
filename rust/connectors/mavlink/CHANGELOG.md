@@ -16,6 +16,7 @@ CONTRIBUTING.md, "Releases").
 - Code and documentation clean-up: source comments trimmed, the README rewritten as
   the single user-facing document. Some log lines and error messages are reworded.
   Emitted entity types, attributes and config keys are unchanged.
+- Message decoders, enum tables and the CRC move to their own file.
 
 ## [0.6.6] - 2026-10-27
 

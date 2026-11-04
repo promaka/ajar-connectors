@@ -150,12 +150,20 @@ async fn connect(
     server_name: &ServerName<'static>,
     connector: &TlsConnector,
 ) -> std::io::Result<TlsStream<TcpStream>> {
+    const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
     let attempt = async {
         let tcp = TcpStream::connect(endpoint).await?;
         tcp.set_nodelay(true)?;
         connector.connect(server_name.clone(), tcp).await
     };
-    tokio::time::timeout(Duration::from_secs(5), attempt).await?
+    tokio::time::timeout(CONNECT_TIMEOUT, attempt)
+        .await
+        .map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                format!("timed out after {CONNECT_TIMEOUT:?}"),
+            )
+        })?
 }
 
 fn load_certs(path: &str) -> anyhow::Result<Vec<CertificateDer<'static>>> {

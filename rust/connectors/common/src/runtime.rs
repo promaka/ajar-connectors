@@ -189,7 +189,7 @@ fn report_ungoverned(event: &Event, metrics: &Metrics, reported: &mut BTreeSet<(
             tracing::warn!(
                 entity_type = %event.entity_type,
                 ontology = ontology::version(),
-                "entity type not in the ontology"
+                "entity type is not in the ontology; Core will reject these events on every site"
             );
         }
         return;
@@ -204,7 +204,7 @@ fn report_ungoverned(event: &Event, metrics: &Metrics, reported: &mut BTreeSet<(
                 entity_type = %event.entity_type,
                 attribute = %name,
                 ontology = ontology::version(),
-                "attribute not governed on its entity type"
+                "attribute is not governed on this entity type; Core will quarantine it or, on a strict site, reject the event: put it in metadata"
             );
         }
     }

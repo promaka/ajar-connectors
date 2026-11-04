@@ -77,6 +77,11 @@ impl Config {
                  output only, and the effector cue channel is out of reach"
             );
         }
+        // The prefix rule excludes these today; this keeps the cue channel blocked if
+        // EGRESS_PREFIX is ever widened.
+        if s.starts_with("ajar.cue.") || s == "ajar.>" || s == ">" {
+            anyhow::bail!("subject {s:?} would reach the effector cue channel: refused");
+        }
         if self.mapping.fields.is_empty() {
             anyhow::bail!("[mapping] is empty: nothing would be delivered");
         }
@@ -151,7 +156,10 @@ mod tests {
             "ajar.ingest.>",
         ] {
             let err = cfg(s).unwrap_err().to_string();
-            assert!(err.contains("must start with"), "{s}: {err}");
+            assert!(
+                err.contains("must start with") || err.contains("refused"),
+                "{s}: {err}"
+            );
         }
     }
 }

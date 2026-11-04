@@ -21,7 +21,11 @@ from ajar_connector.event_pb2 import Event
 _METRICS = {"published": 0, "skipped": 0, "publish_errors": 0}
 
 
-# EDIT: map one JSON record from your feed to an Event of your entity type.
+# =============================================================================
+# EDIT: map one JSON record from your feed to an Event. Use the entity_type
+# your operator assigned, and add .attribute(k, v) for attributes its
+# ontology declares.
+# =============================================================================
 def to_event(source_id: str, r: dict) -> Event:
     return (
         EventBuilder(source_id, "mim:aircraft")
@@ -31,6 +35,12 @@ def to_event(source_id: str, r: dict) -> Event:
         .confidence(r["quality"])
         .build()
     )
+
+
+# =============================================================================
+# Nothing below this line usually needs changing, except the feed reader
+# marked EDIT.
+# =============================================================================
 
 
 def _spawn_health() -> None:

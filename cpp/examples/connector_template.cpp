@@ -40,7 +40,9 @@
 
 namespace {
 
-// EDIT 1: one record from your feed and how to parse a line of it.
+// =============================================================================
+// EDIT 1: describe one record from your feed and how to parse a line of it.
+// =============================================================================
 struct MyRecord {
   double lat = 0, lon = 0, alt_m = 0, quality = 0;
 };
@@ -50,8 +52,10 @@ bool parse_record(const std::string& line, MyRecord& out) {
   return static_cast<bool>(is >> out.lat >> out.lon >> out.alt_m >> out.quality);
 }
 
-// EDIT 2: map a record to an Event. Use the entity_type your operator assigned,
-// and add .attribute(k, v) for attributes its ontology declares.
+// =============================================================================
+// EDIT 2: map your record to an Event. Use the entity_type your operator
+// assigned, and add .attribute(k, v) for attributes its ontology declares.
+// =============================================================================
 ajar::Event to_event(const std::string& source_id, const MyRecord& r) {
   return ajar::EventBuilder(source_id, "mim:aircraft")
       .new_id()
@@ -60,6 +64,11 @@ ajar::Event to_event(const std::string& source_id, const MyRecord& r) {
       .confidence(r.quality)
       .build();
 }
+
+// =============================================================================
+// Nothing below this line usually needs changing, except the feed reader
+// marked EDIT.
+// =============================================================================
 
 std::string env_or(const char* key, const char* def) {
   const char* v = std::getenv(key);
@@ -88,8 +97,6 @@ std::array<std::uint8_t, 32> load_seed(bool dry_run) {
 }
 
 }  // namespace
-
-// Usually no edits are needed below here.
 
 int main(int argc, char** argv) {
   bool dry_run = false;

@@ -106,7 +106,7 @@ pub(super) fn decode(items: &[(Item, &[u8])], sensor: Option<&Sensor>) -> Asteri
                 }
             }
             Item(220) => t.icao = Some(be_uint(item, 0, 3) as u32),
-            Item(245) => t.callsign = aircraft_id(&item[1..7]),
+            Item(245) => t.callsign = item.get(1..7).and_then(aircraft_id),
             Item(300) => t.vehicle_fleet = vehicle_fleet(item[0]),
             Item(90) => {
                 if item[0] & 0xC0 == 0 {

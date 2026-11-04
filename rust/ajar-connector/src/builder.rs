@@ -369,6 +369,15 @@ mod tests {
     }
 
     #[test]
+    fn requires_timestamp() {
+        let err = EventBuilder::new("sensor-1", "mim:aircraft")
+            .new_id()
+            .build()
+            .unwrap_err();
+        assert_eq!(err, BuildError::MissingField("timestamp"));
+    }
+
+    #[test]
     fn rejects_malformed_timestamps() {
         for bad in [
             "t",

@@ -33,7 +33,8 @@ can't, and keep one copy of everything.
    AIS code is a vessel.
 7. No emphasis: no em-dashes, no `**bold**`, no ALL CAPS, no box-drawing or
    `// =====` banners. Plain ASCII punctuation. A file that needs section
-   banners should be split into modules.
+   banners should be split into modules. Copy-me templates may use banners to
+   mark where to edit.
 8. No numbered step narration (`// 1. normalize`, `// 2. seal`). Name the
    variables so the code reads as the steps.
 9. Comments go on their own line above the code, never trailing after a
@@ -106,7 +107,8 @@ Keep:
    `ajar_connector_common::run()`). Importing a module is fine (`mpsc::channel()`),
    and so is the `proptest::prelude::*` glob in property tests.
 8. No dead code: no unread config field, no unused pub item, no "compat" shim
-   inside the workspace, no runtime check that a test already proves.
+   inside the workspace, no runtime check that a test already proves, unless it
+   is a safety backstop.
 9. Use what is already in the dependency tree (`time`, `hex`, `uuid`,
     `getrandom`, `tempfile`, `thiserror`) instead of reimplementing it. Add a
     dependency rather than hand-roll base64.

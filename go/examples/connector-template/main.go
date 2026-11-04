@@ -38,7 +38,10 @@ import (
 	"github.com/promaka/ajar-connectors/go/eventpb"
 )
 
-// MyRecord is one record from your feed. EDIT 1: match its fields to your data.
+// =============================================================================
+// EDIT 1: describe one record from your feed. These fields match the demo
+// input; change them to match your data.
+// =============================================================================
 type MyRecord struct {
 	Lat     float64 `json:"lat"`
 	Lon     float64 `json:"lon"`
@@ -46,8 +49,10 @@ type MyRecord struct {
 	Quality float64 `json:"quality"`
 }
 
-// toEvent maps a record to an Event. EDIT 2: use the entity_type your operator
+// =============================================================================
+// EDIT 2: map your record to an Event. Use the entity_type your operator
 // assigned, and add .Attribute(k, v) for attributes its ontology declares.
+// =============================================================================
 func toEvent(sourceID string, r MyRecord) (*eventpb.Event, error) {
 	return ajarconnector.NewEventBuilder(sourceID, "mim:aircraft").
 		NewID().
@@ -57,13 +62,16 @@ func toEvent(sourceID string, r MyRecord) (*eventpb.Event, error) {
 		Build()
 }
 
+// =============================================================================
+// Nothing below this line usually needs changing, except the feed reader
+// marked EDIT.
+// =============================================================================
+
 var (
 	publishedTotal     atomic.Uint64
 	skippedTotal       atomic.Uint64
 	publishErrorsTotal atomic.Uint64
 )
-
-// Usually no edits are needed below here.
 
 func main() {
 	dryRun := flag.Bool("dry-run", false, "build + seal + print, do not publish")
