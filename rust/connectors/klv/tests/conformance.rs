@@ -1,16 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Contract conformance for the KLV (MISB ST 0601) connector.
-//!
-//! Two things Core relies on, checked here without importing Core (its rules are
-//! mirrored, not linked):
-//!  1. the produced event satisfies Core's **content** contract — the id is a
-//!     UUIDv7 and the timestamp is RFC 3339;
-//!  2. the seal verifies under the published contract key.
-//!
-//! Plus a mapping check: the native platform identity (tail number) is preserved
-//! as `source_uid` metadata, never used as the event id.
+//! Events meet Core's content contract and seal under the published contract key.
 
-use ajar_connector::{canonical_bytes, seal, SEAL_SIGNATURE_LEN};
+use ajar_connector::SEAL_SIGNATURE_LEN;
 use ajar_connector_common::Enrichment;
 use ajar_klv::KlvParser;
 use ed25519_dalek::{Signature, SigningKey, Verifier, VerifyingKey};
@@ -18,8 +9,6 @@ use uuid::Uuid;
 
 const OBSERVED: &str = "2026-06-10T08:00:00Z";
 
-// A valid ST 0601 UAS Local Set: tail AB123, PREDATOR, 60.176822 N, 24.935508 E,
-// 500 m, heading 270. Built here with a local encoder so the test is self-contained.
 const KEY: [u8; 16] = [
     0x06, 0x0e, 0x2b, 0x34, 0x02, 0x0b, 0x01, 0x01, 0x0e, 0x01, 0x03, 0x01, 0x01, 0x00, 0x00, 0x00,
 ];
@@ -33,12 +22,14 @@ fn ber_len(n: usize) -> Vec<u8> {
         vec![0x82, (n >> 8) as u8, (n & 0xff) as u8]
     }
 }
+
 fn tlv(tag: u8, val: &[u8]) -> Vec<u8> {
     let mut v = vec![tag];
     v.extend(ber_len(val.len()));
     v.extend_from_slice(val);
     v
 }
+
 fn bcc(bytes: &[u8]) -> u16 {
     let mut sum = 0u16;
     for (i, &b) in bytes.iter().enumerate() {
@@ -46,6 +37,8 @@ fn bcc(bytes: &[u8]) -> u16 {
     }
     sum
 }
+
+/// Tail AB123, PREDATOR, 60.176822 N, 24.935508 E, 500 m, heading 270.
 fn sample() -> Vec<u8> {
     let lat = (60.176822_f64 * i32::MAX as f64 / 90.0) as i32;
     let lon = (24.935508_f64 * i32::MAX as f64 / 180.0) as i32;
@@ -65,7 +58,8 @@ fn sample() -> Vec<u8> {
     for it in &items {
         inner.extend_from_slice(it);
     }
-    inner.extend_from_slice(&[0x01, 0x02]); // checksum tag + length
+    // Checksum tag and length; the 2-byte value follows the set length.
+    inner.extend_from_slice(&[0x01, 0x02]);
     let set_len = inner.len() + 2;
     let mut pkt = KEY.to_vec();
     pkt.extend(ber_len(set_len));
@@ -100,7 +94,7 @@ fn connector_event() -> ajar_connector::Event {
         .parse_set(&sample())
         .expect("set parses")
         .expect("has a position");
-    p.to_event_at(&m, OBSERVED).expect("builds")
+    p.to_event_at(m, OBSERVED).expect("builds")
 }
 
 #[test]
@@ -117,7 +111,6 @@ fn event_satisfies_core_content_contract() {
 fn native_identity_is_preserved_as_metadata_not_id() {
     let ev = connector_event();
     assert_eq!(ev.entity_type, "mim:aircraft");
-    // Tail number is the stable identity: source_uid metadata, never the event id.
     assert_ne!(ev.id, "AB123");
     assert!(
         ev.metadata
@@ -126,7 +119,6 @@ fn native_identity_is_preserved_as_metadata_not_id() {
         "tail number must be preserved as source_uid metadata"
     );
     assert!(is_canonical(&ev.metadata), "metadata must be canonical");
-    // The whole raw KLV set is sealed in the payload (losslessness).
     assert_eq!(ev.payload.as_slice(), sample().as_slice());
     let loc = ev
         .location
@@ -142,8 +134,8 @@ fn seal_verifies_under_the_published_contract_key() {
     let vk = VerifyingKey::from_bytes(&hex32(&contract, "verifyingKeyHex"))
         .expect("published verifying key is valid");
 
-    let canonical = canonical_bytes(&connector_event());
-    let sealed = seal(&canonical, &SigningKey::from_bytes(&seed));
+    let canonical = ajar_connector::canonical_bytes(&connector_event());
+    let sealed = ajar_connector::seal(&canonical, &SigningKey::from_bytes(&seed));
 
     assert_eq!(sealed.len(), SEAL_SIGNATURE_LEN + canonical.len());
     let (sig, body) = sealed.split_at(SEAL_SIGNATURE_LEN);
@@ -153,13 +145,12 @@ fn seal_verifies_under_the_published_contract_key() {
         .expect("seal signature must verify under the contract key");
 }
 
-/// Canonical repeated entries: keys strictly increasing (sorted + unique).
+/// Keys strictly increasing: sorted and unique.
 fn is_canonical(entries: &[ajar_connector::Attribute]) -> bool {
     entries.windows(2).all(|w| w[0].key < w[1].key)
 }
 
-/// Mirror Core's timestamp rule without importing it: RFC 3339, `Z` or numeric
-/// offset, optional fractional seconds.
+/// Core's timestamp rule: RFC 3339 with `Z` or a numeric offset.
 fn is_rfc3339(s: &str) -> bool {
     let b = s.as_bytes();
     if b.len() < 20 {

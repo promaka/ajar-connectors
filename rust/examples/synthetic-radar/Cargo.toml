@@ -2,7 +2,7 @@
 [package]
 name = "synthetic-radar"
 description = "Example: stream synthetic mim:aircraft tracks into a local Ajar Core over NATS."
-version = "0.6.6"
+version = "0.6.7"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -12,21 +12,12 @@ publish = false
 
 [dependencies]
 ajar-connector.workspace = true
-# Transport is the EXAMPLE's choice — the SDK crate stays transport-free. We use
-# the real async-nats client (the same one Ajar Core uses) so this example
-# models the pattern a vendor copies, not raw protocol plumbing.
-#
-# default-features = false: a plain core-NATS publisher needs none of jetstream/
-# service/kv/object-store/nkeys. Disabling them also drops async-nats's
-# optional `time` dep, which (with parsing) otherwise hits an E0119 coherence
-# clash with its own blanket From impl on this toolchain.
-# `ring`: re-add ONLY the rustls crypto provider — REQUIRED for TLS/mTLS to NATS
-# (it ships in the defaults we dropped; without it, a TLS connect panics with
-# "Could not automatically determine the process-level CryptoProvider").
+# No default features avoids async-nats's optional `time` dep (E0119); `ring` re-adds the TLS provider.
+# Without `ring` a TLS connect panics: "Could not automatically determine the process-level CryptoProvider".
 async-nats = { version = "0.50", default-features = false, features = ["ring"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
 bytes = "1"
-# Accept the 64-char hex seed `ajar keygen` writes, not just 32 raw bytes.
+# Decodes the 64-char hex seed `ajar keygen` writes.
 hex = "0.4"
 
 # See CONTRIBUTING.md, "Releases".

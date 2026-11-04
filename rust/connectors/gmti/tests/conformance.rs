@@ -1,13 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Contract conformance for the STANAG 4607 (GMTI) connector.
-//!
-//! Checked without importing Core (its rules are mirrored, not linked):
-//!  1. the produced event satisfies Core's content contract — UUIDv7 id, RFC 3339
-//!     timestamp;
-//!  2. the seal verifies under the published contract key;
-//!  3. the native detection identity is preserved as `source_uid` metadata.
+//! Events meet Core's content contract and seal under the published contract key.
 
-use ajar_connector::{canonical_bytes, seal, SEAL_SIGNATURE_LEN};
+use ajar_connector::SEAL_SIGNATURE_LEN;
 use ajar_connector_common::Enrichment;
 use ajar_gmti::GmtiParser;
 use ed25519_dalek::{Signature, SigningKey, Verifier, VerifyingKey};
@@ -24,8 +18,7 @@ fn ba32_enc(deg: f64) -> u32 {
     (deg * 16_777_216.0 / 1.406_25) as u32
 }
 
-/// A minimal valid GMTI packet: 32-byte header + one Dwell segment with a single
-/// absolute-position target. Built with a local encoder so the test is self-contained.
+/// A packet with one Dwell segment holding one hi-res target report.
 fn sample_packet() -> Vec<u8> {
     let mask: [u8; 8] = [0xFF, 0x00, 0x03, 0xC3, 0x98, 0x00, 0x00, 0x00];
     let mut d = Vec::new();
@@ -92,8 +85,8 @@ fn parser() -> GmtiParser {
 
 fn connector_event() -> ajar_connector::Event {
     let p = parser();
-    let targets = p.parse_packet(&sample_packet()).expect("packet parses");
-    p.to_event_at(&targets[0], OBSERVED).expect("builds")
+    let mut targets = p.parse_packet(&sample_packet()).expect("packet parses");
+    p.to_event_at(targets.remove(0), OBSERVED).expect("builds")
 }
 
 #[test]
@@ -119,7 +112,6 @@ fn detection_identity_is_preserved_as_metadata_not_id() {
         "detection identity must be preserved as source_uid metadata"
     );
     assert!(is_canonical(&ev.metadata), "metadata must be canonical");
-    // The raw dwell segment is sealed in the payload (losslessness).
     assert!(
         ev.payload.first() == Some(&2u8),
         "payload starts with the dwell segment"
@@ -135,8 +127,8 @@ fn seal_verifies_under_the_published_contract_key() {
     let vk = VerifyingKey::from_bytes(&hex32(&contract, "verifyingKeyHex"))
         .expect("published verifying key is valid");
 
-    let canonical = canonical_bytes(&connector_event());
-    let sealed = seal(&canonical, &SigningKey::from_bytes(&seed));
+    let canonical = ajar_connector::canonical_bytes(&connector_event());
+    let sealed = ajar_connector::seal(&canonical, &SigningKey::from_bytes(&seed));
 
     assert_eq!(sealed.len(), SEAL_SIGNATURE_LEN + canonical.len());
     let (sig, body) = sealed.split_at(SEAL_SIGNATURE_LEN);
@@ -146,13 +138,12 @@ fn seal_verifies_under_the_published_contract_key() {
         .expect("seal signature must verify under the contract key");
 }
 
-/// Canonical repeated entries: keys strictly increasing (sorted + unique).
+/// Keys strictly increasing: sorted and unique.
 fn is_canonical(entries: &[ajar_connector::Attribute]) -> bool {
     entries.windows(2).all(|w| w[0].key < w[1].key)
 }
 
-/// Mirror Core's timestamp rule without importing it: RFC 3339, `Z` or numeric
-/// offset, optional fractional seconds.
+/// Core's timestamp rule: RFC 3339 with `Z` or a numeric offset.
 fn is_rfc3339(s: &str) -> bool {
     let b = s.as_bytes();
     if b.len() < 20 {

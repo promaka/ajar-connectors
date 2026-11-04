@@ -1,61 +1,64 @@
 // SPDX-License-Identifier: Apache-2.0
-//! The ajar-up gate: real packets, a real broker, the real binaries.
-//!
-//! Producer: a signed packet tar built in-test goes through `ajar-up
-//! --no-exec` (verify, place, configure, preflight, print the command), the
-//! printed connector is then actually run, fed one AIS sentence over UDP,
-//! and the event must arrive on the ingest subject verifying under the seed
-//! the packet carried.
-//!
-//! Consumer: `ajar-up` runs as the verified tap; a Core-signed event's
-//! payload must reach stdout, and a tampered one must be rejected, counted,
-//! and never handed over.
-//!
-//! nats-server policy matches the other gates: required in CI, skip locally
-//! when absent.
+//! The ajar-up gate: in-test signed packets, a real nats-server and the real binaries.
 
-use std::io::{BufRead, BufReader, Read};
-use std::process::{Child, Command, Stdio};
+use std::io::{BufRead, BufReader};
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
-use ajar_connector::{canonical_bytes, seal, EventBuilder, SigningKey};
+use ajar_connector::{EventBuilder, SigningKey};
 use ed25519_dalek::Signer as _;
+use futures_util::StreamExt as _;
+use sha2::Digest as _;
 
 const SIG_DOMAIN: &[u8] = b"ajar-onboard-manifest:1\n";
+const EGRESS_SEED: [u8; 32] = [0x11; 32];
+const SIGNING_SEED: [u8; 32] = [0x22; 32];
 
-fn nats_server() -> Option<String> {
+/// Kills and reaps the child on drop.
+struct KillOnDrop(Child);
+
+impl Drop for KillOnDrop {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+/// A nats-server on a free port, or `None` to skip outside CI.
+async fn broker() -> Option<(KillOnDrop, u16)> {
     let bin = std::env::var("NATS_SERVER_BIN").unwrap_or_else(|_| "nats-server".into());
-    let ok = Command::new(&bin)
+    let present = Command::new(&bin)
         .arg("--version")
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status()
-        .map(|s| s.success())
-        .unwrap_or(false);
-    if ok {
-        Some(bin)
-    } else if std::env::var("CI").is_ok() {
-        panic!("nats-server is required in CI: the up gate must run, not skip");
-    } else {
+        .is_ok_and(|s| s.success());
+    if !present {
+        assert!(
+            std::env::var("CI").is_err(),
+            "nats-server is required in CI: the up gate must run, not skip"
+        );
         eprintln!("up gate SKIPPED: no nats-server binary");
-        None
+        return None;
     }
-}
-
-struct Broker(Child);
-impl Drop for Broker {
-    fn drop(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
+    let port = free_port();
+    let child = Command::new(&bin)
+        .args(["-p", &port.to_string()])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let broker = KillOnDrop(child);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while tokio::net::TcpStream::connect(("127.0.0.1", port))
+        .await
+        .is_err()
+    {
+        assert!(Instant::now() < deadline, "nats-server did not come up");
+        tokio::time::sleep(Duration::from_millis(50)).await;
     }
-}
-
-struct ChildGuard(Child);
-impl Drop for ChildGuard {
-    fn drop(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
-    }
+    Some((broker, port))
 }
 
 fn free_port() -> u16 {
@@ -66,37 +69,15 @@ fn free_port() -> u16 {
         .port()
 }
 
-async fn wait_up(port: u16) {
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while tokio::net::TcpStream::connect(("127.0.0.1", port))
-        .await
-        .is_err()
-    {
-        assert!(Instant::now() < deadline, "nats-server did not come up");
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
+fn egress_key() -> SigningKey {
+    SigningKey::from_bytes(&EGRESS_SEED)
 }
 
-fn rand32() -> [u8; 32] {
-    let mut b = [0u8; 32];
-    std::fs::File::open("/dev/urandom")
-        .unwrap()
-        .read_exact(&mut b)
-        .unwrap();
-    b
-}
-
-/// Build a signed packet tar: manifest.json + manifest.sig + egress.pub +
-/// any extra files (name, bytes, listed-in-files[]).
-fn build_packet(
-    dir: &std::path::Path,
-    egress: &SigningKey,
-    manifest_json: &serde_json::Value,
-    extra: &[(&str, &[u8])],
-) -> std::path::PathBuf {
-    use sha2::Digest as _;
-    let mut manifest = manifest_json.clone();
-    // files[]: pin egress.pub and every listed extra.
+/// A signed packet tar of `manifest` plus `extra` files, all pinned in
+/// `files[]`.
+fn build_packet(dir: &Path, manifest: &serde_json::Value, extra: &[(&str, &[u8])]) -> PathBuf {
+    let egress = egress_key();
+    let mut manifest = manifest.clone();
     let pub_hex = hex::encode(egress.verifying_key().to_bytes());
     let mut files = vec![serde_json::json!({
         "path": "egress.pub",
@@ -115,8 +96,7 @@ fn build_packet(
     let sig_hex = hex::encode(egress.sign(&msg).to_bytes());
 
     let tar_path = dir.join("packet.tar");
-    let file = std::fs::File::create(&tar_path).unwrap();
-    let mut b = tar::Builder::new(file);
+    let mut b = tar::Builder::new(std::fs::File::create(&tar_path).unwrap());
     let mut add = |name: &str, data: &[u8]| {
         let mut h = tar::Header::new_gnu();
         h.set_size(data.len() as u64);
@@ -134,25 +114,36 @@ fn build_packet(
     tar_path
 }
 
-fn workspace_bin(name: &str) -> std::path::PathBuf {
-    let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .join("target/debug")
-        .join(name);
+fn consumer_manifest(nats_url: &str, subject: &str, formats: &[&str]) -> serde_json::Value {
+    serde_json::json!({
+        "manifest_version": "1",
+        "role": "consumer",
+        "source_id": "ops-c2",
+        "nats_url": nats_url,
+        "egress_subject": subject,
+        "formats": formats,
+        "egress_verifying_key_hex": hex::encode(egress_key().verifying_key().to_bytes()),
+        "keys": {},
+    })
+}
+
+fn ajar_up(tar: &Path, args: &[&str]) -> Command {
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_ajar-up"));
+    cmd.arg(tar).args(args);
+    cmd
+}
+
+fn run_ajar_up(tar: &Path, args: &[&str]) -> Output {
+    ajar_up(tar, args).output().unwrap()
+}
+
+fn workspace_bin(name: &str) -> PathBuf {
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    let p = workspace.join("target/debug").join(name);
     if !p.exists() {
-        // Build it: the gate exercises the real binary, not a stand-in.
         let status = Command::new("cargo")
-            .args([
-                "build",
-                "-p",
-                &format!("ajar-{}", name.trim_start_matches("ajar-")),
-            ])
-            .current_dir(
-                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                    .parent()
-                    .unwrap(),
-            )
+            .args(["build", "-p", name])
+            .current_dir(workspace)
             .status()
             .unwrap();
         assert!(status.success(), "building {name}");
@@ -160,29 +151,17 @@ fn workspace_bin(name: &str) -> std::path::PathBuf {
     p
 }
 
+fn path_arg(p: &Path) -> &str {
+    p.to_str().unwrap()
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_producer_packet_becomes_a_running_connector_and_a_governed_event() {
-    let Some(nats_bin) = nats_server() else {
+async fn producer_packet_runs_connector_to_governed_event() {
+    let Some((_broker, nats_port)) = broker().await else {
         return;
     };
-    let dir = std::env::temp_dir().join(format!("ajar-up-prod-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-
-    let nats_port = free_port();
+    let dir = tempfile::tempdir().unwrap();
     let udp_port = free_port();
-    let _broker = Broker(
-        Command::new(&nats_bin)
-            .args(["-p", &nats_port.to_string()])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .unwrap(),
-    );
-    wait_up(nats_port).await;
-
-    let egress = SigningKey::from_bytes(&rand32());
-    let seed = rand32();
     let manifest = serde_json::json!({
         "manifest_version": "1",
         "source_id": "up-gate-1",
@@ -192,26 +171,24 @@ async fn a_producer_packet_becomes_a_running_connector_and_a_governed_event() {
         "transport": { "kind": "udp", "bind": format!("127.0.0.1:{udp_port}") },
         "keys": { "signing_key_path": "up-gate-1.signing.key" },
     });
-    // The mint flow: the seed rides in the tar, never in files[].
+    // Mint flow: the seed rides in the tar.
     let tar = build_packet(
-        &dir,
-        &egress,
+        dir.path(),
         &manifest,
-        &[("up-gate-1.signing.key", &seed)],
+        &[("up-gate-1.signing.key", &SIGNING_SEED)],
     );
 
-    // ajar-up --no-exec: verify + place + configure + preflight + print.
-    let out = Command::new(env!("CARGO_BIN_EXE_ajar-up"))
-        .arg(&tar)
-        .args([
+    let unpacked = dir.path().join("unpacked");
+    let out = run_ajar_up(
+        &tar,
+        &[
             "--dir",
-            dir.join("unpacked").to_str().unwrap(),
+            path_arg(&unpacked),
             "--no-exec",
             "--timeout-secs",
             "3",
-        ])
-        .output()
-        .unwrap();
+        ],
+    );
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(out.status.success(), "ajar-up failed:\n{stdout}\n{stderr}");
@@ -228,8 +205,6 @@ async fn a_producer_packet_becomes_a_running_connector_and_a_governed_event() {
         .trim();
     let config_path = run_line.split_whitespace().last().unwrap().to_string();
 
-    // Subscribe before the connector starts, then run the printed command
-    // (with the real workspace binary) and feed it one AIS sentence.
     let nc = async_nats::connect(format!("nats://127.0.0.1:{nats_port}"))
         .await
         .unwrap();
@@ -238,9 +213,8 @@ async fn a_producer_packet_becomes_a_running_connector_and_a_governed_event() {
         .await
         .unwrap();
 
-    let connector_bin = workspace_bin("ajar-ais-nmea");
-    let _connector = ChildGuard(
-        Command::new(&connector_bin)
+    let _connector = KillOnDrop(
+        Command::new(workspace_bin("ajar-ais-nmea"))
             .arg(&config_path)
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -254,19 +228,11 @@ async fn a_producer_packet_becomes_a_running_connector_and_a_governed_event() {
     for _ in 0..20 {
         sock.send_to(sentence, ("127.0.0.1", udp_port)).unwrap();
         std::thread::sleep(Duration::from_millis(100));
-        if let Ok(Some(msg)) = tokio::time::timeout(
-            Duration::from_millis(200),
-            futures_util::StreamExt::next(&mut sub),
-        )
-        .await
-        {
-            // The envelope verifies under the seed the packet carried: the
-            // whole chain, packet to governed event.
-            let key = SigningKey::from_bytes(&seed);
+        if let Ok(Some(msg)) = tokio::time::timeout(Duration::from_millis(200), sub.next()).await {
+            let key = SigningKey::from_bytes(&SIGNING_SEED);
             let canonical = ajar_connector::verify(&msg.payload, &key.verifying_key())
                 .expect("event verifies under the packet's seed");
             assert!(!canonical.is_empty());
-            let _ = std::fs::remove_dir_all(&dir);
             return;
         }
     }
@@ -274,65 +240,37 @@ async fn a_producer_packet_becomes_a_running_connector_and_a_governed_event() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_consumer_packet_taps_verified_events_and_refuses_tampered_ones() {
-    let Some(nats_bin) = nats_server() else {
+async fn consumer_tap_passes_verified_and_rejects_tampered() {
+    let Some((_broker, nats_port)) = broker().await else {
         return;
     };
-    let dir = std::env::temp_dir().join(format!("ajar-up-cons-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let subject = "ajar.egress.cot.up-gate";
+    let manifest = consumer_manifest(&format!("nats://127.0.0.1:{nats_port}"), subject, &["cot"]);
+    let tar = build_packet(dir.path(), &manifest, &[]);
 
-    let nats_port = free_port();
-    let _broker = Broker(
-        Command::new(&nats_bin)
-            .args(["-p", &nats_port.to_string()])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .unwrap(),
-    );
-    wait_up(nats_port).await;
-
-    let egress = SigningKey::from_bytes(&rand32());
-    let manifest = serde_json::json!({
-        "manifest_version": "1",
-        "role": "consumer",
-        "source_id": "ops-c2",
-        "nats_url": format!("nats://127.0.0.1:{nats_port}"),
-        "egress_subject": "ajar.egress.cot.up-gate",
-        "formats": ["cot"],
-        "egress_verifying_key_hex": hex::encode(egress.verifying_key().to_bytes()),
-        "keys": {},
-    });
-    let tar = build_packet(&dir, &egress, &manifest, &[]);
-
-    let mut child = Command::new(env!("CARGO_BIN_EXE_ajar-up"))
-        .arg(&tar)
-        .args(["--dir", dir.join("unpacked").to_str().unwrap()])
+    let mut child = ajar_up(&tar, &["--dir", path_arg(&dir.path().join("unpacked"))])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
     let child_stdout = child.stdout.take().unwrap();
     let child_stderr = child.stderr.take().unwrap();
-    let mut child = ChildGuard(child);
+    let _child = KillOnDrop(child);
 
-    // Wait for the tap to announce itself on stderr.
     let mut err_reader = BufReader::new(child_stderr);
     let mut line = String::new();
     err_reader.read_line(&mut line).unwrap();
     assert!(line.contains("verified tap"), "{line}");
     tokio::time::sleep(Duration::from_millis(500)).await;
 
-    // A Core-signed event whose payload is a CoT snippet...
     let event = EventBuilder::new("radar-x", "mim:vessel")
         .new_id()
         .now()
         .payload(b"<event uid='tap-proof'/>".to_vec())
         .build()
         .unwrap();
-    let sealed = seal(&canonical_bytes(&event), &egress);
-    // ...and a tampered copy that must never reach stdout.
+    let sealed = ajar_connector::seal(&ajar_connector::canonical_bytes(&event), &egress_key());
     let mut tampered = sealed.clone();
     let last = tampered.len() - 1;
     tampered[last] ^= 0xFF;
@@ -340,22 +278,21 @@ async fn a_consumer_packet_taps_verified_events_and_refuses_tampered_ones() {
     let nc = async_nats::connect(format!("nats://127.0.0.1:{nats_port}"))
         .await
         .unwrap();
-    nc.publish("ajar.egress.cot.up-gate".to_string(), tampered.into())
+    nc.publish(subject.to_string(), tampered.into())
         .await
         .unwrap();
-    nc.publish("ajar.egress.cot.up-gate".to_string(), sealed.into())
+    nc.publish(subject.to_string(), sealed.into())
         .await
         .unwrap();
     nc.flush().await.unwrap();
 
-    // The valid payload arrives on stdout; reading it first proves ordering
-    // did not sneak the tampered one through.
+    // The tampered event went first, so the first stdout line proves it was
+    // not handed over.
     let mut out_reader = BufReader::new(child_stdout);
     let mut payload_line = String::new();
     out_reader.read_line(&mut payload_line).unwrap();
     assert_eq!(payload_line.trim_end(), "<event uid='tap-proof'/>");
 
-    // And the rejection is visible, counted, on stderr.
     let mut rejected_seen = false;
     for _ in 0..5 {
         let mut l = String::new();
@@ -367,94 +304,69 @@ async fn a_consumer_packet_taps_verified_events_and_refuses_tampered_ones() {
             break;
         }
     }
-    assert!(rejected_seen, "the tampered event must be rejected loudly");
-
-    let _ = child.0.kill();
-    let _ = std::fs::remove_dir_all(&dir);
+    assert!(
+        rejected_seen,
+        "the tampered event must be reported on stderr"
+    );
 }
 
 #[test]
-fn a_delivery_flag_must_name_a_format_the_deployment_egresses() {
-    let dir = std::env::temp_dir().join(format!("ajar-up-fmt-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    let egress = SigningKey::from_bytes(&rand32());
-    let manifest = serde_json::json!({
-        "manifest_version": "1",
-        "role": "consumer",
-        "source_id": "ops-c2",
-        "nats_url": "nats://127.0.0.1:1",
-        "egress_subject": "ajar.egress.>",
-        "formats": ["geojson"],
-        "egress_verifying_key_hex": hex::encode(egress.verifying_key().to_bytes()),
-        "keys": {},
-    });
-    let tar = build_packet(&dir, &egress, &manifest, &[]);
-    let out = Command::new(env!("CARGO_BIN_EXE_ajar-up"))
-        .arg(&tar)
-        .args([
+fn to_tak_needs_the_cot_format() {
+    let dir = tempfile::tempdir().unwrap();
+    let manifest = consumer_manifest("nats://127.0.0.1:1", "ajar.egress.>", &["geojson"]);
+    let tar = build_packet(dir.path(), &manifest, &[]);
+
+    let out = run_ajar_up(
+        &tar,
+        &[
             "--dir",
-            dir.join("u1").to_str().unwrap(),
+            path_arg(&dir.path().join("u")),
             "--to-tak",
             "tak.example:8089",
-        ])
-        .output()
-        .unwrap();
+        ],
+    );
     assert!(!out.status.success());
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(err.contains("--to-tak needs the cot format"), "{err}");
     assert!(err.contains("geojson"), "{err}");
+}
 
-    // The listed format works and the generated config subscribes its slug.
-    let out = Command::new(env!("CARGO_BIN_EXE_ajar-up"))
-        .arg(&tar)
-        .args([
+#[test]
+fn to_http_writes_config_for_listed_format() {
+    let dir = tempfile::tempdir().unwrap();
+    let manifest = consumer_manifest("nats://127.0.0.1:1", "ajar.egress.>", &["geojson"]);
+    let tar = build_packet(dir.path(), &manifest, &[]);
+    let unpacked = dir.path().join("u");
+
+    let out = run_ajar_up(
+        &tar,
+        &[
             "--dir",
-            dir.join("u2").to_str().unwrap(),
+            path_arg(&unpacked),
             "--to-http",
             "http://127.0.0.1:9/hook",
-        ])
-        .output()
-        .unwrap();
+        ],
+    );
     assert!(
         out.status.success(),
         "{}",
         String::from_utf8_lossy(&out.stderr)
     );
-    let cfg = std::fs::read_to_string(dir.join("u2/ops-c2-http-egress.toml")).unwrap();
+    let cfg = std::fs::read_to_string(unpacked.join("ops-c2-http-egress.toml")).unwrap();
     assert!(cfg.contains("ajar.egress.geojson.>"), "{cfg}");
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
-fn check_mode_is_a_one_line_assertion_for_both_roles() {
-    let dir = std::env::temp_dir().join(format!("ajar-up-check-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    let egress = SigningKey::from_bytes(&rand32());
+fn consumer_check_passes_without_network() {
+    let dir = tempfile::tempdir().unwrap();
+    let manifest = consumer_manifest("nats://127.0.0.1:1", "ajar.egress.cot.check", &["cot"]);
+    let tar = build_packet(dir.path(), &manifest, &[]);
 
-    // Consumer: --check exits 0 fast with the marker, touching no network.
-    let manifest = serde_json::json!({
-        "manifest_version": "1",
-        "role": "consumer",
-        "source_id": "ops-c2",
-        "nats_url": "nats://127.0.0.1:1",
-        "egress_subject": "ajar.egress.cot.check",
-        "formats": ["cot"],
-        "egress_verifying_key_hex": hex::encode(egress.verifying_key().to_bytes()),
-        "keys": {},
-    });
-    let tar = build_packet(&dir, &egress, &manifest, &[]);
-    let out = Command::new(env!("CARGO_BIN_EXE_ajar-up"))
-        .arg(&tar)
-        .args(["--dir", dir.join("c").to_str().unwrap(), "--check"])
-        .output()
-        .unwrap();
+    let out = run_ajar_up(&tar, &["--dir", path_arg(&dir.path().join("c")), "--check"]);
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
         out.status.success(),
-        "{stdout}
-{}",
+        "{stdout}\n{}",
         String::from_utf8_lossy(&out.stderr)
     );
     assert!(
@@ -462,41 +374,24 @@ fn check_mode_is_a_one_line_assertion_for_both_roles() {
         "{stdout}"
     );
     assert!(stdout.contains("consumer packet valid"), "{stdout}");
-
-    // A consumer manifest referencing an undelivered cert fails the check.
-    let manifest_bad = serde_json::json!({
-        "manifest_version": "1",
-        "role": "consumer",
-        "source_id": "ops-c2",
-        "nats_url": "nats://127.0.0.1:1",
-        "egress_subject": "ajar.egress.cot.check",
-        "formats": ["cot"],
-        "egress_verifying_key_hex": hex::encode(egress.verifying_key().to_bytes()),
-        "keys": { "ca_cert_path": "missing-ca.crt" },
-    });
-    let dir2 = dir.join("bad");
-    std::fs::create_dir_all(&dir2).unwrap();
-    let tar2 = build_packet(&dir2, &egress, &manifest_bad, &[]);
-    let out = Command::new(env!("CARGO_BIN_EXE_ajar-up"))
-        .arg(&tar2)
-        .args(["--dir", dir2.join("u").to_str().unwrap(), "--check"])
-        .output()
-        .unwrap();
-    assert!(!out.status.success());
-    assert!(
-        String::from_utf8_lossy(&out.stderr).contains("did not deliver"),
-        "{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
-fn a_tampered_packet_is_refused_before_anything_is_trusted() {
-    let dir = std::env::temp_dir().join(format!("ajar-up-tamper-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    let egress = SigningKey::from_bytes(&rand32());
+fn consumer_check_refuses_undelivered_cert() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut manifest = consumer_manifest("nats://127.0.0.1:1", "ajar.egress.cot.check", &["cot"]);
+    manifest["keys"] = serde_json::json!({ "ca_cert_path": "missing-ca.crt" });
+    let tar = build_packet(dir.path(), &manifest, &[]);
+
+    let out = run_ajar_up(&tar, &["--dir", path_arg(&dir.path().join("u")), "--check"]);
+    assert!(!out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("did not deliver"), "{err}");
+}
+
+#[test]
+fn tampered_packet_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
     let manifest = serde_json::json!({
         "manifest_version": "1",
         "source_id": "t-1",
@@ -505,27 +400,22 @@ fn a_tampered_packet_is_refused_before_anything_is_trusted() {
         "transport": { "kind": "udp", "bind": "127.0.0.1:0" },
         "keys": { "signing_key_path": "t-1.signing.key" },
     });
-    let tar = build_packet(&dir, &egress, &manifest, &[]);
+    let tar = build_packet(dir.path(), &manifest, &[]);
 
-    // Flip one byte inside the tar'd manifest: the signature must refuse it.
     let mut bytes = std::fs::read(&tar).unwrap();
     let pos = bytes
         .windows(b"\"source_id\"".len())
         .position(|w| w == b"\"source_id\"")
         .unwrap();
     bytes[pos + 1] = b'X';
-    let tampered = dir.join("tampered.tar");
+    let tampered = dir.path().join("tampered.tar");
     std::fs::write(&tampered, bytes).unwrap();
-    let out = Command::new(env!("CARGO_BIN_EXE_ajar-up"))
-        .arg(&tampered)
-        .args(["--dir", dir.join("u").to_str().unwrap()])
-        .output()
-        .unwrap();
+
+    let out = run_ajar_up(&tampered, &["--dir", path_arg(&dir.path().join("u"))]);
     assert!(!out.status.success());
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(
         err.contains("does not verify under the packet's egress key"),
         "{err}"
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }

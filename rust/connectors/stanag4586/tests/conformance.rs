@@ -1,27 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Contract conformance for the STANAG 4586 connector, checked on a Message #101
-//! Inertial States report.
-//!
-//! Verified without importing Core (its rules are mirrored, not linked):
-//!  1. the produced event satisfies Core's content contract — UUIDv7 id, RFC 3339
-//!     timestamp;
-//!  2. the native vehicle identity is preserved as `source_uid`;
-//!  3. the raw message (wrapper + body + checksum) is sealed verbatim into payload;
-//!  4. the seal verifies under the published contract key.
-//!
-//! The frame is hand-built here (big-endian, correct checksum) so the test is
-//! self-contained; the message model is implemented from the public NATO
-//! UNCLASSIFIED STANAG 4586 Edition 2 field tables (no reference-implementation
-//! code was copied).
+//! Events meet Core's content contract and seal under the published contract key.
 
-use ajar_connector::{canonical_bytes, seal, SEAL_SIGNATURE_LEN};
+use ajar_connector::SEAL_SIGNATURE_LEN;
 use ajar_connector_common::Enrichment;
 use ajar_stanag4586::S4586Parser;
 use ed25519_dalek::{Signature, SigningKey, Verifier, VerifyingKey};
 use uuid::Uuid;
 
 /// A #101 Inertial States message: vehicle 7 at 26.3 N 50.6 E, 1500 m, tracking
-/// north-east at 50 m/s, climbing. Big-endian throughout, correct trailing checksum.
+/// north-east at 50 m/s, climbing.
 fn inertial_frame() -> Vec<u8> {
     let mut body = Vec::new();
     body.extend_from_slice(&1_754_000_000.0f64.to_be_bytes()); // time stamp (unix s)
@@ -108,7 +95,6 @@ fn native_identity_is_preserved_as_metadata_not_id() {
     assert!(is_canonical(&ev.attributes), "attributes must be canonical");
     assert!(is_canonical(&ev.metadata), "metadata must be canonical");
 
-    // The raw message is sealed verbatim.
     assert_eq!(ev.payload.as_slice(), inertial_frame().as_slice());
 
     let loc = ev.location.as_ref().expect("located track has a location");
@@ -123,8 +109,8 @@ fn seal_verifies_under_the_published_contract_key() {
     let vk = VerifyingKey::from_bytes(&hex32(&contract, "verifyingKeyHex"))
         .expect("published verifying key is valid");
 
-    let canonical = canonical_bytes(&connector_event());
-    let sealed = seal(&canonical, &SigningKey::from_bytes(&seed));
+    let canonical = ajar_connector::canonical_bytes(&connector_event());
+    let sealed = ajar_connector::seal(&canonical, &SigningKey::from_bytes(&seed));
 
     assert_eq!(sealed.len(), SEAL_SIGNATURE_LEN + canonical.len());
     let (sig, body) = sealed.split_at(SEAL_SIGNATURE_LEN);
@@ -134,12 +120,12 @@ fn seal_verifies_under_the_published_contract_key() {
         .expect("seal signature must verify under the contract key");
 }
 
-/// Canonical repeated entries: keys strictly increasing (sorted + unique).
+/// Keys strictly increasing: sorted and unique.
 fn is_canonical(entries: &[ajar_connector::Attribute]) -> bool {
     entries.windows(2).all(|w| w[0].key < w[1].key)
 }
 
-/// Mirror Core's timestamp rule without importing it.
+/// Core's timestamp rule: RFC 3339 with `Z` or a numeric offset.
 fn is_rfc3339(s: &str) -> bool {
     let b = s.as_bytes();
     if b.len() < 20 {

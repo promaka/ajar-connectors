@@ -24,11 +24,11 @@ One tarball. It carries the contract inside it, so you need CMake, a C++17
 compiler and `protoc`, and nothing else from us.
 
 ```bash
-curl -LO https://github.com/promaka/ajar-connectors/releases/download/v0.6.5/ajar-connector-cpp-0.6.5.tar.gz
-curl -LO https://github.com/promaka/ajar-connectors/releases/download/v0.6.5/ajar-connector-cpp-0.6.5.tar.gz.sha256
-sha256sum -c ajar-connector-cpp-0.6.5.tar.gz.sha256
+curl -LO https://github.com/promaka/ajar-connectors/releases/download/v0.6.6/ajar-connector-cpp-0.6.6.tar.gz
+curl -LO https://github.com/promaka/ajar-connectors/releases/download/v0.6.6/ajar-connector-cpp-0.6.6.tar.gz.sha256
+sha256sum -c ajar-connector-cpp-0.6.6.tar.gz.sha256
 
-tar xzf ajar-connector-cpp-0.6.5.tar.gz && cd ajar-connector-cpp-0.6.5
+tar xzf ajar-connector-cpp-0.6.6.tar.gz && cd ajar-connector-cpp-0.6.6
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j
 ```
 
@@ -95,6 +95,9 @@ built event, against the vendored ontology — offline, from the tarball:
 for (const auto& fault : ajar::validate(event))
   std::fprintf(stderr, "%s\n", fault.message().c_str());
 ```
+
+Prefer the built event. It checks what your code really produces, and a declared
+mapping can drift from that.
 
 The connector template wires this to a flag, so your CI can hold the mapping to
 the contract:

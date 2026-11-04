@@ -162,7 +162,7 @@ frozen.
 The consume side mirrors the produce side: one call, and verification is
 structurally unskippable - the iterator only ever yields events whose
 signature verified under the deployment's egress key; tampered ones are
-counted and dropped inside the loop.
+counted and dropped inside the loop. Each rejection also logs one warning.
 
 ```bash
 pip install "ajar-connector[consumer]"

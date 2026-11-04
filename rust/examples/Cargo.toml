@@ -1,10 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-#
-# Examples workspace — separate from the SDK workspace (../Cargo.toml) so each
-# example can pull idiomatic, transport-specific dependencies (a real NATS
-# client, an async runtime, ...) without those landing in the SDK's dependency
-# tree or clashing with the SDK crate's own deps. Examples path-depend on the
-# SDK via ../ajar-connector.
+# Separate from the SDK workspace so examples can pull transport dependencies.
 [workspace]
 resolver = "2"
 members = [
@@ -15,7 +10,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.6.5"
+version = "0.6.6"
 edition = "2021"
 rust-version = "1.74"
 license = "Apache-2.0"

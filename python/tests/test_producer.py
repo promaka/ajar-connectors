@@ -1,11 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""The derived-events producer: lineage is mandatory, the envelope is the
-SDK's seal byte-for-byte, and every publish carries the dedupe header.
-
-The wire test runs against a real nats-server when one is on PATH (CI
-installs it; the test fails rather than skips there, because a silently
-skipped gate is no gate).
-"""
+"""Tests for the derived-events producer; the wire test needs nats-server on PATH."""
 
 import asyncio
 import os
@@ -24,7 +18,7 @@ SEED = bytes([0x42]) * 32
 
 
 class FakeNats:
-    """Captures publishes; no broker needed for the shape tests."""
+    """Records publishes in place of a NATS client."""
 
     def __init__(self):
         self.published = []
@@ -87,19 +81,15 @@ def test_the_envelope_is_the_sdk_seal_with_lineage_and_dedupe_header():
     assert subject == "ajar.ingest.assess-1"
     assert headers == {"Nats-Msg-Id": event_id}
 
-    # The payload verifies under the producer's key and is a canonical Event.
     canonical = verify(payload, SigningKey.from_seed(SEED).verifying_key)
     event = event_pb2.Event()
     event.ParseFromString(canonical)
     assert event.id == event_id
     assert event.source_id == "assess-1"
-    # Lineage rides as attributes, comma-separated parents, per the boundary
-    # contract (a space-joined value would read as one malformed id).
     attrs = {a.key: a.value for a in event.attributes}
     assert attrs["model"] == "assessment-engine@1.4"
     assert attrs["derived_from"] == "parent-b,parent-a"
     assert attrs["threat_level"] == "High"
-    # Canonical rules: attribute keys sorted and unique.
     keys = [a.key for a in event.attributes]
     assert keys == sorted(keys) and len(keys) == len(set(keys))
 

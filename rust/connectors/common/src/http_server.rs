@@ -1,25 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
-//! HTTP server transport — accept webhook deliveries from sources that can only
-//! POST to a URL: IP cameras and VMS event notifications, SDR republishers, SaaS
-//! callbacks. Each request body is one frame.
-//!
-//! This is the only transport that can answer the sender. The datagram and stream
-//! transports take whatever arrives and shed it if the pipeline is saturated,
-//! because there is nobody to tell. A webhook client reads the status code, so
-//! refusing a delivery with `503` makes a well-behaved sender retry instead of
-//! losing the event: delivery is as durable as the sender's retry policy, which is
-//! stronger than anything else in the suite.
-//!
-//! The parser is deliberately small. HTTP/1.1, one configured path, `POST` or
-//! `PUT`, `Content-Length` or `chunked` bodies. Every dimension of a request is
-//! bounded before it is read (header count, header bytes, body bytes) so neither a
-//! hostile nor a merely broken client can grow memory, and a connection that stops
-//! making progress is closed on a timeout rather than held open.
+//! HTTP server transport: accept webhook deliveries; each request body is one
+//! frame. HTTP/1.1, one path, `POST` or `PUT`, `Content-Length` or `chunked`,
+//! every part of a request bounded before it is read. A saturated pipeline
+//! answers `503`, so a well-behaved sender retries instead of losing the event.
 
-use rustls_pki_types::pem::PemObject;
 use std::sync::Arc;
 use std::time::Duration;
 
+use anyhow::Context;
+use rustls_pki_types::pem::PemObject;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
@@ -30,39 +19,31 @@ use tokio_rustls::TlsAcceptor;
 
 use crate::runtime::FrameSource;
 
-/// A stream this transport can serve a request over: a plain TCP connection, or
-/// the same connection after a TLS handshake.
-trait Transport: AsyncRead + AsyncWrite + Unpin + Send {}
-impl<T: AsyncRead + AsyncWrite + Unpin + Send> Transport for T {}
+/// A plain TCP connection, or the same connection after a TLS handshake.
+trait Conn: AsyncRead + AsyncWrite + Unpin + Send {}
+impl<T: AsyncRead + AsyncWrite + Unpin + Send> Conn for T {}
 
-/// Matches the runtime's receive buffer: one frame can never exceed it.
-const MAX_FRAME: usize = 64 * 1024;
-/// Frames buffered across all connections before deliveries are refused with 503.
+const MAX_FRAME: usize = crate::MAX_FRAME_BYTES;
+/// Frames buffered across all connections before deliveries are refused.
 const CHANNEL_FRAMES: usize = 256;
 /// Total request-header bytes accepted before the request is refused.
 const MAX_HEADER_BYTES: usize = 16 * 1024;
 /// Header lines accepted before the request is refused.
 const MAX_HEADERS: usize = 64;
-/// How long one request may take to arrive once a connection is active. Bounds
-/// slow-loris: a sender that dribbles headers is closed rather than held.
+/// How long one request may take to arrive, against senders that dribble.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
-/// How long an idle keep-alive connection is held open between deliveries.
 const IDLE_TIMEOUT: Duration = Duration::from_secs(60);
-/// Seconds a refused sender is asked to wait before retrying.
+/// `Retry-After` on a 503.
 const RETRY_AFTER_SECS: u32 = 1;
 
-/// Settings shared by every connection on one listener.
 #[derive(Clone)]
 struct Settings {
-    /// Path a delivery must target; anything else is 404.
     path: String,
-    /// Shared secret required in `X-Ajar-Token`, if the operator set one.
     token: Option<String>,
 }
 
-/// How a delivery was answered. The status is what the sender sees, and it is the
-/// contract with their retry logic: only `Saturated` invites a retry of an
-/// otherwise-valid delivery.
+/// How a delivery was answered. Only `Saturated` invites a retry of a valid
+/// delivery.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Outcome {
     Accepted,
@@ -76,7 +57,6 @@ enum Outcome {
 }
 
 impl Outcome {
-    /// The status line sent for this outcome.
     fn status(self) -> (u16, &'static str) {
         match self {
             Outcome::Accepted => (204, "No Content"),
@@ -106,8 +86,7 @@ impl FrameSource for HttpServerSource {
                 buf[..n].copy_from_slice(&frame[..n]);
                 Ok(n)
             }
-            // The accept loop holds a sender for the lifetime of the source, so
-            // this only happens if it died — surface it rather than spin.
+            // The accept loop holds a sender for the source's lifetime.
             None => Err(std::io::Error::new(
                 std::io::ErrorKind::UnexpectedEof,
                 "http-server accept loop ended",
@@ -120,25 +99,17 @@ impl FrameSource for HttpServerSource {
     }
 }
 
-/// How the listener protects the hop from the sender.
+/// PEM paths for the listener's TLS. `client_ca` enables mutual TLS.
+#[derive(Default)]
 pub struct Tls<'a> {
-    /// PEM certificate chain served to senders.
     pub cert: Option<&'a str>,
-    /// PEM private key for `cert`.
     pub key: Option<&'a str>,
-    /// PEM CA bundle client certificates must chain to; enables mutual TLS.
     pub client_ca: Option<&'a str>,
 }
 
-/// Bind and start accepting deliveries. Binding is eager (a bad `bind` or an
-/// unreadable certificate fails fast at startup); connections are handled in the
-/// background.
-///
-/// TLS is fail-closed in the same way the NATS connection is. A `token` on a
-/// plaintext listener refuses to start, because the secret would be on the wire in
-/// every delivery and a sender that captured it could inject events the connector
-/// would then sign. A partially configured certificate pair is a slip, not a
-/// preference, so it refuses too.
+/// Bind now, so a bad `bind` or certificate fails at startup, and accept in
+/// the background. A `token` without TLS refuses to start: the secret would be
+/// on the wire in every delivery. So does half a certificate pair.
 pub async fn open(
     bind: &str,
     path: &str,
@@ -150,20 +121,17 @@ pub async fn open(
         (None, None) => {
             if tls.client_ca.is_some() {
                 anyhow::bail!(
-                    "http-server: tls_client_ca needs tls_cert and tls_key — \
+                    "http-server: tls_client_ca needs tls_cert and tls_key; \
                      client certificates can only be verified over TLS"
                 );
             }
             if token.is_some() {
                 anyhow::bail!(
-                    "http-server: token requires tls_cert and tls_key — a shared secret on a \
+                    "http-server: token requires tls_cert and tls_key; a shared secret on a \
                      plaintext listener is sent in the clear with every delivery"
                 );
             }
-            tracing::warn!(
-                "http-server is serving plaintext: deliveries and their contents are \
-                 readable on the wire (use only on a physically protected segment)"
-            );
+            tracing::warn!(bind = %bind, "http-server has no tls, data readable on the network");
             None
         }
         _ => anyhow::bail!("http-server: set both tls_cert and tls_key, or neither"),
@@ -171,7 +139,7 @@ pub async fn open(
 
     let listener = TcpListener::bind(bind)
         .await
-        .map_err(|e| anyhow::anyhow!("binding http-server {bind}: {e}"))?;
+        .with_context(|| format!("binding http-server {bind}"))?;
     let local = listener.local_addr()?;
     let settings = Settings {
         path: normalise_path(path),
@@ -188,9 +156,8 @@ pub async fn open(
     Ok(HttpServerSource { rx, describe })
 }
 
-/// Build the TLS acceptor. With `client_ca` set the listener requires a client
-/// certificate chaining to it, which authenticates the sender by key rather than
-/// by a bearer token and is the stronger option wherever the sender supports it.
+/// The TLS acceptor; with `client_ca`, a client certificate chaining to it is
+/// required.
 fn tls_acceptor(cert: &str, key: &str, client_ca: Option<&str>) -> anyhow::Result<TlsAcceptor> {
     let chain = load_certs(cert)?;
     let key = load_key(key)?;
@@ -200,11 +167,11 @@ fn tls_acceptor(cert: &str, key: &str, client_ca: Option<&str>) -> anyhow::Resul
             for c in load_certs(ca)? {
                 roots
                     .add(c)
-                    .map_err(|e| anyhow::anyhow!("adding client CA from {ca}: {e}"))?;
+                    .with_context(|| format!("adding client CA from {ca}"))?;
             }
             let verifier = WebPkiClientVerifier::builder(Arc::new(roots))
                 .build()
-                .map_err(|e| anyhow::anyhow!("building client verifier from {ca}: {e}"))?;
+                .with_context(|| format!("building client verifier from {ca}"))?;
             ServerConfig::builder()
                 .with_client_cert_verifier(verifier)
                 .with_single_cert(chain, key)
@@ -213,14 +180,15 @@ fn tls_acceptor(cert: &str, key: &str, client_ca: Option<&str>) -> anyhow::Resul
             .with_no_client_auth()
             .with_single_cert(chain, key),
     }
-    .map_err(|e| anyhow::anyhow!("building TLS server config: {e}"))?;
+    .context("building TLS server config")?;
     Ok(TlsAcceptor::from(Arc::new(config)))
 }
 
 fn load_certs(path: &str) -> anyhow::Result<Vec<CertificateDer<'static>>> {
-    let data = std::fs::read(path).map_err(|e| anyhow::anyhow!("reading {path}: {e}"))?;
-    let certs: Result<Vec<_>, _> = CertificateDer::pem_slice_iter(&data).collect();
-    let certs = certs.map_err(|e| anyhow::anyhow!("parsing certificates in {path}: {e}"))?;
+    let data = std::fs::read(path).with_context(|| format!("reading {path}"))?;
+    let certs = CertificateDer::pem_slice_iter(&data)
+        .collect::<Result<Vec<_>, _>>()
+        .with_context(|| format!("parsing certificates in {path}"))?;
     if certs.is_empty() {
         anyhow::bail!("no certificates found in {path}");
     }
@@ -228,13 +196,11 @@ fn load_certs(path: &str) -> anyhow::Result<Vec<CertificateDer<'static>>> {
 }
 
 fn load_key(path: &str) -> anyhow::Result<PrivateKeyDer<'static>> {
-    let data = std::fs::read(path).map_err(|e| anyhow::anyhow!("reading {path}: {e}"))?;
-    PrivateKeyDer::from_pem_slice(&data)
-        .map_err(|e| anyhow::anyhow!("parsing private key in {path}: {e}"))
+    let data = std::fs::read(path).with_context(|| format!("reading {path}"))?;
+    PrivateKeyDer::from_pem_slice(&data).with_context(|| format!("parsing private key in {path}"))
 }
 
-/// A configured path always compares with a single leading slash and no trailing
-/// one, so `hook`, `/hook` and `/hook/` are the same endpoint.
+/// One leading slash, no trailing one: `hook`, `/hook` and `/hook/` are equal.
 fn normalise_path(path: &str) -> String {
     let trimmed = path.trim().trim_matches('/');
     if trimmed.is_empty() {
@@ -256,8 +222,8 @@ async fn accept_loop(
                 let _ = stream.set_nodelay(true);
                 let (settings, tx) = (settings.clone(), tx.clone());
                 match acceptor.clone() {
-                    // The handshake runs on the connection task, so a stalled or
-                    // hostile handshake never blocks the accept loop.
+                    // The handshake runs on the connection task, so a stalled
+                    // one never blocks the accept loop.
                     Some(acceptor) => {
                         tokio::spawn(async move {
                             match acceptor.accept(stream).await {
@@ -281,11 +247,10 @@ async fn accept_loop(
     }
 }
 
-/// Serve one connection until it closes, errors, or goes idle. Keep-alive is
-/// honoured only while the stream stays in sync: any outcome that leaves an
-/// unread body closes the connection instead of guessing where the next request
+/// Serve one connection until it closes, errors or goes idle. An outcome that
+/// leaves a body unread closes it rather than guess where the next request
 /// starts.
-async fn connection_loop<S: Transport>(
+async fn connection_loop<S: Conn>(
     stream: S,
     settings: Settings,
     tx: mpsc::Sender<Vec<u8>>,
@@ -293,8 +258,7 @@ async fn connection_loop<S: Transport>(
 ) {
     let mut reader = BufReader::new(stream);
     loop {
-        // Wait for the next request, closing an idle keep-alive connection rather
-        // than holding it open. An empty fill is the peer's clean shutdown.
+        // An empty fill is the peer's clean shutdown.
         match tokio::time::timeout(IDLE_TIMEOUT, reader.fill_buf()).await {
             Ok(Ok([])) | Ok(Err(_)) | Err(_) => return,
             Ok(Ok(_)) => {}
@@ -321,19 +285,18 @@ async fn connection_loop<S: Transport>(
 
 /// Read one request and, if it is a valid delivery, queue its body as a frame.
 /// Returns the outcome and whether the connection may carry another request.
-async fn serve<S: Transport>(
+async fn serve<S: Conn>(
     reader: &mut BufReader<S>,
     settings: &Settings,
     tx: &mpsc::Sender<Vec<u8>>,
 ) -> (Outcome, bool) {
     let head = match read_head(reader).await {
         Ok(head) => head,
-        // Malformed or over-long head: the stream position is unknown, so close.
+        // The stream position is unknown after a bad head.
         Err(outcome) => return (outcome, false),
     };
 
-    // Routing and authorisation are cheap and are checked before any body is read,
-    // so a misdirected or unauthorised sender never gets to spend our memory.
+    // Routing and authorisation come before any body is read.
     if head.path != settings.path {
         return (Outcome::NotFound, false);
     }
@@ -348,17 +311,15 @@ async fn serve<S: Transport>(
     }
     if let Some(len) = head.content_length {
         if len > MAX_FRAME {
-            // Refuse before reading: the body never enters memory.
             return (Outcome::PayloadTooLarge, false);
         }
     }
     if head.content_length.is_none() && !head.chunked {
-        // A delivery with no body is not an event. Treat it as a health probe.
+        // No body: a health probe, not an event.
         return (Outcome::Accepted, true);
     }
 
-    // `Expect: 100-continue` senders (curl, some VMS clients) wait for this line
-    // before sending the body; without it they stall for a fixed timeout.
+    // `Expect: 100-continue` senders wait for this line before the body.
     if head.expect_continue
         && reader
             .get_mut()
@@ -374,17 +335,14 @@ async fn serve<S: Transport>(
         Err(outcome) => return (outcome, false),
     };
 
-    // Backpressure is the point of this transport: rather than shedding silently,
-    // refuse the delivery so the sender retries it.
     match tx.try_send(body) {
         Ok(()) => (Outcome::Accepted, true),
         Err(mpsc::error::TrySendError::Full(_)) => (Outcome::Saturated, true),
-        // Source dropped; the connector is shutting down.
+        // The connector is shutting down.
         Err(mpsc::error::TrySendError::Closed(_)) => (Outcome::Saturated, false),
     }
 }
 
-/// The parts of a request head this transport acts on.
 struct Head {
     method_allowed: bool,
     path: String,
@@ -395,19 +353,17 @@ struct Head {
 }
 
 /// Read the request line and headers, bounded in both count and bytes.
-async fn read_head<S: Transport>(reader: &mut BufReader<S>) -> Result<Head, Outcome> {
+async fn read_head<S: Conn>(reader: &mut BufReader<S>) -> Result<Head, Outcome> {
     let mut budget = MAX_HEADER_BYTES;
     let request_line = read_line(reader, &mut budget).await?;
     let mut parts = request_line.split_whitespace();
-    let method = parts.next().unwrap_or_default().to_string();
-    let target = parts.next().unwrap_or_default().to_string();
+    let method = parts.next().unwrap_or_default();
+    let target = parts.next().unwrap_or_default();
     if method.is_empty() || target.is_empty() {
         return Err(Outcome::BadRequest);
     }
 
     let mut head = Head {
-        // A webhook is a write. Anything else is a client pointed at the wrong
-        // place, and is told so rather than silently accepted.
         method_allowed: method.eq_ignore_ascii_case("POST") || method.eq_ignore_ascii_case("PUT"),
         path: normalise_path(target.split(['?', '#']).next().unwrap_or("/")),
         content_length: None,
@@ -428,8 +384,6 @@ async fn read_head<S: Transport>(reader: &mut BufReader<S>) -> Result<Head, Outc
         if name.eq_ignore_ascii_case("content-length") {
             head.content_length = Some(value.parse().map_err(|_| Outcome::BadRequest)?);
         } else if name.eq_ignore_ascii_case("transfer-encoding") {
-            // Only chunked is defined for requests we accept; anything else
-            // (compressed transfer codings) is refused rather than mis-read.
             if value.eq_ignore_ascii_case("chunked") {
                 head.chunked = true;
             } else {
@@ -441,12 +395,11 @@ async fn read_head<S: Transport>(reader: &mut BufReader<S>) -> Result<Head, Outc
             head.token = Some(value.to_string());
         }
     }
-    // More header lines than the bound allows.
     Err(Outcome::BadRequest)
 }
 
 /// Read one CRLF-terminated header line, charging it against the head budget.
-async fn read_line<S: Transport>(
+async fn read_line<S: Conn>(
     reader: &mut BufReader<S>,
     budget: &mut usize,
 ) -> Result<String, Outcome> {
@@ -455,8 +408,9 @@ async fn read_line<S: Transport>(
         .read_until(b'\n', &mut raw)
         .await
         .map_err(|_| Outcome::BadRequest)?;
+    // The connection ended mid-head.
     if n == 0 {
-        return Err(Outcome::BadRequest); // connection ended mid-head
+        return Err(Outcome::BadRequest);
     }
     *budget = budget.checked_sub(n).ok_or(Outcome::BadRequest)?;
     while raw.last().is_some_and(|b| *b == b'\n' || *b == b'\r') {
@@ -466,10 +420,7 @@ async fn read_line<S: Transport>(
 }
 
 /// Read the body described by `head`, never allocating past [`MAX_FRAME`].
-async fn read_body<S: Transport>(
-    reader: &mut BufReader<S>,
-    head: &Head,
-) -> Result<Vec<u8>, Outcome> {
+async fn read_body<S: Conn>(reader: &mut BufReader<S>, head: &Head) -> Result<Vec<u8>, Outcome> {
     if head.chunked {
         return read_chunked(reader).await;
     }
@@ -482,9 +433,9 @@ async fn read_body<S: Transport>(
     Ok(body)
 }
 
-/// Read a `Transfer-Encoding: chunked` body. The running total is checked against
-/// [`MAX_FRAME`] on every chunk, so a sender cannot exceed the bound by splitting.
-async fn read_chunked<S: Transport>(reader: &mut BufReader<S>) -> Result<Vec<u8>, Outcome> {
+/// Read a chunked body, checking the running total against [`MAX_FRAME`] on
+/// every chunk.
+async fn read_chunked<S: Conn>(reader: &mut BufReader<S>) -> Result<Vec<u8>, Outcome> {
     let mut body = Vec::new();
     loop {
         let mut budget = MAX_HEADER_BYTES;
@@ -513,13 +464,8 @@ async fn read_chunked<S: Transport>(reader: &mut BufReader<S>) -> Result<Vec<u8>
     }
 }
 
-/// Write the response. Every response carries an explicit `Content-Length: 0` and
-/// an explicit `Connection`, so a sender never has to guess where it ends.
-async fn respond<S: Transport>(
-    stream: &mut S,
-    outcome: Outcome,
-    reusable: bool,
-) -> std::io::Result<()> {
+/// Write the response, always with `Content-Length: 0` and `Connection`.
+async fn respond<S: Conn>(stream: &mut S, outcome: Outcome, reusable: bool) -> std::io::Result<()> {
     let (code, reason) = outcome.status();
     let connection = if reusable { "keep-alive" } else { "close" };
     let mut response =
@@ -535,8 +481,8 @@ async fn respond<S: Transport>(
     stream.flush().await
 }
 
-/// Constant-time equality, so a token cannot be recovered by timing responses.
-/// The length is allowed to leak, which is standard for a fixed-format secret.
+/// Constant-time equality, so a token cannot be recovered by timing. The length
+/// leaks.
 fn secret_eq(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {
         return false;
@@ -549,29 +495,32 @@ mod tests {
     use super::*;
     use tokio::net::TcpStream;
 
-    /// Open a source on an ephemeral port and return it with its address.
-    async fn server(path: &str, token: Option<String>) -> (HttpServerSource, String) {
-        let src = open(
-            "127.0.0.1:0",
-            path,
-            token,
-            Tls {
-                cert: None,
-                key: None,
-                client_ca: None,
-            },
-        )
-        .await
-        .unwrap();
-        let addr = src
-            .describe()
-            .strip_prefix("http-server http://")
+    /// The bound address, read back from the description.
+    fn addr(src: &HttpServerSource, scheme: &str) -> String {
+        src.describe()
+            .strip_prefix(&format!("http-server {scheme}://"))
             .unwrap()
             .split('/')
             .next()
             .unwrap()
-            .to_string();
+            .to_string()
+    }
+
+    /// A plaintext source on an ephemeral port, with its address.
+    async fn server(path: &str, token: Option<String>) -> (HttpServerSource, String) {
+        let src = open("127.0.0.1:0", path, token, Tls::default())
+            .await
+            .unwrap();
+        let addr = addr(&src, "http");
         (src, addr)
+    }
+
+    async fn open_error(token: Option<String>, tls: Tls<'_>) -> String {
+        open("127.0.0.1:0", "/", token, tls)
+            .await
+            .err()
+            .unwrap()
+            .to_string()
     }
 
     /// Send raw bytes on a fresh connection and read whatever comes back.
@@ -602,9 +551,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reads_a_chunked_body() {
+    async fn reads_a_chunked_body_with_extensions() {
         let (mut src, addr) = server("/", None).await;
-        // "hello" split across two chunks, with an extension on the first.
         let raw = "POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n\
                    3;meta=1\r\nhel\r\n2\r\nlo\r\n0\r\n\r\n";
         let reply = send(&addr, raw).await;
@@ -669,7 +617,7 @@ mod tests {
         let big = "a".repeat(4096);
         let mut raw =
             String::from("POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n");
-        // Well past MAX_FRAME in aggregate, but no single chunk is large.
+        // Past MAX_FRAME in aggregate, no single chunk large.
         for _ in 0..20 {
             raw.push_str(&format!("1000\r\n{big}\r\n"));
         }
@@ -688,14 +636,15 @@ mod tests {
         assert!(reply.starts_with("HTTP/1.1 405"), "{reply}");
         assert!(reply.contains("Allow: POST, PUT"));
 
-        // A query string still routes, and the trailing slash is the same endpoint.
         let ok = "POST /hook/?x=1 HTTP/1.1\r\nHost: x\r\nContent-Length: 1\r\n\r\nx";
-        assert!(send(&addr, ok).await.starts_with("HTTP/1.1 204"));
+        assert!(
+            send(&addr, ok).await.starts_with("HTTP/1.1 204"),
+            "query string and trailing slash still route"
+        );
     }
 
     #[tokio::test]
     async fn refuses_rather_than_sheds_when_saturated() {
-        // Never read from the source, so the channel fills and stays full.
         let (_src, addr) = server("/", None).await;
         let mut refused = false;
         for _ in 0..(CHANNEL_FRAMES + 8) {
@@ -743,18 +692,12 @@ mod tests {
         assert!(secret_eq(b"", b""));
     }
 
-    /// Write a throwaway self-signed cert/key pair for `localhost` and return the
-    /// paths plus the certificate DER, so a test client can trust exactly it.
-    fn self_signed() -> (String, String, CertificateDer<'static>) {
+    /// A self-signed cert and key for `localhost` in `dir`: their paths and the
+    /// certificate DER, so a test client can trust exactly it.
+    fn self_signed(dir: &tempfile::TempDir) -> (String, String, CertificateDer<'static>) {
         let issued = rcgen::generate_simple_self_signed(vec!["localhost".to_string()]).unwrap();
-        let dir = std::env::temp_dir();
-        let stem = format!(
-            "ajar-http-test-{}-{:?}",
-            std::process::id(),
-            std::thread::current().id()
-        );
-        let cert_path = dir.join(format!("{stem}.crt"));
-        let key_path = dir.join(format!("{stem}.key"));
+        let cert_path = dir.path().join("server.crt");
+        let key_path = dir.path().join("server.key");
         std::fs::write(&cert_path, issued.cert.pem()).unwrap();
         std::fs::write(&key_path, issued.signing_key.serialize_pem()).unwrap();
         let der = CertificateDer::from(issued.cert.der().to_vec());
@@ -767,7 +710,8 @@ mod tests {
 
     #[tokio::test]
     async fn serves_a_delivery_over_tls() {
-        let (cert, key, der) = self_signed();
+        let dir = tempfile::tempdir().unwrap();
+        let (cert, key, der) = self_signed(&dir);
         let mut src = open(
             "127.0.0.1:0",
             "/",
@@ -775,22 +719,13 @@ mod tests {
             Tls {
                 cert: Some(&cert),
                 key: Some(&key),
-                client_ca: None,
+                ..Tls::default()
             },
         )
         .await
         .unwrap();
-        assert!(src.describe().starts_with("http-server https://"));
-        let addr = src
-            .describe()
-            .strip_prefix("http-server https://")
-            .unwrap()
-            .split('/')
-            .next()
-            .unwrap()
-            .to_string();
+        let addr = addr(&src, "https");
 
-        // A client that trusts exactly the certificate we just generated.
         let mut roots = RootCertStore::empty();
         roots.add(der).unwrap();
         let client = tokio_rustls::TlsConnector::from(Arc::new(
@@ -820,8 +755,6 @@ mod tests {
         let n = src.recv(&mut buf).await.unwrap();
         assert_eq!(&buf[..n], body.as_bytes());
 
-        // A wrong or absent token is refused on the same listener. The secret is
-        // only ever compared over TLS, which is what makes carrying it acceptable.
         for headers in ["X-Ajar-Token: wrong\r\n", ""] {
             let tcp = TcpStream::connect(&addr).await.unwrap();
             let name = tokio_rustls::rustls::pki_types::ServerName::try_from("localhost").unwrap();
@@ -834,70 +767,34 @@ mod tests {
             let n = tls.read(&mut out).await.unwrap();
             assert!(
                 String::from_utf8_lossy(&out[..n]).starts_with("HTTP/1.1 401"),
-                "expected 401 for headers {headers:?}"
+                "a wrong or absent token is refused: {headers:?}"
             );
         }
-
-        let _ = std::fs::remove_file(cert);
-        let _ = std::fs::remove_file(key);
     }
 
     #[tokio::test]
-    async fn a_secret_on_a_plaintext_listener_refuses_to_start() {
-        // The secret would be readable in every delivery, and a sender that
-        // captured it could inject events the connector would then sign.
-        let err = open(
-            "127.0.0.1:0",
-            "/",
-            Some("s3cret".into()),
-            Tls {
-                cert: None,
-                key: None,
-                client_ca: None,
-            },
-        )
-        .await
-        .err()
-        .unwrap()
-        .to_string();
+    async fn token_without_tls_refuses_to_start() {
+        let err = open_error(Some("s3cret".into()), Tls::default()).await;
         assert!(err.contains("token requires tls_cert and tls_key"), "{err}");
     }
 
     #[tokio::test]
-    async fn a_half_configured_certificate_pair_refuses_to_start() {
-        let err = open(
-            "127.0.0.1:0",
-            "/",
-            None,
-            Tls {
-                cert: Some("/nonexistent.crt"),
-                key: None,
-                client_ca: None,
-            },
-        )
-        .await
-        .err()
-        .unwrap()
-        .to_string();
+    async fn half_a_certificate_pair_refuses_to_start() {
+        let tls = Tls {
+            cert: Some("/nonexistent.crt"),
+            ..Tls::default()
+        };
+        let err = open_error(None, tls).await;
         assert!(err.contains("both tls_cert and tls_key"), "{err}");
     }
 
     #[tokio::test]
     async fn client_certificates_need_tls() {
-        let err = open(
-            "127.0.0.1:0",
-            "/",
-            None,
-            Tls {
-                cert: None,
-                key: None,
-                client_ca: Some("/some/ca.crt"),
-            },
-        )
-        .await
-        .err()
-        .unwrap()
-        .to_string();
+        let tls = Tls {
+            client_ca: Some("/some/ca.crt"),
+            ..Tls::default()
+        };
+        let err = open_error(None, tls).await;
         assert!(err.contains("tls_client_ca needs tls_cert"), "{err}");
     }
 }

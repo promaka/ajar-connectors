@@ -24,24 +24,24 @@ with a Core that accepts `v1`.
 
 | Package | Feed or role | Latest | Image |
 |---|---|---|---|
-| [`ajar-asterix`](rust/connectors/asterix) | Air: EUROCONTROL ASTERIX | [0.6.6](https://github.com/promaka/ajar-connectors/releases/tag/asterix-v0.6.6) | `ajar-connector-asterix` |
-| [`ajar-adsb`](rust/connectors/adsb) | Air: ADS-B, SBS-1 / BaseStation | [0.6.6](https://github.com/promaka/ajar-connectors/releases/tag/adsb-v0.6.6) | `ajar-connector-adsb` |
-| [`ajar-ais-nmea`](rust/connectors/ais-nmea) | Maritime: AIS over NMEA 0183 | [0.6.6](https://github.com/promaka/ajar-connectors/releases/tag/ais-nmea-v0.6.6) | `ajar-connector-ais-nmea` |
-| [`ajar-gmti`](rust/connectors/gmti) | Land: STANAG 4607 GMTI | [0.6.6](https://github.com/promaka/ajar-connectors/releases/tag/gmti-v0.6.6) | `ajar-connector-gmti` |
-| [`ajar-klv`](rust/connectors/klv) | ISR: STANAG 4609 / MISB ST 0601 | [0.6.6](https://github.com/promaka/ajar-connectors/releases/tag/klv-v0.6.6) | `ajar-connector-klv` |
-| [`ajar-stanag4676`](rust/connectors/stanag4676) | ISR: STANAG 4676 tracking | [0.6.6](https://github.com/promaka/ajar-connectors/releases/tag/stanag4676-v0.6.6) | `ajar-connector-stanag4676` |
-| [`ajar-mavlink`](rust/connectors/mavlink) | Unmanned: MAVLink | [0.6.6](https://github.com/promaka/ajar-connectors/releases/tag/mavlink-v0.6.6) | `ajar-connector-mavlink` |
-| [`ajar-stanag4586`](rust/connectors/stanag4586) | Unmanned: STANAG 4586 UAS control | [0.6.6](https://github.com/promaka/ajar-connectors/releases/tag/stanag4586-v0.6.6) | `ajar-connector-stanag4586` |
-| [`ajar-sapient`](rust/connectors/sapient) | Counter-UAS: SAPIENT ingress | [0.6.6](https://github.com/promaka/ajar-connectors/releases/tag/sapient-v0.6.6) | `ajar-connector-sapient` |
-| [`ajar-sapient-egress`](rust/connectors/sapient-egress) | Counter-UAS: SAPIENT egress | [0.6.6](https://github.com/promaka/ajar-connectors/releases/tag/sapient-egress-v0.6.6) | `ajar-connector-sapient-egress` |
-| [`ajar-tak-cot`](rust/connectors/tak-cot) | C2: TAK / Cursor-on-Target ingress | [0.6.6](https://github.com/promaka/ajar-connectors/releases/tag/tak-cot-v0.6.6) | `ajar-connector-tak-cot` |
-| [`ajar-tak-egress`](rust/connectors/tak-egress) | C2: CoT egress to a TAK Server | [0.6.6](https://github.com/promaka/ajar-connectors/releases/tag/tak-egress-v0.6.6) | `ajar-connector-tak-egress` |
-| [`ajar-generic`](rust/connectors/generic) | Any JSON, CSV or NMEA-like feed, by config | [0.6.6](https://github.com/promaka/ajar-connectors/releases/tag/generic-v0.6.6) | `ajar-connector-generic` |
-| [`ajar-generic-egress`](rust/connectors/generic-egress) | Governed events out as JSON over HTTP | [0.6.6](https://github.com/promaka/ajar-connectors/releases/tag/generic-egress-v0.6.6) | `ajar-connector-generic-egress` |
-| [`ajar-feed-synthetic`](rust/connectors/feed-synthetic) | Test feed: one scenario on every wire format | [0.6.6](https://github.com/promaka/ajar-connectors/releases/tag/feed-synthetic-v0.6.6) | `ajar-connector-feed-synthetic` |
-| [`synthetic-radar`](rust/examples/synthetic-radar) | Test feed: synthetic air tracks | [0.6.6](https://github.com/promaka/ajar-connectors/releases/tag/synthetic-radar-v0.6.6) | `ajar-connector-synthetic-radar` |
-| [`ajar-doctor`](rust/connectors/doctor) | Tool: preflight diagnostics | [0.6.6](https://github.com/promaka/ajar-connectors/releases/tag/doctor-v0.6.6) | `ajar-connector-doctor` |
-| [`ajar-up`](rust/connectors/up) | Tool: operator packet to flowing events | [0.6.6](https://github.com/promaka/ajar-connectors/releases/tag/up-v0.6.6) | tarball only |
+| [`ajar-asterix`](rust/connectors/asterix) | Air: EUROCONTROL ASTERIX | [0.6.7](https://github.com/promaka/ajar-connectors/releases/tag/asterix-v0.6.7) | `ajar-connector-asterix` |
+| [`ajar-adsb`](rust/connectors/adsb) | Air: ADS-B, SBS-1 / BaseStation | [0.6.7](https://github.com/promaka/ajar-connectors/releases/tag/adsb-v0.6.7) | `ajar-connector-adsb` |
+| [`ajar-ais-nmea`](rust/connectors/ais-nmea) | Maritime: AIS over NMEA 0183 | [0.6.7](https://github.com/promaka/ajar-connectors/releases/tag/ais-nmea-v0.6.7) | `ajar-connector-ais-nmea` |
+| [`ajar-gmti`](rust/connectors/gmti) | Land: STANAG 4607 GMTI | [0.6.7](https://github.com/promaka/ajar-connectors/releases/tag/gmti-v0.6.7) | `ajar-connector-gmti` |
+| [`ajar-klv`](rust/connectors/klv) | ISR: STANAG 4609 / MISB ST 0601 | [0.6.7](https://github.com/promaka/ajar-connectors/releases/tag/klv-v0.6.7) | `ajar-connector-klv` |
+| [`ajar-stanag4676`](rust/connectors/stanag4676) | ISR: STANAG 4676 tracking | [0.6.7](https://github.com/promaka/ajar-connectors/releases/tag/stanag4676-v0.6.7) | `ajar-connector-stanag4676` |
+| [`ajar-mavlink`](rust/connectors/mavlink) | Unmanned: MAVLink | [0.6.7](https://github.com/promaka/ajar-connectors/releases/tag/mavlink-v0.6.7) | `ajar-connector-mavlink` |
+| [`ajar-stanag4586`](rust/connectors/stanag4586) | Unmanned: STANAG 4586 UAS control | [0.6.7](https://github.com/promaka/ajar-connectors/releases/tag/stanag4586-v0.6.7) | `ajar-connector-stanag4586` |
+| [`ajar-sapient`](rust/connectors/sapient) | Counter-UAS: SAPIENT ingress | [0.6.7](https://github.com/promaka/ajar-connectors/releases/tag/sapient-v0.6.7) | `ajar-connector-sapient` |
+| [`ajar-sapient-egress`](rust/connectors/sapient-egress) | Counter-UAS: SAPIENT egress | [0.6.7](https://github.com/promaka/ajar-connectors/releases/tag/sapient-egress-v0.6.7) | `ajar-connector-sapient-egress` |
+| [`ajar-tak-cot`](rust/connectors/tak-cot) | C2: TAK / Cursor-on-Target ingress | [0.6.7](https://github.com/promaka/ajar-connectors/releases/tag/tak-cot-v0.6.7) | `ajar-connector-tak-cot` |
+| [`ajar-tak-egress`](rust/connectors/tak-egress) | C2: CoT egress to a TAK Server | [0.6.7](https://github.com/promaka/ajar-connectors/releases/tag/tak-egress-v0.6.7) | `ajar-connector-tak-egress` |
+| [`ajar-generic`](rust/connectors/generic) | Any JSON, CSV or NMEA-like feed, by config | [0.6.7](https://github.com/promaka/ajar-connectors/releases/tag/generic-v0.6.7) | `ajar-connector-generic` |
+| [`ajar-generic-egress`](rust/connectors/generic-egress) | Governed events out as JSON over HTTP | [0.6.7](https://github.com/promaka/ajar-connectors/releases/tag/generic-egress-v0.6.7) | `ajar-connector-generic-egress` |
+| [`ajar-feed-synthetic`](rust/connectors/feed-synthetic) | Test feed: one scenario on every wire format | [0.6.7](https://github.com/promaka/ajar-connectors/releases/tag/feed-synthetic-v0.6.7) | `ajar-connector-feed-synthetic` |
+| [`synthetic-radar`](rust/examples/synthetic-radar) | Test feed: synthetic air tracks | [0.6.7](https://github.com/promaka/ajar-connectors/releases/tag/synthetic-radar-v0.6.7) | `ajar-connector-synthetic-radar` |
+| [`ajar-doctor`](rust/connectors/doctor) | Tool: preflight diagnostics | [0.6.7](https://github.com/promaka/ajar-connectors/releases/tag/doctor-v0.6.7) | `ajar-connector-doctor` |
+| [`ajar-up`](rust/connectors/up) | Tool: operator packet to flowing events | [0.6.7](https://github.com/promaka/ajar-connectors/releases/tag/up-v0.6.7) | tarball only |
 | [connector chart](deploy/helm/connector) | Helm chart for any connector | [0.6.6](https://github.com/promaka/ajar-connectors/releases/tag/chart-v0.6.6) | `charts/connector` (OCI) |
 
 ## Air
@@ -191,9 +191,10 @@ a fusion consumer association work with a known answer.
 
 Each sensor emits only what that sensor carries: AIS has an identity and no
 accuracy, the radar plot has accuracy and no identity, CoT has an identity and
-no kinematics, the ESM intercept has a bearing and no position. Every
-generator lags by its own sensor's latency, so observation time and arrival
-time diverge as they do in the field. Cadences are the protocols' own: the AIS
+no kinematics, the ESM intercept has a bearing and no position. The times on
+the wire lag by each sensor's latency. CoT, ESM and SAPIENT events take their
+timestamp from the wire; the radar, AIS, ADS-B and MAVLink connectors stamp the
+time of receipt. Cadences are the protocols' own: the AIS
 static report every six minutes per ITU-R M.1371 (shorten it for a
 commissioning run with `--ais-static-every`), the radar heartbeat once per
 rotation. The ESM intercept carries the full contract revision 4 emitter
@@ -203,7 +204,8 @@ long as the feed runs.
 
 Each generator is proven against the decoder that reads it, in the same
 workspace, so the two cannot drift apart without a test failing. `--dry-run`
-prints one tick of every sensor and opens nothing.
+prints what would go on the wire and opens nothing; `--ticks N` stops it after
+N ticks.
 
 ```
 ajar-feed-synthetic all --bind 192.0.2.10     # every sensor on one interface

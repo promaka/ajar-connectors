@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-//! A bench scenario on the wire: one radar node registers, reports its
-//! position, then reports a UAV it is following, and raises an alert. Built
-//! deterministically, so `tests/data/sapient-capture.bin` is exactly these
-//! bytes and a decode of either proves the other.
+//! A deterministic bench scenario: a radar registers, reports its position,
+//! follows a UAV and raises an alert.
 
 use ajar_sapient_wire::v2::sapient_message::Content;
 use ajar_sapient_wire::v2::{self, detection_report, registration, status_report};
@@ -38,7 +36,6 @@ fn latlng(lat: f64, lon: f64, alt: f64) -> v2::Location {
     }
 }
 
-/// The scenario's messages, in order.
 pub fn messages() -> Vec<v2::SapientMessage> {
     let registration = v2::Registration {
         node_definition: vec![registration::NodeDefinition {
@@ -67,7 +64,7 @@ pub fn messages() -> Vec<v2::SapientMessage> {
     };
     let mut detections = Vec::new();
     for i in 0..5i64 {
-        // Range and bearing from the radar: a UAV closing from the north-east.
+        // A UAV closing from the north-east.
         detections.push(envelope(
             2 + i,
             Content::DetectionReport(v2::DetectionReport {
@@ -125,8 +122,8 @@ pub fn messages() -> Vec<v2::SapientMessage> {
     all
 }
 
-/// The scenario as the bytes on a TCP stream: each message framed. Used by
-/// the capture test; the conformance test needs only the messages.
+/// The scenario framed as on a TCP stream.
+// Unused by the conformance test.
 #[allow(dead_code)]
 pub fn capture() -> Vec<u8> {
     messages()

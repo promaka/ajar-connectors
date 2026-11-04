@@ -27,6 +27,13 @@ entries below 0.6.5 cover the whole suite as it was then released together.
   the connector's version and the contract it emits (`ajar.contract`). See
   CONTRIBUTING.md, "Releases".
 
+## [0.6.6] - 2026-11-02
+
+### Changed
+
+- SDK documentation clean-up in Rust, Go, Python and C++, and `SealError` in Rust now
+  uses `thiserror` with the same error text. No API or wire change.
+
 ## [0.6.5] - 2026-10-24
 
 ### Added

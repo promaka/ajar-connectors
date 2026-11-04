@@ -1,31 +1,22 @@
 # SPDX-License-Identifier: Apache-2.0
 #
-# Example config-driven connector — no code, just a field mapping. Run:
-#   ajar-generic ./generic.toml
-#
-# This one reads newline-delimited JSON from a TCP feed and maps it to a sensor
-# track. Point [transport] at any kind in the repository README's transport
-# table: udp, udp-multicast, tcp-client, tcp-server, http-server, file, dir,
-# exec, stdin, pcap-replay, serial, mqtt, rest-poll, ws-client, dds.
+# Config-driven ingress: newline JSON mapped to events. Run: ajar-generic ./generic.toml
 
 source_id = "acme-sensor-1"
 nats_url = "nats://127.0.0.1:4222"
 subject_prefix = "ajar.ingest"
 signing_key_path = "/etc/ajar/acme-sensor-1.seed"
 
-# Feeds mapped generically usually carry no hostility; stamp one for the COP.
+# Generic feeds usually carry no hostility; set the one the picture should show.
 # default_hostility = "Friend"
 
-# The security marking every event carries, stamped inside its signature.
-# Every field is optional; see README section 7f.
+# Security marking stamped into every event; all fields optional.
 # [marking]
 # classification = "restricted"
 # releasable_to = ["GBR", "ITA"]
 # caveats = ["EXERCISE"]
 
-# JSON published on a DDS topic as a single string field (a ROS 2
-# std_msgs/String, or any typed struct with one string)? `payload = "string"`
-# hands the mapping the text alone. See the doctor for the type name.
+# JSON in a single DDS string field (ROS 2 std_msgs/String); see the doctor for type_name.
 # [transport]
 # kind = "dds"
 # domain = 0
@@ -38,45 +29,41 @@ kind = "tcp-client"
 connect = "sensor-gateway.example.mil:9000"
 framing = "line"
 
-# ...or listen for a source that PUSHES to you ("point your output at ip:port"):
+# Or listen for a source that pushes its feed:
 #   kind = "tcp-server"
 #   bind = "0.0.0.0:9000"
 #   framing = "line"
 
-# ...or consume batch file drops (SFTP exports) from a directory:
+# Or read files dropped into a directory:
 #   kind = "dir"
 #   path = "/data/drop"
 #   process_existing = false
 
 [mapping]
-# Native record format: "json" (one object per frame) or "csv".
+# "json" (one object per frame) or "csv".
 format = "json"
-
-# The Ajar entity type every event gets. This one is governed by the vendored
-# ontology, so the config runs as shipped; a vendor extension type
-# (x:<vendor>:<type>) works too once your operator registers it.
+# Governed by the vendored ontology; an x:<vendor>:<type> needs registering first.
 entity_type = "mim:object"
-
-# Observation time. Omit timestamp_field to stamp receipt time instead.
+# Omit timestamp_field to stamp receipt time.
 timestamp_field = "observed_at"
-timestamp_format = "rfc3339"        # rfc3339 | epoch-millis | epoch-seconds
-
-# WGS-84 position (a location is emitted only when both lat and lon are present).
+# rfc3339, epoch-millis or epoch-seconds.
+timestamp_format = "rfc3339"
+# A location is emitted only when both lat and lon are present.
 lat_field = "latitude"
 lon_field = "longitude"
-alt_field = "altitude_m"            # optional
+# Optional, metres.
+alt_field = "altitude_m"
 
-# Governed attributes: source field = ajar attribute key (ontology-validated).
+# Record field = Ajar attribute key.
 [mapping.attributes]
 heading = "heading"
 speed = "speed"
 
-# Ungoverned passthrough: source field = metadata key. Native identifiers go here
-# (never the event id — that is always a fresh UUIDv7).
+# Record field = metadata key; native identifiers go here.
 [mapping.metadata]
 sensor_id = "sensor_id"
 
-# --- CSV variant (delete the JSON one above and use this instead) ---
+# CSV variant, replacing the [mapping] above:
 # [mapping]
 # format = "csv"
 # delimiter = ","

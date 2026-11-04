@@ -18,6 +18,13 @@ echo '{"lat":26.4,"lon":50.9,"alt_m":11000,"quality":0.9}' \
 You just built and signed a canonical Ajar event. To make it yours, edit the one
 function marked `EDIT` in [examples/connector_template.py](examples/connector_template.py).
 
+To run it for real, with a key from `scripts/gen-connector-key.sh`:
+
+```bash
+AJAR_SIGNING_SEED=connector.seed AJAR_SOURCE_ID=acme-radar-1 \
+NATS_URL=nats://nats.example:4222 PYTHONPATH=. python examples/connector_template.py
+```
+
 ## Use it in code
 
 ```python
@@ -48,6 +55,12 @@ pip install -e ".[examples]"                        # adds nats-py
 PYTHONPATH=. python examples/synthetic_radar.py      # publish to a local Core
 PYTHONPATH=. python examples/synthetic_radar.py --dry-run --ticks 3   # no infra
 ```
+
+Both examples read `NATS_URL`, `AJAR_SOURCE_ID`, `AJAR_INGEST_PREFIX` and
+`AJAR_SIGNING_SEED`. The template also reads `AJAR_TLS_CA`, `AJAR_TLS_CERT`,
+`AJAR_TLS_KEY` for mutual TLS and `AJAR_HEALTH_ADDR` for `/healthz` and `/metrics`.
+With `AJAR_SIGNING_SEED` unset, the radar mints a throwaway key for that run, so a
+registry that has never seen the key refuses its events.
 
 See the full [onboarding guide](../ONBOARDING.md) for data flow, deployment
 topology, key generation, and troubleshooting.

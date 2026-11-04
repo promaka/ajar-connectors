@@ -2,7 +2,7 @@
 [package]
 name = "ajar-up"
 description = "One command from an operator's vendor packet to flowing events: verify the packet, place the credentials, write the config, preflight, run."
-version = "0.6.6"
+version = "0.6.7"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -15,10 +15,9 @@ name = "ajar-up"
 path = "src/main.rs"
 
 [features]
-# The doctor preflight covers serial devices; same default as the tarball.
+# The embedded doctor preflights every transport a packet can name.
 default = ["serial", "dds"]
 serial = ["ajar-doctor/serial"]
-# The embedded doctor must preflight every transport a packet can name.
 dds = ["ajar-doctor/dds"]
 
 [dependencies]
@@ -34,14 +33,14 @@ toml.workspace = true
 anyhow.workspace = true
 hex.workspace = true
 ed25519-dalek.workspace = true
-prost = "0.14"
+prost.workspace = true
 # Reads the operator's packet: a tar of manifest + signature + files.
 tar = "0.4"
 # Verifies the per-file checksums the manifest pins.
-sha2 = "0.11"
+sha2.workspace = true
 
 [dev-dependencies]
-tracing-subscriber.workspace = true
+tempfile.workspace = true
 
 # See CONTRIBUTING.md, "Releases".
 [package.metadata.ajar]

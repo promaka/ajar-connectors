@@ -9,6 +9,16 @@ CONTRIBUTING.md, "Releases").
 
 ## [Unreleased]
 
+## [0.6.7] - 2026-11-02
+
+### Changed
+
+- Code and documentation clean-up: source comments trimmed, the README rewritten as
+  the single user-facing document. Some log lines and error messages are reworded.
+  Emitted entity types, attributes and config keys are unchanged.
+- The generator no longer checks its MAVLink encoder at startup; the same reference
+  frame is checked by its unit test.
+
 ## [0.6.6] - 2026-10-27
 
 ### Changed

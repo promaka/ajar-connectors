@@ -1,91 +1,109 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # ajar-tak-egress
 
-The **info-egress** relay: governed CoT from Ajar Core out to a **TAK Server**,
-so TAK users see the governed common operating picture on their existing kit.
+Egress relay from Ajar Core to TAK. It subscribes to the governed CoT that Core
+publishes on NATS and writes each message, byte for byte, to a TAK Server's
+streaming input or to ATAK's mesh multicast group. TAK users see the governed
+picture on their existing kit. Core has already verified, filtered and rendered
+the CoT before it reaches the subject, so the relay does not parse, sign, alter
+or filter it.
 
-This is the mirror image of the ingress connectors — and deliberately dumber.
+## Input
 
-## Model
+NATS subject `egress_subject`, default `ajar.egress.cot.*` (`*` is the
+per-source token). Every message on the subject is accepted and relayed; the
+relay does not check that the payload is CoT.
 
-```
-Core ──governed CoT──▶ NATS  ajar.egress.cot.*  ──▶ ajar-tak-egress ──TLS──▶ TAK Server :8089 ──▶ ATAK/WinTAK
-      (verified, policy-       (mTLS subscribe)        verbatim relay          (client cert
-       filtered, rendered)                             no parse, no sign        enrolled)
-```
+The NATS connection uses the `AJAR_TLS_CA`, `AJAR_TLS_CERT` and `AJAR_TLS_KEY`
+environment. The operator gives this identity subscribe-only rights on the
+egress subject, with no publish rights.
 
-**Pure transport.** Core has already done all governance — signature
-verification, policy, ontology, any anonymization — *before* publishing to the
-egress subject. This relay does **not** sign, parse, alter, filter, or "improve"
-the CoT: each NATS payload is written to the TAK stream **byte-verbatim**. That
-verbatim rule is what preserves the governed guarantee end-to-end; any
-transformation belongs in Core, never here.
+## Output
 
-TAK's streaming input parses concatenated CoT XML event-by-event (TAK Protocol
-v0). Optional protobuf-v1 negotiation is a possible later addition.
+The NATS payload, unchanged, to one of two targets chosen by `tak.url`:
 
-## Identity — two certificates (onboarding)
+| `tak.url` | Delivery |
+|-----------|----------|
+| `tls://host:port` | mutual TLS to a TAK Server's streaming input (standard port 8089). Events are written back to back on one stream, which TAK parses as concatenated CoT XML (TAK Protocol v0). |
+| `udp://ip:port` | one datagram per event. `udp://239.2.3.1:6969` is ATAK's mesh SA group, read by every ATAK, WinTAK and iTAK on the network with no server. A unicast address also works. |
+
+The relay holds two certificates:
 
 | Certificate | Issued by | Grants |
 |---|---|---|
-| `AJAR_TLS_CA/CERT/KEY` env | the Ajar operator's PKI | mTLS to Ajar NATS; the NATS authz for this CN is **subscribe-only** on `ajar.egress.cot.*` (the outbound analogue of ingest onboarding — an "egress-reader" entry, no publish rights) |
-| `[tak] tls_cert/tls_key` | the TAK Server's enrollment | client authentication on the TAK Server streaming input |
+| `AJAR_TLS_*` env | the Ajar operator's PKI | subscribe-only mTLS to Ajar NATS |
+| `[tak] tls_cert`, `tls_key` | the TAK Server's enrolment | client authentication on the TAK Server's streaming input |
 
-## No TAK Server: ATAK's mesh
+## Configuration
 
-With no TAK Server, point the relay at ATAK's mesh SA multicast group instead:
+Start from [`tak-egress.example.toml`](tak-egress.example.toml). The relay has
+its own config shape, with no signing key or transport table.
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `nats_url` | required | Ajar NATS, `tls://` in production |
+| `egress_subject` | `ajar.egress.cot.*` | subject to subscribe |
+| `[tak] url` | required | `tls://host:port` or `udp://ip:port` |
+| `[tak] tls_ca` | none | CA that signed the TAK Server certificate; required for `tls://` |
+| `[tak] tls_cert`, `tls_key` | none | the relay's enrolled client certificate and key, PEM; required for `tls://` |
+| `[tak] server_name` | host in `url` | name verified on the server certificate (SNI) |
+| `[tak] interface` | default route | multicast only: IPv4 address of the interface the TAK clients share |
+| `[tak] multicast_ttl` | `1` | multicast only: hop limit; 1 keeps the datagrams on the local network |
+| `[tak] buffer_max` | `1000` | events held while TAK is unreachable; must be at least 1 |
+
+For ATAK's mesh with no TAK Server:
 
 ```toml
 [tak]
 url = "udp://239.2.3.1:6969"
-# interface = "192.168.1.20"   # the interface the TAK clients share
+# interface = "192.168.1.20"
 ```
 
-Every ATAK, WinTAK or iTAK on the same network then shows the governed
-picture directly, one CoT event per datagram, with no server, enrolment or
-certificates. The relay rules are unchanged: the bytes are Core's, verbatim.
-Multicast stays on the local network (`multicast_ttl = 1`); ATAK's mesh mode
-must be on, which it is by default. Use this for a demonstration, a vehicle,
-or a field team on one hotspot; a TAK Server remains the way to reach clients
-across networks and to control who may join.
+No certificates are needed, and ATAK's mesh mode is on by default. A TAK
+Server is still the way to reach clients across networks and to control who
+may join.
 
-## Configure & run
+## Behaviour
 
-Copy [`tak-egress.example.toml`](tak-egress.example.toml).
+- The TAK Server connection is made on the first send, so startup never waits
+  for TAK. A connect attempt times out after 5 s.
+- A connect or write error drops the stream. The event stays queued and the
+  next send reconnects, so an event whose write failed is sent again on the new
+  connection.
+- While TAK is unreachable, events queue in memory, up to `buffer_max`. At the
+  cap the oldest event is dropped and `egress_gap_dropped_total` increments. A
+  queued buffer retries once a second, or on the next NATS message. Nothing is
+  kept across a restart.
+- The NATS client reconnects by itself.
+- On SIGTERM or SIGINT the relay drains the queue for up to 2 s, then exits.
+
+Metrics, on `/metrics` when `AJAR_HEALTH_ADDR` is set (`/healthz` answers `ok`):
+
+| Metric | Meaning |
+|--------|---------|
+| `egress_delivered_total` | events written to TAK |
+| `egress_gap_dropped_total` | events dropped at the buffer cap |
+| `egress_tak_reconnects_total` | successful TAK Server connects, the first included |
+| `egress_tak_link_up` | 1 while the TAK link is up; always 1 for `udp://` |
+
+## Limits
+
+- TAK Protocol v0 (XML) only. Protobuf v1 negotiation is not implemented.
+- No durable queue: an outage longer than `buffer_max` events leaves a gap.
+- A write into a connection the server has just closed can succeed at the TCP
+  level. That event is lost, though it is counted as delivered.
+
+## Run
 
 ```bash
 export AJAR_TLS_CA=/etc/ajar/ca.pem AJAR_TLS_CERT=/etc/ajar/egress-reader.crt AJAR_TLS_KEY=/etc/ajar/egress-reader.key
-export AJAR_HEALTH_ADDR=0.0.0.0:9090   # optional: /healthz and /metrics
+export AJAR_HEALTH_ADDR=0.0.0.0:9090
 ajar-tak-egress /etc/ajar/tak-egress.toml
 ```
 
-## Resilience
-
-- **Ajar side**: async-nats reconnects by itself (same as every connector).
-- **TAK side**: reconnect with pacing on any drop; connects lazily so startup
-  never blocks on the TAK Server. Mesh multicast has no connection to lose.
-- **TAK down**: events queue in a bounded in-memory buffer (`buffer_max`). On
-  overflow the **oldest** event is dropped — the freshest picture wins — and the
-  gap metric increments. Bounded and lossy **by design** for a live map feed;
-  a durable never-gap egress is a deliberate non-goal here (revisit if a feed
-  must never gap).
-
-## Metrics (`AJAR_HEALTH_ADDR`)
-
-`egress_delivered_total` · `egress_gap_dropped_total` ·
-`egress_tak_reconnects_total` · `egress_tak_link_up` (1/0 gauge)
-
 ## Tests
 
-`cargo test` runs against a real mutual-TLS CoT sink minted in-test (throwaway
-CA/server/client certs): byte-identical delivery, and same-link reconnection
-across forced mid-stream drops. The full NATS-in-the-loop test is env-gated —
-set `AJAR_TEST_NATS_URL` to run it against a live broker.
-
-## Out of scope (deliberately)
-
-No CoT parsing or rewriting, no signing, no anonymization, no effector-cue path.
-The effector cue delivery (ADR-0024) will later reuse this transport — an
-authorized signed CoT tasking message routed down the same TLS stream — which is
-why the TAK send path is a reusable [`TakLink`](src/tak.rs), not code inlined in
-the subscribe loop.
+`cargo test -p ajar-tak-egress` runs against a mutual-TLS CoT sink with
+throwaway certificates minted in the test: byte-identical delivery, and
+reconnection after the sink drops. The NATS-to-TAK test runs only when
+`AJAR_TEST_NATS_URL` points at a live broker.

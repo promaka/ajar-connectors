@@ -1,14 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
-//! REST-poll transport — GET an HTTP endpoint on an interval, each response body a
-//! frame. For pull-only REST/JSON APIs. Requires the `rest-poll` feature. The
-//! response must fit the runtime's frame buffer; larger/paginated APIs want a
-//! purpose-built connector.
+//! REST-poll transport: GET a URL on an interval; each response body is one
+//! frame, and must fit the runtime's frame buffer.
 
 use std::time::Duration;
 
+use anyhow::Context;
+
 use crate::runtime::FrameSource;
 
-/// Polls an HTTP endpoint, yielding each response body as a frame.
 pub struct RestPollSource {
     client: reqwest::Client,
     url: String,
@@ -21,7 +20,6 @@ pub struct RestPollSource {
 impl FrameSource for RestPollSource {
     async fn recv(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         loop {
-            // Space out polls; the first fires immediately.
             if self.first {
                 self.first = false;
             } else {
@@ -58,7 +56,7 @@ impl FrameSource for RestPollSource {
     }
 }
 
-/// Build a REST-poll source.
+/// Build a REST-poll source. The first poll fires on the first read.
 pub fn open(
     url: &str,
     interval_secs: u64,
@@ -67,7 +65,7 @@ pub fn open(
     Ok(RestPollSource {
         client: reqwest::Client::builder()
             .build()
-            .map_err(|e| anyhow::anyhow!("building HTTP client: {e}"))?,
+            .context("building HTTP client")?,
         url: url.to_string(),
         interval: Duration::from_secs(interval_secs.max(1)),
         auth_header: auth_header.map(str::to_string),

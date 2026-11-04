@@ -13,17 +13,12 @@ import (
 // or they were altered afterwards.
 var ErrUnverified = errors.New("signature did not verify under the given key")
 
-// Verify checks a sealed envelope and returns the canonical bytes it carries.
-//
-// The envelope is direction-agnostic, so this is both halves of the trust
-// model in one call. Ingress: pass a producer's registered public key and prove
-// origin. Egress: pass Core's egress key from the handover pack and prove the
-// event passed governance unaltered. Decode the returned bytes with the
-// generated Event type.
-//
-// The returned slice aliases sealed — no copy, no allocation, no lock. One
-// Ed25519 check per call; verification of distinct events is embarrassingly
-// parallel.
+// Verify checks a sealed envelope and returns the canonical bytes it carries,
+// to decode with the generated Event type. On ingress, pass a producer's
+// registered public key to prove origin; on egress, Core's egress key from the
+// handover pack to prove the event passed governance unaltered. A holder of the
+// key can establish this without the connector, the broker or Ajar Core being
+// present or trusted. The returned slice aliases sealed.
 func Verify(sealed []byte, verifyingKey ed25519.PublicKey) ([]byte, error) {
 	if len(sealed) < SealSignatureLen {
 		return nil, fmt.Errorf("sealed envelope is %d bytes, shorter than the %d-byte signature",

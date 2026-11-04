@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
-// Package cot is a reference connector: Cursor-on-Target (CoT) XML <-> canonical
-// Ajar event. It is a teaching example, not a production CoT stack — the XML
-// handling is deliberately minimal (no XML dependency) so the data flow stays
-// readable. It mirrors the Rust cot-connector, including the
-// canonical -> CoT -> canonical round-trip test.
+// Package cot is a teaching example between Cursor-on-Target (CoT) XML and
+// canonical Ajar events. Its XML handling is minimal and has no XML dependency.
+// It is not a production CoT stack; for production CoT ingest, use
+// rust/connectors/tak-cot.
+// It mirrors the Rust cot-connector, including the canonical -> CoT -> canonical
+// round-trip test.
 package cot
 
 import (

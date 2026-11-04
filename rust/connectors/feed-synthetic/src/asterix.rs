@@ -1,34 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Radar: ASTERIX blocks on the surveillance multicast group, what the
-//! `asterix` connector reads.
-//!
-//! Three categories, which is what a radar head actually puts on the wire:
-//!
-//! - CAT062, a system track, for the airliner. Identity (ICAO address and
-//!   callsign), position, velocity, flight level and rate of climb: the
-//!   processed picture, after the radar's own tracker has done its work.
-//! - CAT010, a surface plot, for the vessel. Position and nothing else: a plot
-//!   is a return, not an identification. This is the half of the pair that AIS
-//!   completes, and the connector emits it as an untyped object in the domain
-//!   the operator states, never as a vessel it cannot know it is.
-//! - CAT034, the radar's own status and north marker: alive, turning this fast,
-//!   from here, watching this window. The connector promotes the rotation
-//!   period and the window into the contract's sensor attributes.
-//!
-//! Field encodings follow the record layouts in the connector's own decoder:
-//! range in metres, angles in 360/65536 of a degree, WGS-84 in 180/2^25 of a
-//! degree for tracks and 180/2^23 for the sensor position, velocity in
-//! quarter-metres per second, flight level in quarter-hundreds of feet, time
-//! of day in 1/128 s.
-//!
-//! CAT034 and CAT010 travel in one datagram, as they do from a real radar head:
-//! a service block leading the target blocks is the standard shape, and a
-//! decoder that only read the first block would silently drop the targets
-//! behind it.
-//!
-//! This CAT010 record carries no time of day, so the connector stamps the
-//! plot with its own clock; the CAT062 track carries the radar's observation
-//! time. The two clocks therefore diverge on the aircraft and not on the plot.
+//! Radar: ASTERIX on the surveillance multicast group, read by the `asterix`
+//! connector. A CAT062 system track for the airliner, a CAT010 surface plot
+//! for the vessel with no identity, and a CAT034 north marker, which shares a
+//! datagram with the plot as from a real radar head. The CAT010 record has no
+//! time of day.
 
 use std::time::SystemTime;
 
@@ -43,9 +18,8 @@ const ANGLE_16: f64 = 360.0 / 65_536.0;
 /// CAT034 message type 1: north marker.
 const NORTH_MARKER: u8 = 1;
 
-/// The field specification bitmap: which data items follow, in UAP order.
-/// Every octet but the last carries the extension bit, which is what lets a
-/// record grow.
+/// The field specification: which data items follow, in UAP order, with the
+/// extension bit on every octet but the last.
 fn fspec(frns: &[u8]) -> Vec<u8> {
     let max = *frns.iter().max().expect("at least one item") as usize;
     let octets = max.div_ceil(7);
@@ -60,10 +34,11 @@ fn fspec(frns: &[u8]) -> Vec<u8> {
     f
 }
 
-/// One ASTERIX block: category, total length including the three header bytes.
+/// One ASTERIX block: category, total length including the header, record.
 fn block(cat: u8, record: &[u8]) -> Vec<u8> {
     let len = (3 + record.len()) as u16;
-    let mut out = vec![cat];
+    let mut out = Vec::with_capacity(3 + record.len());
+    out.push(cat);
     out.extend_from_slice(&len.to_be_bytes());
     out.extend_from_slice(record);
     out
@@ -96,8 +71,7 @@ fn i24(v: i64) -> [u8; 3] {
     [(u >> 16) as u8, (u >> 8) as u8, u as u8]
 }
 
-/// CAT062: a system track for the aircraft, the radar's processed answer,
-/// with identity.
+/// CAT062: a system track for the aircraft, with identity.
 pub fn cat062_track(a: &AircraftState, observed: SystemTime) -> Vec<u8> {
     let mut r = fspec(&[1, 4, 5, 7, 9, 11, 12, 17, 20]);
     r.extend_from_slice(&[RADAR_SAC, RADAR_SIC]); // 010
@@ -118,11 +92,8 @@ pub fn cat062_track(a: &AircraftState, observed: SystemTime) -> Vec<u8> {
     block(62, &r)
 }
 
-/// CAT010: a surface plot for the vessel, polar position from the radar head,
-/// no identity. Range in metres and bearing in 360/65536 of a degree, which
-/// the connector geolocates against the site in its `[sensor]` block. That is
-/// the real division of labour: the radar reports what it measured, the
-/// operator states where the radar is.
+/// CAT010: a surface plot for the vessel in polar coordinates from the radar
+/// head, which the connector geolocates against its `[sensor]` block.
 pub fn cat010_plot(v: &VesselState) -> Vec<u8> {
     let (bearing, range_m) = bearing_range(RADAR, v.fix);
     let mut r = fspec(&[1, 2, 6]);
@@ -133,16 +104,15 @@ pub fn cat010_plot(v: &VesselState) -> Vec<u8> {
     block(10, &r)
 }
 
-/// CAT034: the radar's north marker. Alive, turning this fast, from here,
-/// watching this window.
+/// CAT034: the radar's north marker, with rotation period, polar window and
+/// site position.
 pub fn cat034_heartbeat(observed: SystemTime) -> Vec<u8> {
     let mut r = fspec(&[1, 2, 3, 5, 9, 11]);
     r.extend_from_slice(&[RADAR_SAC, RADAR_SIC]); // 010
     r.push(NORTH_MARKER); // 000
     r.extend_from_slice(&tod(observed)); // 030
     r.extend_from_slice(&((RADAR_SCAN_PERIOD_S * 128.0) as u16).to_be_bytes()); // 041, 1/128 s
-                                                                                // 100 generic polar window: range start and end in 1/256 NM, azimuth start
-                                                                                // and end in 360/65536 deg.
+                                                                                // 100 generic polar window: range in 1/256 NM, azimuth in 360/65536 deg.
     let (r0, r1, a0, a1) = RADAR_WINDOW;
     r.extend_from_slice(&((r0 * 256.0) as u16).to_be_bytes());
     r.extend_from_slice(&((r1 * 256.0) as u16).to_be_bytes());
@@ -155,8 +125,8 @@ pub fn cat034_heartbeat(observed: SystemTime) -> Vec<u8> {
     block(34, &r)
 }
 
-/// The two datagrams one rotation produces: the service block leading the
-/// surface plot, then the system track.
+/// One rotation: the service block leading the surface plot, then the system
+/// track.
 pub fn rotation(v: &VesselState, a: &AircraftState, observed: SystemTime) -> [Vec<u8>; 2] {
     let mut first = cat034_heartbeat(observed);
     first.extend_from_slice(&cat010_plot(v));
@@ -165,11 +135,13 @@ pub fn rotation(v: &VesselState, a: &AircraftState, observed: SystemTime) -> [Ve
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::*;
-    use crate::scenario::{Vessel, RADAR_WINDOW};
+    use crate::fixtures::{attr, num, observed, EVENT_TIME};
+    use crate::scenario::{Fix, Vessel};
     use ajar_asterix::{AsterixParser, Sensor};
     use ajar_connector_common::Enrichment;
-    use std::collections::HashMap;
 
     fn decoder() -> AsterixParser {
         let mut map = HashMap::new();
@@ -184,30 +156,26 @@ mod tests {
             .expect("SURFACE is in the ontology's vocabulary")
     }
 
-    fn attr(ev: &ajar_connector::Event, k: &str) -> Option<String> {
-        ev.attributes
-            .iter()
-            .find(|a| a.key == k)
-            .map(|a| a.value.clone())
-    }
-
     #[test]
-    fn the_system_track_decodes_to_the_identified_airliner() {
+    fn system_track_decodes_to_airliner() {
         let a = Aircraft::at(20.0);
-        let now = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_780_000_000);
         let d = decoder();
-        let targets = d.parse_block(&cat062_track(&a, now)).expect("valid block");
+        let mut targets = d
+            .parse_block(&cat062_track(&a, observed()))
+            .expect("valid block");
         assert_eq!(targets.len(), 1);
-        let t = &targets[0];
+        let t = targets.remove(0);
         assert_eq!(t.icao, Some(0x4CA2D6));
         assert_eq!(t.callsign.as_deref(), Some("BAW117"));
         assert_eq!(t.track, Some(4095));
         assert_eq!(t.squawk.as_deref(), Some("1234"));
-        // 20:26:40 UTC as the radar's time of day.
-        assert!((t.time_of_day.unwrap() - 73_600.0).abs() < 0.01);
-        let ev = d.to_event_at(t, "2026-06-10T08:00:00Z").unwrap();
+        assert!(
+            (t.time_of_day_s.unwrap() - 73_600.0).abs() < 0.01,
+            "20:26:40 UTC as time of day"
+        );
+        let ev = d.to_event_at(t, EVENT_TIME).unwrap();
         assert_eq!(ev.entity_type, "mim:aircraft");
-        let loc = ev.location.unwrap();
+        let loc = ev.location.as_ref().unwrap();
         assert!((loc.latitude - a.fix.lat).abs() < 1e-5);
         assert!((loc.longitude - a.fix.lon).abs() < 1e-5);
         assert!(
@@ -217,32 +185,31 @@ mod tests {
         );
         assert_eq!(attr(&ev, "alt_id").as_deref(), Some("4CA2D6"));
         assert_eq!(attr(&ev, "alt_id_standard").as_deref(), Some("ICAO24"));
-        let speed: f64 = attr(&ev, "speed").unwrap().parse().unwrap();
+        let speed = num(&ev, "speed");
         assert!((speed - Aircraft::SPEED_MPS).abs() < 0.3, "{speed}");
-        let course: f64 = attr(&ev, "course").unwrap().parse().unwrap();
+        let course = num(&ev, "course");
         assert!((course - Aircraft::COURSE_DEG).abs() < 0.2, "{course}");
-        let vr: f64 = attr(&ev, "vertical_rate").unwrap().parse().unwrap();
+        let vr = num(&ev, "vertical_rate");
         assert!((vr - Aircraft::VERTICAL_RATE_MPS).abs() < 0.06, "{vr}");
     }
 
     #[test]
-    fn the_surface_plot_geolocates_onto_the_vessel_and_claims_no_identity() {
+    fn surface_plot_geolocates_onto_vessel() {
         let v = Vessel::at(20.0);
         let d = decoder();
-        let targets = d.parse_block(&cat010_plot(&v)).unwrap();
-        let t = &targets[0];
-        let ev = d.to_event_at(t, "2026-06-10T08:00:00Z").unwrap();
-        // A return is a domain, not an identification.
-        assert_eq!(ev.entity_type, "mim:object");
+        let mut targets = d.parse_block(&cat010_plot(&v)).unwrap();
+        let ev = d.to_event_at(targets.remove(0), EVENT_TIME).unwrap();
+        assert_eq!(
+            ev.entity_type, "mim:object",
+            "a plot is not an identification"
+        );
         assert_eq!(attr(&ev, "environment").as_deref(), Some("SURFACE"));
         assert!(attr(&ev, "callsign").is_none());
         assert!(attr(&ev, "alt_id").is_none());
-        // Within the metre the range field can carry, and within the angular
-        // resolution at this range: the plot lands on the ship.
         let loc = ev.location.unwrap();
         let (_, err_m) = bearing_range(
             v.fix,
-            crate::scenario::Fix {
+            Fix {
                 lat: loc.latitude,
                 lon: loc.longitude,
             },
@@ -251,12 +218,13 @@ mod tests {
     }
 
     #[test]
-    fn the_north_marker_becomes_a_sensor_event_with_the_revision_4_footprint() {
-        let now = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_780_000_000);
+    fn north_marker_becomes_sensor_event() {
         let d = decoder();
-        let reports = d.parse_service_block(&cat034_heartbeat(now)).unwrap();
+        let mut reports = d
+            .parse_service_block(&cat034_heartbeat(observed()))
+            .unwrap();
         assert_eq!(reports.len(), 1);
-        let r = &reports[0];
+        let r = reports.remove(0);
         assert_eq!((r.sac, r.sic), (RADAR_SAC, RADAR_SIC));
         assert_eq!(r.message_type, NORTH_MARKER);
         assert!((r.rotation_period_s.unwrap() - RADAR_SCAN_PERIOD_S).abs() < 0.01);
@@ -264,23 +232,21 @@ mod tests {
         assert!((lat - RADAR.lat).abs() < 1e-4);
         assert!((lon - RADAR.lon).abs() < 1e-4);
         assert!((alt - RADAR_ALT_M).abs() < 0.5);
-        let ev = d.service_event_at(r, "2026-06-10T08:00:00Z").unwrap();
+        let ev = d.service_event_at(r, EVENT_TIME).unwrap();
         assert_eq!(ev.entity_type, "mim:sensor");
         assert_eq!(attr(&ev, "scan_period_s").as_deref(), Some("2.500"));
         assert_eq!(attr(&ev, "update_interval_s").as_deref(), Some("2.500"));
         let (_, r1, a0, a1) = RADAR_WINDOW;
-        let f = |k: &str| attr(&ev, k).unwrap().parse::<f64>().unwrap();
-        assert!((f("coverage_bearing_start_deg") - a0).abs() < 0.01);
-        assert!((f("coverage_bearing_end_deg") - a1).abs() < 0.01);
-        assert!((f("detection_range_m") - r1 * 1852.0).abs() < 1.0);
+        assert!((num(&ev, "coverage_bearing_start_deg") - a0).abs() < 0.01);
+        assert!((num(&ev, "coverage_bearing_end_deg") - a1).abs() < 0.01);
+        assert!((num(&ev, "detection_range_m") - r1 * 1852.0).abs() < 1.0);
         assert_eq!(attr(&ev, "alt_id").as_deref(), Some("25:10"));
         assert_eq!(attr(&ev, "alt_id_standard").as_deref(), Some("ASTERIX"));
     }
 
     #[test]
-    fn a_rotation_is_two_datagrams_and_the_service_block_does_not_hide_the_plot() {
-        let now = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_780_000_000);
-        let [first, second] = rotation(&Vessel::at(0.0), &Aircraft::at(0.0), now);
+    fn service_block_does_not_hide_plot() {
+        let [first, second] = rotation(&Vessel::at(0.0), &Aircraft::at(0.0), observed());
         let d = decoder();
         let (targets, reports) = d.parse_datagram(&first).unwrap();
         assert_eq!(reports.len(), 1, "the heartbeat");
@@ -290,10 +256,8 @@ mod tests {
     }
 
     #[test]
-    fn fspec_sets_the_extension_bit_on_every_octet_but_the_last() {
+    fn fspec_extension_bit_on_all_but_last() {
         assert_eq!(fspec(&[1, 2, 6]), vec![0xC4]);
-        // FRN 9, 11 and 12 in the second octet plus its extension bit; FRN 17
-        // and 20 in the third, which is last and so has none.
         assert_eq!(
             fspec(&[1, 4, 5, 7, 9, 11, 12, 17, 20]),
             vec![0x9B, 0x59, 0x24]

@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
-# connector-template — copy me
+# connector-template: copy me
 
-The minimal starting point for a new Ajar connector. **Two edits and you're done.**
+The minimal starting point for a new Ajar connector. Two edits and you're done.
 
 ## Try it in 10 seconds (no key, no NATS, no feed)
 
@@ -14,18 +14,18 @@ echo '{"lat":26.4,"lon":50.9,"alt_m":11000,"quality":0.9}' \
 
 You just built, signed, and (dry-run) "sent" a canonical Ajar event.
 
-## Make it yours — the whole job
+## Make it yours
 
 Open [src/main.rs](src/main.rs) and edit the two clearly-marked blocks:
 
-1. **`EDIT 1`** — describe one record from your feed (the struct fields).
-2. **`EDIT 2`** — map that record into an `Event` (position, time, type…).
+1. `EDIT 1`: describe one record from your feed (the struct fields).
+2. `EDIT 2`: map that record into an `Event` (position, time, type…).
 
 That's ~15 lines. Everything below the line in the file (connect, sign, publish,
 key loading) you leave alone.
 
 If your feed isn't newline-JSON, swap the one stdin reader for your TCP socket /
-file / API / serial port — the rest is unchanged.
+file / API / serial port. The rest is unchanged.
 
 ## Run it for real
 
@@ -46,6 +46,12 @@ cargo run -p connector-template
 | `AJAR_SOURCE_ID` | the id Ajar assigned you |
 | `NATS_URL` | the endpoint Ajar gave you (`tls://…`, `wss://…:443`, …) |
 | `AJAR_INGEST_PREFIX` | subject prefix (default `ajar.ingest`) |
+| `AJAR_TLS_CA` / `AJAR_TLS_CERT` / `AJAR_TLS_KEY` | paths for mutual TLS to NATS, used when all three are set; the client certificate's CN is your `source_id`. Otherwise the connection is plaintext, for local development only |
+| `AJAR_HEALTH_ADDR` | serve `GET /healthz` and Prometheus `GET /metrics` on this address, e.g. `0.0.0.0:9090`; unset serves neither |
+
+A bad record is logged and skipped. A NATS publish error is logged and the
+connector keeps going; the client retries the first connection and reconnects
+after a drop. `/metrics` counts `published`, `skipped` and `publish_errors`.
 
 See the full [onboarding guide](../../../ONBOARDING.md) for the data flow,
 deployment topology, and troubleshooting.

@@ -1,10 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Connector profile: the self-declaration a connector publishes so Ajar knows
-//! what it is allowed to emit and how to authenticate it.
-//!
-//! The profile is a *declaration*, not policy: Ajar's core decides what to do
-//! with it. The SDK's job is to let an author state it correctly and serialize
-//! it deterministically (the verifying key is emitted as lowercase hex).
+//! Connector profile: what a connector declares it emits and the key Ajar
+//! authenticates it with. Serialized as JSON with the key as lowercase hex.
 
 use ed25519_dalek::VerifyingKey;
 use serde::Serialize;
@@ -12,9 +8,9 @@ use serde::Serialize;
 /// A connector's published profile.
 #[derive(Debug, Clone)]
 pub struct ConnectorProfile {
-    /// Stable source identity this connector signs as.
+    /// Source identity this connector signs as.
     pub source_id: String,
-    /// Entity types this connector is permitted to emit (namespaced).
+    /// Namespaced entity types this connector may emit.
     pub allowed_entity_types: Vec<String>,
     /// Upper bound on `payload` size in bytes.
     pub max_payload_bytes: u64,
@@ -22,11 +18,10 @@ pub struct ConnectorProfile {
     pub rate_capacity: u32,
     /// Token-bucket refill rate, tokens per second.
     pub rate_refill_per_sec: f64,
-    /// Ed25519 public key Ajar uses to verify this connector's sealed events.
+    /// Key Ajar verifies this connector's sealed events with.
     pub verifying_key: VerifyingKey,
 }
 
-/// Serialization view: the verifying key projected to lowercase hex.
 #[derive(Serialize)]
 struct ProfileWire<'a> {
     source_id: &'a str,
@@ -38,7 +33,7 @@ struct ProfileWire<'a> {
 }
 
 impl ConnectorProfile {
-    /// Convenience constructor.
+    /// Profile with no allowed entity types and the default limits.
     pub fn new(source_id: impl Into<String>, verifying_key: VerifyingKey) -> Self {
         Self {
             source_id: source_id.into(),
@@ -62,7 +57,7 @@ impl ConnectorProfile {
         self
     }
 
-    /// Sets the ingest rate-limit bucket (capacity / refill-per-second).
+    /// Sets the ingest token bucket: burst capacity and refill per second.
     pub fn rate_limit(mut self, capacity: u32, refill_per_sec: f64) -> Self {
         self.rate_capacity = capacity;
         self.rate_refill_per_sec = refill_per_sec;

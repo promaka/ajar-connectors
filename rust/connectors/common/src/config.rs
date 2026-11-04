@@ -1,118 +1,110 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Connector configuration. Everything an operator sets is data in a `.toml`
-//! file, so adding equipment to a deployment never needs a rebuild — only a new
-//! config (and a signing key registered with Core).
-//!
-//! The [`Transport`] is orthogonal to the protocol: it only decides *how bytes
-//! arrive*. Any connector runs on any transport by config alone — a CoT parser
-//! can read from UDP multicast in the field or from a tailed log file in a lab,
-//! unchanged.
+//! Connector configuration, loaded from the operator's `.toml`. The
+//! [`Transport`] only decides how bytes arrive; any connector runs on any
+//! transport.
 
+use std::collections::HashMap;
+
+use anyhow::Context;
 use serde::Deserialize;
 
-/// A connector's configuration, shared across every connector.
+use crate::marking::{Marking, MarkingConfig, MarkingError};
+use crate::spool::SpoolConfig;
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
-    /// The connector's Ajar identity. Must match the signing key's registered
-    /// profile; a native feed carries no Ajar identity, so it comes from here.
     pub source_id: String,
-    /// NATS URL Core listens on (`nats://…`, or `tls://…` with the `AJAR_TLS_*`
-    /// env for mTLS). A comma-separated list is a failover set: the connector
-    /// uses one endpoint and moves to the next when it dies — the two-box
-    /// deployment pattern. Any `tls://` entry demands TLS for the connection.
+    /// A comma-separated list is a failover set; any `tls://` entry demands TLS.
     pub nats_url: String,
-    /// Ingest subject prefix; the connector publishes to `<prefix>.<source_id>`.
+    /// The connector publishes to `<subject_prefix>.<source_id>`.
     #[serde(default = "default_subject_prefix")]
     pub subject_prefix: String,
-    /// Path to the connector's 32-byte Ed25519 signing seed (raw bytes, or
-    /// 64-char hex). Kept secret; never shared.
     pub signing_key_path: String,
-    /// How the native feed reaches the connector.
     pub transport: Transport,
-    /// Optional native-type → Ajar-entity overrides. A connector interprets these
-    /// against its own type codes; anything unmapped falls back to the
-    /// connector's default, so nothing is silently dropped.
+    /// Native type to entity type overrides; unmapped types keep the
+    /// connector's default.
     #[serde(default)]
-    pub entity_map: std::collections::HashMap<String, String>,
-    /// Force-identity hostility for feeds that carry none (AIS, MAVLink, civil
-    /// ADS-B). E.g. `"Friend"` for own-force UAS, `"Neutral"` for civil traffic.
-    /// Connectors whose wire format encodes it (CoT, STANAG 4676) derive it and
-    /// ignore this. Unset resolves to `Unknown`.
-    ///
-    /// Values are MIM 5.3 `HostilityCodeType`, and the case is exact: `Friend`,
-    /// `AssumedFriend`, `Hostile`, `AssumedHostile`, `Suspect`, `Neutral`,
-    /// `AssumedNeutral`, `Involved`, `AssumedInvolved`, `Pending`, `Unknown`,
-    /// `Faker`, `Joker`. An unrecognised value is quarantined into metadata by
-    /// Core on a default site (rejected on a strict one), so a lower-case
-    /// `friendly` loses friend/foe colouring on the map.
+    pub entity_map: HashMap<String, String>,
+    /// MIM `HostilityCodeType`, case exact, for feeds that carry none. Unset,
+    /// the connector asserts nothing.
     #[serde(default)]
     pub default_hostility: Option<String>,
-    /// The security marking stamped on every event this connector publishes,
-    /// inside the signature. The operator's assertion about the feed, in the
-    /// same spirit as `default_hostility`; see [`crate::marking`]. Absent, the
-    /// events carry only what the wire format itself says.
     #[serde(default)]
-    pub marking: Option<crate::marking::MarkingConfig>,
-    /// The sensor's own site, for feeds that report positions relative to it
-    /// (ASTERIX CAT048 monoradar reports are range/azimuth from the radar). A
-    /// connector that needs it geolocates against this; without it, the relative
-    /// measurement rides as metadata. Ignored by connectors that carry absolute
-    /// positions.
+    pub marking: Option<MarkingConfig>,
+    /// The sensor's own site, for feeds that report positions relative to it.
     #[serde(default)]
     pub sensor: Option<SensorSite>,
-    /// Optional store-and-forward disk spool for intermittent links: when the
-    /// publish path stalls, sealed events queue in a bounded directory and a
-    /// paced drain replays them when the link returns, byte-identical. Unset
-    /// keeps today's behavior (shed with a counter).
-    ///
-    /// One line enables it with safe defaults:
-    /// `spool = "/var/lib/ajar/spool"`; the full `[spool]` table tunes the
-    /// bound and drain rate.
     #[serde(default)]
     pub spool: Option<SpoolSetting>,
-    /// Connector-specific settings, under `[options]`. The runtime carries the
-    /// table untouched; each connector that reads one documents its keys in
-    /// its README and example config, and refuses a key it does not know.
+    /// Connector-specific settings; each connector deserializes its own keys.
     #[serde(default)]
     pub options: toml::Table,
-    /// The one tolerated extension section: the generic connector reads its
-    /// `[mapping]` block from the same file with its own loader. Named here so
-    /// `deny_unknown_fields` still rejects actual typos everywhere else.
+    /// The generic connector reads `[mapping]` from the same file with its own
+    /// loader. Named here so `deny_unknown_fields` still rejects typos.
     #[serde(default, rename = "mapping")]
     _mapping_extension: Option<toml::Value>,
 }
 
-/// Everything `Transport::Dds` needs. One definition: the runtime, the doctor
-/// and the probe all pass it through unchanged.
-///
-/// The type name must match what the publisher registered, or DDS will not
-/// pair the two. Only the default partition is joined. `payload` says what the
-/// parser is handed: the whole serialized body (`body`, the default), the
-/// contents of a single `sequence<octet>` field (`octets`, for a topic that
-/// carries raw protocol bytes such as ASTERIX blocks), or the text of a single
-/// `string` field (`string`, for a ROS 2 `std_msgs/String` or a JSON line).
+impl Config {
+    /// Load a config file and validate its marking, the one rule the config
+    /// shape cannot express.
+    pub fn load(path: &str) -> anyhow::Result<Self> {
+        let text = std::fs::read_to_string(path).with_context(|| {
+            format!("reading config {path} (start from the connector's *.example.toml)")
+        })?;
+        let cfg: Config = toml::from_str(&text).map_err(|e| {
+            let msg = e.to_string();
+            match did_you_mean(&msg) {
+                Some(hint) => anyhow::anyhow!("parsing config {path}: {msg}\n{hint}"),
+                None => anyhow::anyhow!("parsing config {path}: {msg}"),
+            }
+        })?;
+        cfg.marking()
+            .map_err(|e| anyhow::anyhow!("parsing config {path}: {e}"))?;
+        Ok(cfg)
+    }
+
+    /// The validated marking, if the config declares one. Core ignores a tag it
+    /// does not recognise, so a bad marking is an error here.
+    pub fn marking(&self) -> Result<Option<Marking>, MarkingError> {
+        self.marking.as_ref().map(Marking::from_config).transpose()
+    }
+
+    /// The spool configuration, whichever form the config used.
+    pub fn spool_config(&self) -> Option<SpoolConfig> {
+        match &self.spool {
+            None => None,
+            Some(SpoolSetting::Full(cfg)) => Some(cfg.clone()),
+            Some(SpoolSetting::Dir(dir)) => Some(SpoolConfig::with_dir(dir)),
+        }
+    }
+
+    pub fn enrichment(&self) -> Enrichment {
+        Enrichment {
+            hostility: self.default_hostility.clone(),
+        }
+    }
+}
+
+/// `Transport::Dds` settings, passed unchanged to the runtime, the doctor and
+/// the probe. The type name must match the publisher's, or DDS does not pair
+/// the two. Only the default partition is joined.
 #[cfg(feature = "dds")]
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DdsOptions {
-    /// DDS domain id, 0 to 232 (0 unless the deployment says otherwise).
+    /// 0 to [`crate::dds::MAX_DOMAIN`].
     #[serde(default)]
     pub domain: u16,
-    /// Topic name.
     pub topic: String,
     /// The publisher's registered type name, e.g. `HelloWorldData::Msg`.
     pub type_name: String,
-    /// Reader reliability. `best-effort` pairs with any publisher and is the
-    /// default; `reliable` asks for retransmission and pairs only with
-    /// reliable publishers.
     #[serde(default)]
     pub reliability: DdsReliability,
-    /// What to hand the parser from each sample.
     #[serde(default)]
     pub payload: DdsPayload,
-    /// Use only the network interface holding this IP for discovery and
-    /// data, for dual-NIC boxes where the DDS domain lives on one LAN.
+    /// Join only on the interface holding this IP.
     #[serde(default)]
     pub interface_ip: Option<String>,
 }
@@ -128,7 +120,6 @@ impl std::fmt::Display for DdsOptions {
     }
 }
 
-/// DDS reader reliability, for `Transport::Dds`.
 #[cfg(feature = "dds")]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -136,12 +127,11 @@ pub enum DdsReliability {
     /// Pairs with any publisher; samples lost on the wire are not resent.
     #[default]
     BestEffort,
-    /// Asks the publisher to resend lost samples; pairs only with reliable
-    /// publishers.
+    /// Asks for retransmission; pairs only with reliable publishers.
     Reliable,
 }
 
-/// What a DDS sample hands the parser, for `Transport::Dds`.
+/// What a DDS sample hands the parser.
 #[cfg(feature = "dds")]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -151,23 +141,19 @@ pub enum DdsPayload {
     Body,
     /// The bytes of a single `sequence<octet>` field, without its length prefix.
     Octets,
-    /// The text of a single `string` field, without its length prefix or
-    /// terminating NUL.
+    /// The text of a single `string` field, without its length prefix or NUL.
     String,
 }
 
-/// The `spool` setting: a bare directory string (defaults for everything
-/// else), or the full table for tuning.
+/// `spool = "<dir>"` with defaults, or a full `[spool]` table.
 #[derive(Debug, Clone)]
 pub enum SpoolSetting {
-    /// `spool = "/var/lib/ajar/spool"`
     Dir(String),
-    /// `[spool]` with `dir`, `max_bytes`, `drain_rate`.
-    Full(crate::spool::SpoolConfig),
+    Full(SpoolConfig),
 }
 
-// Hand-rolled so a typo inside [spool] reports the actual unknown field
-// instead of serde's "did not match any variant of untagged enum".
+// Hand-rolled so a typo inside [spool] reports the unknown field instead of
+// serde's "did not match any variant of untagged enum".
 impl<'de> serde::Deserialize<'de> for SpoolSetting {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         struct V;
@@ -185,77 +171,42 @@ impl<'de> serde::Deserialize<'de> for SpoolSetting {
                 self,
                 map: A,
             ) -> Result<SpoolSetting, A::Error> {
-                crate::spool::SpoolConfig::deserialize(
-                    serde::de::value::MapAccessDeserializer::new(map),
-                )
-                .map(SpoolSetting::Full)
+                SpoolConfig::deserialize(serde::de::value::MapAccessDeserializer::new(map))
+                    .map(SpoolSetting::Full)
             }
         }
         d.deserialize_any(V)
     }
 }
 
-impl Config {
-    /// The effective spool configuration, whichever form the config used.
-    pub fn spool_config(&self) -> Option<crate::spool::SpoolConfig> {
-        match &self.spool {
-            None => None,
-            Some(SpoolSetting::Full(cfg)) => Some(cfg.clone()),
-            Some(SpoolSetting::Dir(dir)) => Some(crate::spool::SpoolConfig::with_dir(dir)),
-        }
-    }
-}
-
-/// A sensor's fixed geodetic site (WGS-84), used to geolocate sensor-relative
-/// measurements. See [`Config::sensor`].
+/// A sensor's fixed WGS-84 site, used to geolocate sensor-relative measurements.
 #[derive(Debug, Clone, Copy, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SensorSite {
-    /// Latitude, degrees.
     pub lat: f64,
-    /// Longitude, degrees.
     pub lon: f64,
-    /// Height above the WGS-84 ellipsoid, metres (optional).
+    /// Height above the WGS-84 ellipsoid.
     #[serde(default)]
     pub alt_m: Option<f64>,
 }
 
-/// The enrichment a connector applies, distilled from [`Config`]. Connectors emit
-/// every decoded field as an attribute and Core's signed ontology governs which
-/// are kept, so the only enrichment left is the operator-asserted hostility for
-/// feeds (AIS, MAVLink, civil ADS-B) that carry none of their own.
+/// The enrichment a connector applies: the operator-asserted hostility for
+/// feeds that carry none of their own.
 #[derive(Debug, Clone, Default)]
 pub struct Enrichment {
-    /// Hostility to stamp on feeds that carry none (`None` → not asserted, so the
-    /// connector emits nothing rather than inventing a friend or foe).
+    /// `None`: not asserted, so the connector emits no hostility.
     pub hostility: Option<String>,
 }
 
 impl Enrichment {
-    /// Sets the default hostility (builder-style convenience).
     pub fn with_hostility(mut self, hostility: impl Into<String>) -> Self {
         self.hostility = Some(hostility.into());
         self
     }
 }
 
-impl Config {
-    /// The enrichment settings for a connector built from this config.
-    pub fn enrichment(&self) -> Enrichment {
-        Enrichment {
-            hostility: self.default_hostility.clone(),
-        }
-    }
-}
-
-fn default_replay_speed() -> f64 {
-    1.0
-}
-
-fn default_replay_max_gap_ms() -> u64 {
-    5_000
-}
-
+// serde has no container default for enum variants or for structs with
+// required fields, so these defaults are per field.
 fn default_subject_prefix() -> String {
     "ajar.ingest".to_string()
 }
@@ -264,255 +215,12 @@ fn default_http_path() -> String {
     "/".to_string()
 }
 
-/// How a native feed reaches the connector — the integration *method*, distinct
-/// from the protocol (which is the parsing). Selected by `kind` in the config's
-/// `[transport]` table; each kind names the fields it needs.
-///
-/// ```toml
-/// [transport]
-/// kind = "udp-multicast"
-/// bind = "0.0.0.0:6969"
-/// group = "239.2.3.1"
-/// ```
-///
-/// The feature-gated kinds (`dds`, `serial`, `mqtt`, `rest-poll`, `ws-client`)
-/// require the connector to be built with the matching Cargo feature; every
-/// ingress connector ships `dds` and the serial-capable ones ship `serial`.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
-pub enum Transport {
-    /// UDP multicast — the situational-awareness broadcast default (CoT, ASTERIX).
-    UdpMulticast {
-        /// Local bind, `ip:port`. `0.0.0.0:6969` joins on the kernel's chosen
-        /// interface; naming an IP (e.g. `10.1.1.5:6969`) joins on that NIC.
-        bind: String,
-        /// Multicast group to join (e.g. `239.2.3.1`).
-        group: String,
-        /// Interface IP to join on, for dual-homed boxes where the group must
-        /// be heard on a specific network. Overrides the bind IP's role.
-        #[serde(default)]
-        interface: Option<String>,
-    },
-    /// UDP unicast to a local bind.
-    Udp {
-        /// Local bind, `ip:port`.
-        bind: String,
-    },
-    /// TCP server — listen locally and accept connections from sources that
-    /// *push* their feed to a configured endpoint (the mirror image of
-    /// `tcp-client`; the common legacy "point your output at ip:port" pattern).
-    TcpServer {
-        /// Local listen address, `ip:port` (e.g. `0.0.0.0:9000`).
-        bind: String,
-        /// How each connection's byte stream is split into frames.
-        #[serde(default)]
-        framing: Framing,
-    },
-    /// TCP client — connect out to a feed and read framed messages, reconnecting
-    /// if it drops (AIS aggregators, ship-network NMEA, binary record streams).
-    TcpClient {
-        /// Remote endpoint, `host:port`.
-        connect: String,
-        /// How the byte stream is split into frames (default: one line per frame).
-        #[serde(default)]
-        framing: Framing,
-    },
-    /// Watch a directory for newly-dropped files (SFTP batch exports, scheduled
-    /// dumps); each file is read line-by-line once its size settles.
-    Dir {
-        /// Directory to watch.
-        path: String,
-        /// Also read files already present at startup (default: new drops only).
-        #[serde(default)]
-        process_existing: bool,
-    },
-    /// Tail a file that a source appends to (a log, a spooled capture), yielding
-    /// one line per frame — the ubiquitous "it writes to a file" integration.
-    File {
-        /// Path to the file to follow.
-        path: String,
-        /// Replay existing content before following appends (default: appends only).
-        #[serde(default)]
-        from_start: bool,
-        /// How the file's bytes are split into frames: lines by default, or a
-        /// length prefix for a binary capture such as a SAPIENT recording.
-        #[serde(default)]
-        framing: Framing,
-    },
-    /// Run a command and read its stdout, one line per frame — wraps any CLI tool
-    /// or vendor SDK binary that prints records (`some-vendor-cli --stream`).
-    Exec {
-        /// Program to run.
-        command: String,
-        /// Arguments passed to it.
-        #[serde(default)]
-        args: Vec<String>,
-    },
-    /// Read this process's stdin, one line per frame — pipe from anything
-    /// (`producer | ajar-<connector>`).
-    Stdin {
-        /// How stdin is split into frames: lines by default, or a length prefix
-        /// for a binary stream piped in.
-        #[serde(default)]
-        framing: Framing,
-    },
-    /// HTTP server — accept webhook deliveries from sources that can only *push to
-    /// a URL*: IP cameras and VMS event notifications, SDR republishers, SaaS
-    /// callbacks. Each request body is one frame.
-    ///
-    /// Alone among the transports it can answer the sender, so a saturated
-    /// pipeline refuses the delivery (503) and a well-behaved client retries,
-    /// rather than the event being shed unseen.
-    ///
-    /// ```toml
-    /// [transport]
-    /// kind = "http-server"
-    /// bind = "0.0.0.0:8443"
-    /// path = "/hook"
-    /// token = "shared-secret"
-    /// tls_cert = "/etc/ajar/webhook.crt"
-    /// tls_key = "/etc/ajar/webhook.key"
-    /// # tls_client_ca = "/etc/ajar/senders-ca.crt"   # require client certs
-    /// ```
-    ///
-    /// TLS follows the same fail-closed rule as the NATS connection: a `token`
-    /// without TLS refuses to start, because a shared secret on a plaintext
-    /// listener is on the wire in every delivery.
-    HttpServer {
-        /// Local listen address, `ip:port` (e.g. `0.0.0.0:8443`).
-        bind: String,
-        /// Path a delivery must target (default `/`); anything else gets 404.
-        #[serde(default = "default_http_path")]
-        path: String,
-        /// Shared secret required in the `X-Ajar-Token` header. Requires TLS.
-        /// Prefer `tls_client_ca` where the sender can present a certificate.
-        #[serde(default)]
-        token: Option<String>,
-        /// PEM certificate chain served to senders. Set with `tls_key` to enable
-        /// TLS; leaving both unset serves plaintext (protected segments only).
-        #[serde(default)]
-        tls_cert: Option<String>,
-        /// PEM private key for `tls_cert`.
-        #[serde(default)]
-        tls_key: Option<String>,
-        /// PEM CA bundle senders' client certificates must chain to. Setting it
-        /// turns the listener into mutual TLS, which authenticates the sender by
-        /// certificate rather than by a shared secret.
-        #[serde(default)]
-        tls_client_ca: Option<String>,
-    },
-    /// Replay a recorded capture (classic pcap, Ethernet/IPv4/UDP) with its
-    /// original timing: any connector runs a recording exactly as it would
-    /// have run live. The field-standard way to evaluate against real data.
-    PcapReplay {
-        /// Path to the .pcap (a .pcapng converts with
-        /// `tshark -F pcap -r in.pcapng -w out.pcap`).
-        path: String,
-        /// Time scale: 1.0 = real time, 10 = ten times faster.
-        #[serde(default = "default_replay_speed")]
-        speed: f64,
-        /// Replay forever (demo loop) instead of once.
-        #[serde(default, rename = "loop")]
-        looping: bool,
-        /// Only datagrams to this UDP port (a busy capture carries more than
-        /// the feed).
-        #[serde(default)]
-        port: Option<u16>,
-        /// Longest gap honoured between packets, in milliseconds: a recorder
-        /// left idle must not stall the replay. Default 5000.
-        #[serde(default = "default_replay_max_gap_ms")]
-        max_gap_ms: u64,
-    },
-    /// Serial line (RS-232/422/485) — many sensors emit NMEA or vendor ASCII this
-    /// way. Requires the `serial` feature.
-    #[cfg(feature = "serial")]
-    Serial {
-        /// Device path (e.g. `/dev/ttyUSB0`).
-        device: String,
-        /// Baud rate (e.g. 38400 for AIS, 4800 for GPS NMEA).
-        #[serde(default = "default_baud")]
-        baud: u32,
-    },
-    /// Subscribe to a DDS topic and take each sample's serialized bytes as a
-    /// frame. DDS is the bus inside naval combat systems and under ROS 2, so
-    /// this reaches a ship's CMS and any ROS 2 platform with a config block.
-    /// Requires the `dds` feature; see [`DdsOptions`].
-    ///
-    /// ```toml
-    /// [transport]
-    /// kind = "dds"
-    /// domain = 0
-    /// topic = "RadarTracks"
-    /// type_name = "Tracks::Track"
-    /// ```
-    #[cfg(feature = "dds")]
-    Dds(DdsOptions),
-    /// Subscribe to an MQTT topic — common for IoT and modern sensor buses.
-    /// Requires the `mqtt` feature.
-    #[cfg(feature = "mqtt")]
-    Mqtt {
-        /// Broker, `host:port`.
-        host: String,
-        /// Topic to subscribe (wildcards allowed).
-        topic: String,
-    },
-    /// WebSocket client — connect out to a hosted feed and take each message as a
-    /// frame. Requires the `websocket` feature.
-    ///
-    /// The push counterpart to `rest-poll`, and unlike `http-server` the provider
-    /// does not need to reach you, so it works from behind a firewall with no
-    /// inbound path.
-    ///
-    /// ```toml
-    /// [transport]
-    /// kind = "ws-client"
-    /// url = "wss://feed.example.com/stream"
-    /// subscribe = '{"action":"subscribe","channel":"tracks"}'
-    ///
-    /// [transport.headers]
-    /// Authorization = "Bearer <token>"
-    /// ```
-    #[cfg(feature = "websocket")]
-    WsClient {
-        /// Feed endpoint, `ws://…` or `wss://…`.
-        url: String,
-        /// Message sent after every handshake, including reconnects. Most feeds
-        /// need one; without it you connect and then receive nothing.
-        #[serde(default)]
-        subscribe: Option<String>,
-        /// Extra handshake headers, typically authentication.
-        #[serde(default)]
-        headers: std::collections::HashMap<String, String>,
-    },
-    /// Poll an HTTP endpoint on an interval — for REST/JSON APIs with no push.
-    /// Requires the `rest-poll` feature.
-    #[cfg(feature = "rest-poll")]
-    RestPoll {
-        /// URL to GET.
-        url: String,
-        /// Seconds between polls.
-        #[serde(default = "default_interval")]
-        interval_secs: u64,
-        /// Optional `Authorization` header value (e.g. `Bearer …`).
-        #[serde(default)]
-        auth_header: Option<String>,
-    },
+fn default_replay_speed() -> f64 {
+    1.0
 }
 
-/// How a byte stream (TCP, serial, exec, stdin, file) is split into frames.
-#[derive(Debug, Clone, Copy, Deserialize, Default, PartialEq, Eq)]
-#[serde(rename_all = "kebab-case")]
-pub enum Framing {
-    /// One newline-delimited line per frame (text protocols: NMEA, JSON lines).
-    #[default]
-    Line,
-    /// A 2-byte big-endian length prefix, then that many payload bytes per frame
-    /// (binary record streams).
-    LengthDelimited,
-    /// A 4-byte little-endian length prefix, then that many payload bytes per
-    /// frame: the framing BSI Flex 335 (SAPIENT) puts around each protobuf
-    /// message on a TCP stream.
-    LengthU32le,
+fn default_replay_max_gap_ms() -> u64 {
+    5_000
 }
 
 #[cfg(feature = "serial")]
@@ -525,44 +233,146 @@ fn default_interval() -> u64 {
     30
 }
 
-impl Config {
-    /// Load and validate a config file. Per-transport required fields are enforced
-    /// by the config shape itself (a missing `group` on `udp-multicast` is a parse
-    /// error); the marking block is the one thing with rules the shape cannot
-    /// express, and it is checked here so a bad marking never starts.
-    pub fn load(path: &str) -> anyhow::Result<Self> {
-        let text = std::fs::read_to_string(path).map_err(|e| {
-            anyhow::anyhow!(
-                "reading config {path}: {e}. The example config shipped next to the \
-                 connector (*.example.toml) shows every field; copy it and edit."
-            )
-        })?;
-        let cfg: Config = toml::from_str(&text).map_err(|e| {
-            let msg = e.to_string();
-            match did_you_mean(&msg) {
-                Some(hint) => anyhow::anyhow!("parsing config {path}: {msg}\n{hint}"),
-                None => anyhow::anyhow!("parsing config {path}: {msg}"),
-            }
-        })?;
-        cfg.marking()
-            .map_err(|e| anyhow::anyhow!("parsing config {path}: {e}"))?;
-        Ok(cfg)
-    }
+/// How a native feed reaches the connector, selected by `kind` in the
+/// `[transport]` table. The feature-gated kinds need the matching Cargo feature.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum Transport {
+    UdpMulticast {
+        bind: String,
+        group: String,
+        /// Interface IP to join on; overrides the bind IP.
+        #[serde(default)]
+        interface: Option<String>,
+    },
+    Udp {
+        bind: String,
+    },
+    /// Listen and accept sources that push their feed.
+    TcpServer {
+        bind: String,
+        #[serde(default)]
+        framing: Framing,
+    },
+    /// Connect out to a feed, reconnecting if it drops.
+    TcpClient {
+        connect: String,
+        #[serde(default)]
+        framing: Framing,
+    },
+    /// Read each file dropped into a directory once its size settles.
+    Dir {
+        path: String,
+        /// Also read files present at startup.
+        #[serde(default)]
+        process_existing: bool,
+    },
+    /// Follow a file a source appends to.
+    File {
+        path: String,
+        /// Read existing content before following appends.
+        #[serde(default)]
+        from_start: bool,
+        #[serde(default)]
+        framing: Framing,
+    },
+    /// Run a command and read its stdout, one line per frame.
+    Exec {
+        command: String,
+        #[serde(default)]
+        args: Vec<String>,
+    },
+    Stdin {
+        #[serde(default)]
+        framing: Framing,
+    },
+    /// Accept webhook deliveries; each request body is one frame. A `token`
+    /// without TLS refuses to start.
+    HttpServer {
+        bind: String,
+        /// Path a delivery must target; anything else gets 404.
+        #[serde(default = "default_http_path")]
+        path: String,
+        /// Shared secret required in the `X-Ajar-Token` header.
+        #[serde(default)]
+        token: Option<String>,
+        #[serde(default)]
+        tls_cert: Option<String>,
+        #[serde(default)]
+        tls_key: Option<String>,
+        /// CA bundle client certificates must chain to; enables mutual TLS.
+        #[serde(default)]
+        tls_client_ca: Option<String>,
+    },
+    /// Replay a classic pcap (Ethernet/IPv4/UDP) with its original timing.
+    PcapReplay {
+        path: String,
+        /// Time scale: 1.0 is real time.
+        #[serde(default = "default_replay_speed")]
+        speed: f64,
+        #[serde(default, rename = "loop")]
+        looping: bool,
+        /// Only datagrams to this UDP port.
+        #[serde(default)]
+        port: Option<u16>,
+        /// Longest gap honoured between packets.
+        #[serde(default = "default_replay_max_gap_ms")]
+        max_gap_ms: u64,
+    },
+    #[cfg(feature = "serial")]
+    Serial {
+        device: String,
+        #[serde(default = "default_baud")]
+        baud: u32,
+    },
+    #[cfg(feature = "dds")]
+    Dds(DdsOptions),
+    #[cfg(feature = "mqtt")]
+    Mqtt {
+        /// `host:port`.
+        host: String,
+        /// Wildcards allowed.
+        topic: String,
+    },
+    /// Connect out to a WebSocket feed; each message is one frame.
+    #[cfg(feature = "websocket")]
+    WsClient {
+        url: String,
+        /// Sent after every handshake, including reconnects.
+        #[serde(default)]
+        subscribe: Option<String>,
+        /// Extra handshake headers, typically authentication.
+        #[serde(default)]
+        headers: HashMap<String, String>,
+    },
+    /// GET a URL on an interval; each response body is one frame.
+    #[cfg(feature = "rest-poll")]
+    RestPoll {
+        url: String,
+        #[serde(default = "default_interval")]
+        interval_secs: u64,
+        /// `Authorization` header value.
+        #[serde(default)]
+        auth_header: Option<String>,
+    },
+}
 
-    /// The validated marking, if the config declares one. Core ignores a tag it
-    /// does not recognise, so a mistake here would ship unclassified events in
-    /// silence; it is an error instead.
-    pub fn marking(&self) -> Result<Option<crate::marking::Marking>, crate::marking::MarkingError> {
-        self.marking
-            .as_ref()
-            .map(crate::marking::Marking::from_config)
-            .transpose()
-    }
+/// How a byte stream is split into frames.
+#[derive(Debug, Clone, Copy, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum Framing {
+    /// One newline-delimited line per frame.
+    #[default]
+    Line,
+    /// A 2-byte big-endian length prefix, then the payload.
+    LengthDelimited,
+    /// A 4-byte little-endian length prefix, then the payload: BSI Flex 335
+    /// (SAPIENT) over TCP.
+    LengthU32le,
 }
 
 /// For an unknown-field or unknown-variant parse error, the closest name the
-/// config accepts, as a one-line hint. A typo in a config is the most common
-/// first-hour failure; the list of every valid name is true but not helpful.
+/// config accepts, as a one-line hint.
 fn did_you_mean(msg: &str) -> Option<String> {
     let (what, rest) = msg
         .split_once("unknown field `")
@@ -572,8 +382,8 @@ fn did_you_mean(msg: &str) -> Option<String> {
                 .map(|(_, r)| ("value", r))
         })?;
     let (typo, rest) = rest.split_once('`')?;
-    // A transport kind that exists but was not compiled into this binary is
-    // not a typo, and the nearest name would send the operator the wrong way.
+    // A transport kind left out of this build is not a typo; the nearest name
+    // would point the wrong way.
     if what == "value" {
         if let Some((kind, feature)) = FEATURE_GATED_KINDS.iter().find(|(k, _)| *k == typo) {
             return Some(format!(
@@ -605,7 +415,7 @@ const FEATURE_GATED_KINDS: &[(&str, &str)] = &[
     ("ws-client", "websocket"),
 ];
 
-/// Levenshtein distance, for `did_you_mean`.
+/// Levenshtein distance.
 fn edit_distance(a: &str, b: &str) -> usize {
     let a: Vec<char> = a.chars().collect();
     let b: Vec<char> = b.chars().collect();
@@ -625,35 +435,43 @@ fn edit_distance(a: &str, b: &str) -> usize {
 mod tests {
     use super::*;
 
-    fn write(name: &str, body: &str) -> String {
-        let dir =
-            std::env::temp_dir().join(format!("ajar-config-test-{}-{}", std::process::id(), name));
-        std::fs::create_dir_all(&dir).unwrap();
-        let p = dir.join("c.toml");
-        std::fs::write(&p, body).unwrap();
-        p.to_string_lossy().into_owned()
+    const BASE: &str =
+        "source_id = \"x\"\nnats_url = \"nats://h:4222\"\nsigning_key_path = \"k\"\n\
+                        [transport]\nkind = \"udp\"\nbind = \"0.0.0.0:1\"\n";
+    const STDIN_BASE: &str = "source_id='s'\nnats_url='nats://x:4222'\nsigning_key_path='k'\n\
+                              [transport]\nkind='stdin'\n";
+
+    fn load(body: &str) -> anyhow::Result<Config> {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(file.path(), body).unwrap();
+        Config::load(file.path().to_str().unwrap())
+    }
+
+    fn transport(toml_str: &str) -> Transport {
+        #[derive(Deserialize)]
+        struct W {
+            transport: Transport,
+        }
+        toml::from_str::<W>(toml_str).unwrap().transport
     }
 
     #[test]
-    fn a_typo_in_a_field_name_is_answered_with_the_right_name() {
-        let p = write(
-            "typo-field",
-            "source_id = \"x\"\nnats_ur = \"nats://h:4222\"\nsigning_key_path = \"k\"\n\
-             [transport]\nkind = \"udp\"\nbind = \"0.0.0.0:1\"\n",
-        );
-        let msg = Config::load(&p).unwrap_err().to_string();
+    fn field_typo_suggests_the_right_name() {
+        let msg = load(&BASE.replace("nats_url", "nats_ur"))
+            .unwrap_err()
+            .to_string();
         assert!(msg.contains("unknown field `nats_ur`"), "{msg}");
         assert!(msg.contains("did you mean the field `nats_url`?"), "{msg}");
     }
 
     #[test]
-    fn a_typo_in_a_transport_kind_is_answered_with_the_right_kind() {
-        let p = write(
-            "typo-kind",
+    fn kind_typo_suggests_the_right_kind() {
+        let msg = load(
             "source_id = \"x\"\nnats_url = \"nats://h:4222\"\nsigning_key_path = \"k\"\n\
              [transport]\nkind = \"udp-multicst\"\nbind = \"0.0.0.0:1\"\ngroup = \"239.1.1.1\"\n",
-        );
-        let msg = Config::load(&p).unwrap_err().to_string();
+        )
+        .unwrap_err()
+        .to_string();
         assert!(
             msg.contains("did you mean the value `udp-multicast`?"),
             "{msg}"
@@ -661,49 +479,42 @@ mod tests {
     }
 
     #[test]
-    fn a_marking_block_is_validated_at_load_and_a_bad_one_refuses_to_start() {
-        let base = "source_id = \"x\"\nnats_url = \"nats://h:4222\"\nsigning_key_path = \"k\"\n\
-                    [transport]\nkind = \"udp\"\nbind = \"0.0.0.0:1\"\n";
-        // The documented block loads and yields the tags in order.
-        let p = write(
-            "marking-ok",
-            &format!(
-                "{base}[marking]\nclassification = \"Restricted\"\nreleasable_to = [\"GBR\", \"ITA\"]\n\
-                 policy = \"NATO\"\ncaveats = [\"EXERCISE\"]\n"
-            ),
-        );
-        let m = Config::load(&p).unwrap().marking().unwrap().unwrap();
+    fn marking_block_is_validated_at_load() {
+        let m = load(&format!(
+            "{BASE}[marking]\nclassification = \"Restricted\"\nreleasable_to = [\"GBR\", \"ITA\"]\n\
+             policy = \"NATO\"\ncaveats = [\"EXERCISE\"]\n"
+        ))
+        .unwrap()
+        .marking()
+        .unwrap()
+        .unwrap();
         assert_eq!(
             m.to_string(),
             "class:restricted policy:NATO rel:GBR rel:ITA caveat:EXERCISE"
         );
-        // A level Core would not recognise is refused at load, naming the file
-        // and the five levels, rather than shipping unclassified events.
-        let p = write(
-            "marking-bad",
-            &format!("{base}[marking]\nclassification = \"official-sensitive\"\n"),
-        );
-        let msg = Config::load(&p).unwrap_err().to_string();
+
+        let msg = load(&format!(
+            "{BASE}[marking]\nclassification = \"official-sensitive\"\n"
+        ))
+        .unwrap_err()
+        .to_string();
         assert!(msg.contains("parsing config"), "{msg}");
         assert!(msg.contains("official-sensitive"), "{msg}");
         assert!(msg.contains("top-secret"), "{msg}");
-        // A field the block does not have is a typo, answered like any other.
-        let p = write(
-            "marking-typo",
-            &format!("{base}[marking]\nclasification = \"secret\"\n"),
-        );
-        let msg = Config::load(&p).unwrap_err().to_string();
+
+        let msg = load(&format!("{BASE}[marking]\nclasification = \"secret\"\n"))
+            .unwrap_err()
+            .to_string();
         assert!(
             msg.contains("did you mean the field `classification`?"),
             "{msg}"
         );
-        // No block: no marking, and nothing to validate.
-        let p = write("marking-none", base);
-        assert!(Config::load(&p).unwrap().marking().unwrap().is_none());
+
+        assert!(load(BASE).unwrap().marking().unwrap().is_none());
     }
 
     #[test]
-    fn a_missing_config_points_at_the_example() {
+    fn missing_config_points_at_the_example() {
         let msg = Config::load("/nonexistent/dir/x.toml")
             .unwrap_err()
             .to_string();
@@ -715,7 +526,7 @@ mod tests {
     }
 
     #[test]
-    fn a_kind_that_was_not_compiled_in_is_named_not_corrected() {
+    fn uncompiled_kind_is_named_not_corrected() {
         let hint =
             did_you_mean("unknown variant `dds`, expected one of `udp-multicast`, `udp`, `dir`")
                 .unwrap();
@@ -737,16 +548,8 @@ mod tests {
         );
     }
 
-    fn transport(toml_str: &str) -> Transport {
-        #[derive(Deserialize)]
-        struct W {
-            transport: Transport,
-        }
-        toml::from_str::<W>(toml_str).unwrap().transport
-    }
-
     #[test]
-    fn each_transport_kind_parses_from_config() {
+    fn each_transport_kind_parses() {
         assert!(matches!(
             transport("[transport]\nkind='udp-multicast'\nbind='0.0.0.0:6969'\ngroup='239.2.3.1'"),
             Transport::UdpMulticast { .. }
@@ -762,7 +565,6 @@ mod tests {
                 ..
             }
         ));
-        // TCP framing defaults to line when omitted.
         assert!(matches!(
             transport("[transport]\nkind='tcp-client'\nconnect='h:1'"),
             Transport::TcpClient {
@@ -798,7 +600,6 @@ mod tests {
                 framing: Framing::Line
             }
         ));
-        // http-server: path defaults to "/" and the token is optional.
         assert!(matches!(
             transport("[transport]\nkind='http-server'\nbind='0.0.0.0:8080'"),
             Transport::HttpServer { ref path, token: None, .. } if path == "/"
@@ -812,62 +613,58 @@ mod tests {
     }
 
     #[test]
-    fn a_required_field_is_a_parse_error() {
+    fn missing_required_field_is_a_parse_error() {
         #[derive(Deserialize)]
         struct W {
-            #[allow(dead_code)]
+            #[allow(dead_code)] // only parsed
             transport: Transport,
         }
-        // udp-multicast without a group must not parse.
         let bad = "[transport]\nkind='udp-multicast'\nbind='0.0.0.0:6969'";
         assert!(toml::from_str::<W>(bad).is_err());
     }
 
     #[test]
-    fn a_typo_is_an_error_naming_the_field_not_a_silent_default() {
+    fn typo_in_any_table_names_the_field() {
         let base = "source_id='s'\nnats_url='nats://x:4222'\nsigning_key_path='k'\n";
-        // Top level.
-        let bad = format!("{base}defaut_hostility='Friend'\n[transport]\nkind='stdin'\n");
-        let err = toml::from_str::<Config>(&bad).unwrap_err().to_string();
-        assert!(err.contains("defaut_hostility"), "{err}");
-        // Inside [transport].
-        let bad = format!("{base}[transport]\nkind='udp'\nbindd='0.0.0.0:1'\n");
-        let err = toml::from_str::<Config>(&bad).unwrap_err().to_string();
-        assert!(err.contains("bindd"), "{err}");
-        // Inside [spool]: the classic max_byte slip, named, not defaulted.
-        let bad = format!("{base}[transport]\nkind='stdin'\n[spool]\ndir='/d'\nmax_byte=1\n");
-        let err = toml::from_str::<Config>(&bad).unwrap_err().to_string();
-        assert!(err.contains("max_byte"), "{err}");
-        // Inside [sensor].
-        let bad = format!("{base}[transport]\nkind='stdin'\n[sensor]\nlat=1.0\nlonn=2.0\n");
-        let err = toml::from_str::<Config>(&bad).unwrap_err().to_string();
-        assert!(err.contains("lonn"), "{err}");
-        // The generic connector's [mapping] block is the one tolerated
-        // extension: same file, its own loader.
-        let ok = format!("{base}[transport]\nkind='stdin'\n[mapping]\nentity_type='mim:vessel'\n");
-        assert!(toml::from_str::<Config>(&ok).is_ok());
+        for (bad, field) in [
+            (
+                format!("{base}defaut_hostility='Friend'\n[transport]\nkind='stdin'\n"),
+                "defaut_hostility",
+            ),
+            (
+                format!("{base}[transport]\nkind='udp'\nbindd='0.0.0.0:1'\n"),
+                "bindd",
+            ),
+            (
+                format!("{STDIN_BASE}[spool]\ndir='/d'\nmax_byte=1\n"),
+                "max_byte",
+            ),
+            (format!("{STDIN_BASE}[sensor]\nlat=1.0\nlonn=2.0\n"), "lonn"),
+        ] {
+            let err = toml::from_str::<Config>(&bad).unwrap_err().to_string();
+            assert!(err.contains(field), "{err}");
+        }
+        let ok = format!("{STDIN_BASE}[mapping]\nentity_type='mim:vessel'\n");
+        assert!(
+            toml::from_str::<Config>(&ok).is_ok(),
+            "[mapping] is the tolerated extension"
+        );
     }
 
     #[test]
-    fn the_spool_takes_one_line_or_a_full_table() {
-        let base = "source_id='s'\nnats_url='nats://x:4222'\nsigning_key_path='k'\n\
-                    [transport]\nkind='stdin'\n";
-
-        // No spool: none configured, today's behavior.
-        let cfg: Config = toml::from_str(base).unwrap();
+    fn spool_takes_a_path_or_a_table() {
+        let cfg: Config = toml::from_str(STDIN_BASE).unwrap();
         assert!(cfg.spool_config().is_none());
 
-        // The one-liner: a bare path, everything else defaulted.
         let cfg: Config =
-            toml::from_str(&format!("spool = '/var/lib/ajar/spool'\n{base}")).unwrap();
+            toml::from_str(&format!("spool = '/var/lib/ajar/spool'\n{STDIN_BASE}")).unwrap();
         let spool = cfg.spool_config().unwrap();
         assert_eq!(spool.dir, "/var/lib/ajar/spool");
         assert_eq!(spool.max_bytes, 256 * 1024 * 1024);
         assert!((spool.drain_rate - 50.0).abs() < f64::EPSILON);
 
-        // The full table tunes the bound and the pace.
         let cfg: Config = toml::from_str(&format!(
-            "{base}[spool]\ndir='/data/spool'\nmax_bytes=1024\ndrain_rate=7.5\n"
+            "{STDIN_BASE}[spool]\ndir='/data/spool'\nmax_bytes=1024\ndrain_rate=7.5\n"
         ))
         .unwrap();
         let spool = cfg.spool_config().unwrap();

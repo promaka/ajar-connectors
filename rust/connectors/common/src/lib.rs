@@ -1,16 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Shared runtime for Ajar connectors.
-//!
-//! A connector reads a native feed, normalizes each frame into a canonical
-//! [`ajar_connector::Event`], seals it with the connector's Ed25519 key, and
-//! publishes it to Core's NATS ingest subject. Everything except the parse is the
-//! same for every connector, so it lives here: configuration, key loading, the
-//! mTLS NATS connection, the field transports, the seal-and-publish loop, the
-//! health/metrics endpoint, and graceful shutdown.
-//!
-//! Writing a new connector is therefore two things:
-//! 1. implement [`FrameParser`] for your wire format (the only format-specific work);
-//! 2. hand a [`FrameSource`] and the parser to [`run`].
+//! Shared runtime for Ajar connectors: config, key loading, mTLS NATS, the
+//! transports, the seal-and-publish loop, health and shutdown. A connector
+//! implements [`FrameParser`] and hands it with a [`FrameSource`] to [`run`].
 //!
 //! ```no_run
 //! # use ajar_connector_common as common;
@@ -58,9 +49,9 @@ pub mod serial;
 #[cfg(feature = "websocket")]
 pub mod ws;
 
-/// Largest native frame the runtime will read. A frame beyond this is rejected
-/// rather than truncated: half a record parses into a wrong event, which is worse
-/// than a missing one. Reported in the connector profile as an advisory ceiling.
+/// Largest native frame the runtime reads. Most transports reject a longer
+/// frame, since half a record parses into a wrong event; `mqtt`, `rest-poll` and
+/// line-framed `file` truncate it.
 pub const MAX_FRAME_BYTES: usize = 64 * 1024;
 
 pub use config::{Config, Enrichment, Framing, SensorSite, SpoolSetting, Transport};
@@ -68,17 +59,10 @@ pub use config::{Config, Enrichment, Framing, SensorSite, SpoolSetting, Transpor
 pub use config::{DdsOptions, DdsPayload, DdsReliability};
 pub use identity::GovernedIdentity;
 pub use ontology::GovernedAttribute;
-
-/// The seal's signature prefix length (re-exported for the spool drain).
-pub(crate) fn seal_signature_len() -> usize {
-    ajar_connector::SEAL_SIGNATURE_LEN
-}
 pub use profile::Profile;
 pub use runtime::{run, FrameParser, FrameSource, ParseError};
 
-/// Open the transport named in config, boxed for [`run`]. This is the one line a
-/// connector needs to get from a config file to a live feed, whatever the method:
-/// the protocol (parsing) never changes when the transport does.
+/// Open the transport named in config, boxed for [`run`].
 pub async fn open_source(transport: &Transport) -> anyhow::Result<Box<dyn FrameSource>> {
     Ok(match transport {
         Transport::UdpMulticast {

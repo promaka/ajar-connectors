@@ -1,17 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Directory-watch transport — consume files that a source *drops* into a folder
-//! (SFTP batch exports, scheduled dumps), the other ubiquitous legacy pattern
-//! next to `file` tailing. Each settled file is read line-by-line, one line per
-//! frame, then remembered so it is never re-read.
-//!
-//! Partial uploads are the classic trap: a file that has *appeared* may still be
-//! being written. A file is only read once its size is stable across two
-//! consecutive polls — by which point a stalled transfer is indistinguishable
-//! from a finished one, which is exactly the operator's intent.
-//!
-//! Zero dependencies: plain polling (default 1 s), portable everywhere. The
-//! seen-files set is bounded (FIFO) so a drop directory that is never cleaned
-//! cannot grow the connector's memory without limit.
+//! Directory transport: read each file dropped into a folder, one line per
+//! frame, once its size is stable across two polls, then remember its name. A
+//! transfer that stalls for a poll looks finished: the file is read as it
+//! stands, and what arrives later is not read.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
@@ -22,12 +13,10 @@ use tokio::io::BufReader;
 use crate::runtime::FrameSource;
 use crate::stream;
 
-/// Upper bound on remembered file names. At capacity the oldest is forgotten —
-/// if that file still exists it would be re-read, so size the bound generously
-/// and clean the drop directory operationally (as batch drops always are).
+/// Upper bound on remembered file names. At capacity the oldest is forgotten,
+/// and re-read if it is still there.
 const MAX_SEEN: usize = 100_000;
 
-/// Reads newly-dropped files from a directory, one line per frame.
 pub struct DirSource {
     path: PathBuf,
     poll: std::time::Duration,
@@ -41,13 +30,9 @@ pub struct DirSource {
     current: Option<BufReader<File>>,
 }
 
-/// Open a directory watch. With `process_existing`, files already present are
-/// read first; otherwise only files appearing after startup are consumed.
-///
-/// The baseline (which files count as "already present") is taken **here, at
-/// startup** — synchronously — not on the first poll, so a file dropped in the
-/// window between opening the watch and the first scan is correctly treated as
-/// new rather than swept into the baseline.
+/// Open a directory watch. Without `process_existing`, the files present now
+/// are the baseline and are skipped. The baseline is taken here rather than on
+/// the first poll, so a file dropped in between counts as new.
 pub fn open(path: &str, process_existing: bool) -> anyhow::Result<DirSource> {
     let p = PathBuf::from(path);
     if !p.is_dir() {
@@ -125,18 +110,17 @@ impl DirSource {
 impl FrameSource for DirSource {
     async fn recv(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         loop {
-            // Stream the current file to its end.
             if let Some(reader) = self.current.as_mut() {
                 match stream::read_line(reader, buf).await {
                     Ok(n) => return Ok(n),
                     Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
-                        self.current = None; // file finished; move on
+                        self.current = None;
                     }
-                    Err(e) => return Err(e), // oversized line: surface, keep file
+                    // An oversized line: the file stays open.
+                    Err(e) => return Err(e),
                 }
                 continue;
             }
-            // Open the next settled file, or poll for one.
             if let Some(path) = self.ready.pop_front() {
                 match File::open(&path).await {
                     Ok(f) => self.current = Some(BufReader::new(f)),
@@ -162,22 +146,19 @@ impl FrameSource for DirSource {
 mod tests {
     use super::*;
 
-    fn test_dir(tag: &str) -> PathBuf {
-        let p = std::env::temp_dir().join(format!("ajar-dir-test-{tag}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&p);
-        std::fs::create_dir_all(&p).unwrap();
-        p
+    fn watch(dir: &tempfile::TempDir, process_existing: bool) -> DirSource {
+        let mut src = open(dir.path().to_str().unwrap(), process_existing).unwrap();
+        src.poll = std::time::Duration::from_millis(20);
+        src
     }
 
     #[tokio::test]
-    async fn reads_only_files_dropped_after_start_and_never_rereads() {
-        let dir = test_dir("new");
+    async fn reads_only_new_drops_and_never_rereads() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
         std::fs::write(dir.join("old.txt"), "stale\n").unwrap();
+        let mut src = watch(&tmp, false);
 
-        let mut src = open(dir.to_str().unwrap(), false).unwrap();
-        src.poll = std::time::Duration::from_millis(20);
-
-        // Drop a new file after the source exists.
         std::fs::write(dir.join("drop1.txt"), "alpha\nbravo\n").unwrap();
 
         let mut buf = vec![0u8; 256];
@@ -186,26 +167,19 @@ mod tests {
         let n = src.recv(&mut buf).await.unwrap();
         assert_eq!(&buf[..n], b"bravo");
 
-        // A second drop is picked up; the old baseline file never appears.
         std::fs::write(dir.join("drop2.txt"), "charlie\n").unwrap();
         let n = src.recv(&mut buf).await.unwrap();
-        assert_eq!(&buf[..n], b"charlie");
-
-        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(&buf[..n], b"charlie", "the baseline file never appears");
     }
 
     #[tokio::test]
-    async fn process_existing_reads_the_baseline_files() {
-        let dir = test_dir("existing");
-        std::fs::write(dir.join("batch.txt"), "one\n").unwrap();
-
-        let mut src = open(dir.to_str().unwrap(), true).unwrap();
-        src.poll = std::time::Duration::from_millis(20);
+    async fn process_existing_reads_the_baseline() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("batch.txt"), "one\n").unwrap();
+        let mut src = watch(&tmp, true);
 
         let mut buf = vec![0u8; 256];
         let n = src.recv(&mut buf).await.unwrap();
         assert_eq!(&buf[..n], b"one");
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }

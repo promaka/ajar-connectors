@@ -1,71 +1,104 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
-# ajar-gmti — STANAG 4607 (NATO GMTI) connector
+# ajar-gmti: STANAG 4607 (NATO GMTI) ingress
 
-Ingests **GMTI** (Ground Moving Target Indicator) radar packets and turns each
-moving-target detection into a signed canonical Ajar event.
+Ingress for **GMTI** (Ground Moving Target Indicator) radar packets in the
+STANAG 4607 format. Each located target report in a Dwell segment becomes one
+signed canonical Ajar event. It is the worked example of an existence-mask
+binary format (see [`AGENTS.md`](../../../AGENTS.md)).
 
-Alongside [`klv`](../klv), this is a repo **reference binary-STANAG connector** —
-a worked example of an **existence-mask-driven** binary format (see the top-level
-[`AGENTS.md`](../../../AGENTS.md)).
+## Input
 
-## What it decodes
+One STANAG 4607 packet per frame: a 32-byte packet header, then a run of
+segments. The header's edition byte must be 2 or 3, and its declared packet
+size must be at least 32 bytes and fit in the frame. Bytes after the declared
+packet size are ignored.
 
-A GMTI packet is a 32-byte header + a run of segments. The connector decodes the
-**Dwell Segment** (type 2) — where the moving targets live — completely:
+- **Packet header**: platform id (bytes 14 to 23, trimmed) and job id are read.
+- **Dwell segment** (type 2): decoded. Its 8-byte **existence mask** says which
+  optional dwell and target fields are present. The connector reads the
+  dwell index, dwell time, sensor position, the lat/lon scale factors, the
+  dwell area centre and each target report. Other optional fields are skipped
+  by size so the reports stay aligned.
+- **Other segments** (Mission, Job Definition, HRR and the rest): skipped by
+  their declared size.
 
-- **Packet header**: platform id, job id, edition.
-- **Dwell**: the 8-byte existence mask, the dwell-level geometry (sensor lat/lon,
-  dwell-area centre, lat/lon scale factors), and the target report count.
-- **Per target report**: position (absolute hi-res lat/lon, or delta-from-centre
-  × scale factor), geodetic height, line-of-sight (radial) velocity, SNR,
-  classification code, RCS.
+Field order, sizes, mask bits and scale factors follow STANAG 4607,
+cross-checked against the Wireshark dissector and the pentlandedge `s4607`
+implementation.
 
-Other segment types (Mission, Job Definition, HRR, ...) are skipped.
+Transports: `udp` with one packet per datagram, as in the example config, or a
+stream transport such as `tcp-server` with `framing = "length-delimited"`.
 
-## Losslessness
+## Output
 
-The **entire raw dwell segment** is sealed verbatim into every target event's
-`Event.payload`. Any dwell or target field the connector does not map is
-preserved for a later ontology (or a generated parser extension) to extract.
+Entity type `mim:object`, one event per located target report.
 
-## Identity — detections, not tracks
+**Identity.** GMTI target reports are untracked detections; the format has no
+persistent target id. `source_uid` is
+`<platform>:<job_id>:<dwell_index>:<mti_report_index>`, unique per detection,
+with `na` in place of the report index when the report has none. It does not
+persist for the same vehicle across dwells; downstream fusion associates
+detections.
 
-GMTI target reports are **un-associated detections**: the format carries no
-persistent per-target id. So `source_uid` is unique **per detection** —
-`<platform>:<job_id>:<dwell_index>:<mti_report_index>` — not a track. Downstream
-fusion/tracking correlates detections across dwells. Do not expect a GMTI
-`source_uid` to persist for the same physical vehicle between dwells.
+**Location.** The report's high-resolution lat/lon if present, else the
+dwell area centre plus the delta lat/lon times the dwell's scale factors.
+Longitudes are normalised to -180..180. Altitude is the target height in
+metres.
 
-## Units
+**Time.** Dwell time is relative to the Mission Segment reference time, which
+may be in another packet, so the event is stamped with receipt time.
 
-Angles use the STANAG 4607 binary-angle scaling (SA32 → ±90°, BA32 → 0–360°,
-normalised to ±180°). Radial velocity is normalised **cm/s → m/s** and emitted as
-`radial_velocity` (line-of-sight, distinct from ground `speed`). Geodetic height
-is metres.
+| Attribute | Unit | Source |
+|---|---|---|
+| `radial_velocity` | m/s, two decimals | D32.7 line-of-sight velocity, native cm/s. Not ground `speed`. |
+| `snr_db` | dB | D32.9 |
+| `classification_code` | STANAG 4607 code | D32.10 |
+| `rcs_db` | raw signed byte | D32.18, see Limits |
+| `hostility` | MIM `HostilityCodeType` | `default_hostility`, only when configured |
 
-## Timestamp
+An attribute is emitted only when its mask bit is set.
 
-GMTI dwell time is milliseconds **relative to the Mission Segment reference
-time**, which may not be in the same packet, so the event is stamped with
-**receipt time** and the native `dwell_time_ms` is kept in metadata. Absolute
-time from the Mission Segment reference is a future enhancement.
+| Metadata | Content |
+|---|---|
+| `source_uid` | as above |
+| `platform` | packet header platform id |
+| `job_id` | packet header job id |
+| `dwell_index` | dwell index within the revisit |
+| `mti_report_index` | report index, when present |
+| `dwell_time_ms` | native dwell time, ms after the mission reference |
+| `sensor_lat`, `sensor_lon` | sensor position at the dwell, degrees, 6 decimals |
 
-## Entity type
+**Payload.** The whole Dwell segment, including its 5-byte segment header,
+verbatim. Every target event from that dwell carries the same segment.
 
-Emits `mim:ground-track`. If your Core ontology names ground moving-target
-detections differently, change the one `entity_type` constant in `src/gmti.rs`.
+## Configuration
 
-## Provenance of the field layout
+Start from [`gmti.example.toml`](gmti.example.toml). The connector has no
+`[options]`. `default_hostility` sets the `hostility` attribute; GMTI carries
+none of its own, and with it unset none is emitted.
 
-Field order, sizes, existence-mask bit assignments, and scale factors were taken
-from the STANAG 4607 spec and cross-checked against the Wireshark dissector and
-the pentlandedge `s4607` reference implementation. Known open questions (Δ-lat/lon
-angular LSB, RCS dB vs half-dB) are handled conservatively and noted in the code;
-validate against a real capture from your radar before production.
+## Behaviour
 
-## Run it
+- Packets are independent; nothing is correlated across frames.
+- A packet with no Dwell segment yields no events.
+- The frame is rejected as a whole when the edition is not 2 or 3, the
+  declared packet size does not fit, a segment declares a size below 5 bytes
+  or past the packet end, or a dwell runs past its segment.
+
+## Limits
+
+- Only Dwell segments are decoded. The Mission Segment reference time is not
+  used, so events carry receipt time rather than dwell time.
+- Sensor altitude, sensor kinematics, orientation, dwell extents, wrap
+  velocity and the report uncertainty and truth-tag fields are skipped.
+- The delta lat/lon scaling and the RCS unit (dB or half dB) are not yet
+  checked against a real radar capture. `rcs_db` carries the byte unscaled.
+  Validate against your radar's output before production.
+
+## Run
 
 ```sh
 cp gmti.example.toml gmti.toml   # edit source_id, key path, [transport]
 ajar-gmti ./gmti.toml
+ajar-gmti --profile ./gmti.toml  # print the profile the operator registers
 ```

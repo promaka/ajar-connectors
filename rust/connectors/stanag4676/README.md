@@ -1,122 +1,159 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
-# ajar-stanag4676
+# ajar-stanag4676: STANAG 4676 (NATO ISR Tracking) ingress
 
-Ingress connector for **STANAG 4676** (NATO ISR Tracking Standard, AEDP-12
-Edition B) — the **fused track layer** of the ISR picture. A tracker associates
-observations over time into tracks with a stable identity; this connector decodes
-those `nitsRoot` track messages into canonical Ajar tracks, seals each with the
-connector's Ed25519 key, and publishes to Core.
+Ingress for STANAG 4676, the NATO ISR Tracking Standard (AEDP-12 Edition B).
+A tracker associates observations into tracks with a stable id; this
+connector turns its `nitsRoot` track messages into signed canonical Ajar
+events, one per track point. It complements [`gmti`](../gmti): GMTI gives
+untracked detections with a fresh id every dwell, 4676 gives tracks whose id
+persists.
 
-It is the natural complement to [`ajar-gmti`](../gmti): GMTI gives you the raw,
-un-associated detections (a fresh id every dwell); 4676 gives you the recognised
-tracks with a **persistent id** for the same object across time. Detections and
-tracks — the two layers of the ground/air picture.
+## Input
 
-## Model
+One whole `nitsRoot` XML message per frame. The decoder streams the XML and
+matches on local element names only, so any namespace prefix (`ns2:`, a
+default namespace, none) decodes the same way.
 
-```
-STANAG 4676 XML ──▶ ajar-stanag4676 ──▶ canonical Event(s) ──▶ seal ──▶ NATS  ajar.ingest.<source_id>
-   untrusted edge      decode              (one per track point)  (Ed25519)      (mTLS to Core)
-```
+| Fact | Where it lives |
+|---|---|
+| Track id | `track/uid`, Base64 of a raw 16-byte UUID |
+| Position | `tp/.../dynamics/pos`, in the coordinate system named by the `cs` attribute of `<dynamics>`. For `cs="WGS_84"`: `lat lon height`, degrees and metres |
+| Velocity | `dynamics/vel`, same coordinate system. For WGS-84 the horizontal components are degrees per second and the third is metres per second up |
+| Time | `message/baseTime` plus `tp/relTime` times `message/relTimeIncrement` (seconds); the point has no timestamp of its own |
+| Status | `segment/status`, applied to every point in the segment |
+| Identity, domain | `track/object/id1241/identity` and `environment` (STANAG 1241) |
+| Class | `objectClass/code` (APP-6) |
+| Label | `ConfidentialityInformation/Classification` and `PolicyIdentifier` (STANAG 4774) |
+| Version | `nitsRoot/nitsVersion` |
 
-One `nitsRoot` message carries **many tracks, each with many track points**, so one
-frame produces several sealed events — one per track point. The raw `<track>`
-element is sealed verbatim into `Event.payload`, so nothing the decoder does not yet
-map is lost. The connector holds no Core secrets — only its own signing key. See
-[HOW_IT_WORKS.md](../../../HOW_IT_WORKS.md).
+Only the `uid` directly under `track` is the track id; the `uid` under
+`segment` and `tp` is not read. A message with no tracks, such as a
+detection-only message, yields no events; use [`gmti`](../gmti) for
+detections.
 
-## What it decodes, and the traps it gets right
+Framing: a stream transport with `framing = "length-delimited"`, as in the
+example config, takes any XML. A line transport (`file`, `dir`, `stdin`,
+`exec`) works only when the producer writes each message on one line;
+pretty-printed XML does not frame on lines.
 
-There are no `latitude`/`longitude`/`speed`/`heading` elements in 4676 — the
-load-bearing facts are packed in ways a naive decoder mishandles:
+## Output
 
-| Fact | Where it lives | What this connector does |
+Entity type `mim:object`, one event per track point. `[entity_map]` can map
+an environment to a specific type (see Configuration).
+
+**Identity.** The decoded track UUID, hyphenated, is `source_uid` and the
+governed identity (`alt_id`, with `alt_id_standard` `STANAG4676`). It is
+stable for the same object across messages. A `uid` that is not valid Base64
+or shorter than 16 bytes gives no identity.
+
+**Location.** Only for a WGS-84 position with at least latitude and longitude.
+The altitude is the third value. When a point carries
+several `<dynamics>` blocks, the WGS-84 one wins; otherwise the first.
+Another coordinate system (ECEF, local Cartesian) is not projected: the event
+has no location and carries `coordinate_system` and `position_raw` metadata.
+
+**Time.** Reconstructed from the message base time as above, else receipt
+time.
+
+| Attribute | Unit | Source |
 |---|---|---|
-| **Stable id** | `track/uid` — Base64 of a raw 16-byte UUID | decodes + formats to the canonical UUID → `source_uid` |
-| **Position** | `<pos>` under `<dynamics cs="WGS_84">`, as `lat lon height-m` | geographic fix only when `cs` is WGS-84; other systems ride as metadata, never mis-projected |
-| **Velocity** | `<vel>`, whose WGS-84 horizontal components are **degrees/second** | derives ground `speed` (m/s) + `course` (deg); keeps the native °/s in metadata |
-| **Time** | `baseTime + relTime × relTimeIncrement` (no ISO stamp on the point) | reconstructs the absolute RFC 3339 time |
-| **Status** | `segment/status` | maps INITIATING/MAINTAINING/SEARCHING/TERMINATED → new/update/coast/drop |
-| **Identity** | `track/object/id1241` (STANAG 1241) | hostility, mapping one-to-one onto MIM including AssumedFriend and Suspect |
-| **Environment** | `id1241/environment` | an attribute, not the entity type: see below |
-| **Classification** | `originatorConfidentialityLabel` (STANAG 4774) | surfaced as the event's `policy_tag` |
+| `speed` | m/s, two decimals | WGS-84 horizontal velocity on a spherical Earth (radius 6 371 000 m) |
+| `course` | degrees true, one decimal, 0 to 360 | direction of that velocity |
+| `vertical_rate` | m/s, two decimals | third WGS-84 velocity component |
+| `hostility` | MIM `HostilityCodeType` | STANAG 1241 identity, see below |
+| `environment` | `AIR`, `LAND`, `SURFACE`, `SUBSURFACE`, `SPACE`, `UNKNOWN` | STANAG 1241 environment |
+| `alt_id`, `alt_id_standard` | text | track UUID, `STANAG4676` |
 
-Matching is on **local element names only**, so any namespace-prefix binding
-(`ns2:`, `foo:`, default) decodes identically. Decoded fields ride as attributes
-with canonical units (`speed` m/s, `course` deg, `vertical_rate` m/s per ADR-0019);
-native values are preserved in metadata.
+Speed, course and vertical rate need a WGS-84 position and velocity.
 
-> **Affiliation is conservative.** Only FRIEND/HOSTILE/NEUTRAL assert an
-> hostility; ASSUMED_FRIEND, SUSPECT, and UNKNOWN resolve to the operator default
-> (else `unknown`) so a COP never shows a fabricated friend or hostile — the precise
-> STANAG 1241 identity is always preserved for a downstream rule to use.
+**Hostility.** Every event carries one:
 
-**Every track is `mim:object`.** The `environment` field reports a domain, not a
-classification: AIR says a track is in the air, not that it is an aircraft, and it
-could as easily be a missile, a balloon or a bird. Choosing a specific type from it
-would assert something the tracker never said, so the domain rides as an attribute
-and the type stays honest. Core drives the CoT battle dimension from that
-attribute, so an air contact still reaches TAK in the air dimension as `a-u-A`
-rather than as a bare unknown. The wire value is normalised first: STANAG 1241
-hyphenates `SUB-SURFACE` where Core's closed set does not, and an unrecognised
-token becomes `UNKNOWN` with the original kept in `environment_source`. A specific type belongs to `objectClass`, an APP-6 code
-that genuinely does classify; mapping APP-6 onto MIM is separate work. A deployment
-that knows its feed better can override per environment in `[entity_map]`.
+| STANAG 1241 identity | `hostility` |
+|---|---|
+| `FRIEND` | `Friend` |
+| `ASSUMED_FRIEND` | `AssumedFriend` |
+| `HOSTILE` | `Hostile` |
+| `SUSPECT` | `Suspect` |
+| `NEUTRAL` | `Neutral` |
+| absent, `UNKNOWN` or anything else | `default_hostility`, else `Unknown` |
 
-**Scope.** This connector decodes the **track** layer (`track → segment → tp`).
-Detection-only messages (raw GMTI dots re-embedded in 4676) produce no events — use
-`ajar-gmti` for those. Non-WGS-84 coordinate systems (ECEF, local Cartesian) are
-preserved as metadata rather than projected; the raw XML is sealed regardless, so a
-later pass can extend coverage without touching the wire.
+**Environment.** A domain, not a classification: AIR can be an aircraft, a
+missile, a balloon or a bird, so the type stays `mim:object` and the domain
+rides as the `environment` attribute. STANAG 1241's `SUB-SURFACE` becomes
+`SUBSURFACE`. An absent environment is `UNKNOWN`. An unrecognised token is
+`UNKNOWN`, with the wire value in `environment_source` metadata. On an
+`[entity_map]` type that does not govern `environment`, such as
+`mim:aircraft`, the value goes to metadata instead.
 
-## Framing
+| Metadata | Content |
+|---|---|
+| `source_uid` | track UUID |
+| `identity` | the STANAG 1241 identity, verbatim |
+| `object_class` | APP-6 code from `objectClass/code` |
+| `track_status` | `new`, `update`, `coast`, `drop`, `truth` or `unknown` from `INITIATING`, `MAINTAINING`, `SEARCHING`, `TERMINATED`, `GROUND_TRUTH` or anything else |
+| `s4676_status` | the segment status, verbatim |
+| `rel_time` | the point's native `relTime` |
+| `vel_lat_dps`, `vel_lon_dps` | native WGS-84 velocity, degrees per second |
+| `nits_version` | `nitsVersion` |
+| `nits_classification`, `nits_policy_identifier` | the STANAG 4774 label, verbatim |
+| `environment_source` | unrecognised environment token |
+| `coordinate_system`, `position_raw` | non-WGS-84 `cs` and position values |
 
-A 4676 message is a whole XML document, so the transport must deliver **one complete
-message per frame**. The two clean options:
+`object_class` and `track_status` go to metadata because no type in the
+vendored ontology governs them yet; they become attributes on a type that
+does.
 
-- **`tcp-server` / `tcp-client` with `framing = "length-delimited"`** — each message
-  prefixed with its 2-byte length (the recommended stream integration); or
-- any line transport (`file`, `dir`, `stdin`, `exec`) when the producer emits
-  **one message per line** (compact, single-line XML).
+**Policy tags.** The STANAG 4774 label becomes the policy tags Core reads.
+`NATO SECRET` gives `class:secret` and `policy:NATO`; a stated
+`PolicyIdentifier` sets the policy. A non-empty label that does not normalise
+is tagged `class:top-secret`.
 
-Pretty-printed multi-line XML over a line transport will not frame correctly — use
-length-delimited framing for that.
+**Payload.** The whole `<track>` element, start tag to end tag, verbatim.
+Every point of a track carries the same element.
 
-## Configure & run
+## Configuration
 
-Copy [`stanag4676.example.toml`](stanag4676.example.toml):
+Start from [`stanag4676.example.toml`](stanag4676.example.toml). The
+connector has no `[options]`.
 
-```toml
-source_id = "isr-tracker-1"
-nats_url  = "nats://127.0.0.1:4222"
-signing_key_path = "/etc/ajar/isr-tracker-1.seed"
+- `default_hostility`: the hostility for a track whose identity is absent or
+  not one of the five mapped values. Unset, `Unknown`.
+- `[entity_map]`: environment to entity type, for example
+  `AIR = "mim:aircraft"`. A key may be the wire token (`SUB-SURFACE`) or the
+  normalised code (`SUBSURFACE`). Unmapped environments stay `mim:object`.
 
-[transport]
-kind = "tcp-server"
-bind = "0.0.0.0:4676"
-framing = "length-delimited"
-```
+## Behaviour
 
-```bash
+- A track's `object` block follows its points in document order, so points
+  are buffered and emitted when `</track>` closes. A track that never closes
+  emits nothing.
+- Messages are independent; nothing is correlated across frames.
+- A garbled `pos` or `vel` (any token not a number) is ignored, so the point
+  has no fix rather than a shifted one.
+- Malformed XML rejects the whole frame, including tracks before the fault.
+
+## Limits
+
+- Non-WGS-84 coordinate systems are kept in metadata, not projected.
+- `objectClass` is not mapped to a MIM type; that needs an APP-6 to MIM
+  mapping.
+- Self-closing elements (`<dynamics cs="..."/>`) carry no position and are
+  ignored.
+
+## Run
+
+```sh
+cp stanag4676.example.toml stanag4676.toml   # edit source_id, key path, [transport]
 ajar-stanag4676 ./stanag4676.toml
-# production mTLS + health as per the repo README
+ajar-stanag4676 --profile ./stanag4676.toml  # print the profile the operator registers
 ```
-
-## Security note
-
-4676 is an untrusted edge and the decoder walks attacker-influenced XML — arbitrary
-namespace prefixes, truncated elements, positions that lie, Base64 that is not, and
-a `relTime × increment` that can overflow the clock. Every conversion is bounds- and
-overflow-checked; the decoder never panics and never emits a misaligned or fabricated
-position. Trust is established downstream by the seal.
 
 ## Conformance
 
-`cargo test` decodes a hand-built WGS-84 air track (position, derived kinematics,
-identity carried from the `object` block that follows the points in document order —
-proving the deferred per-track flush), reconstructs the point time from
-`baseTime + relTime`, checks the event against Core's content contract and that the
-seal verifies under the published contract key, and fuzzes the decode against
-thousands of arbitrary and track-shaped inputs (never panics). The field model is
-cross-checked against the `bradh/jim` Edition-B reference implementation and its
-sample messages; the fixtures shipped here are clean-room, authored for these tests.
+`cargo test -p ajar-stanag4676` decodes a WGS-84 air track whose identity
+follows its points, reconstructs the point time, maps the confidentiality
+label to policy tags, checks the event against Core's content contract and
+the seal against the published contract key, and fuzzes the decoder with
+arbitrary and track-shaped input. The field model is cross-checked against
+the `bradh/jim` Edition B reference implementation and its sample messages;
+the test fixtures here are written for these tests.

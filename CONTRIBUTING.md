@@ -17,6 +17,7 @@ Thanks for helping build the Ajar connector SDK.
    cd rust && cargo test -p conformance --test golden_vectors
    ```
 4. **No production secrets.** The golden signing seed is TEST-ONLY.
+5. **Style.** Code follows [STYLE.md](STYLE.md); reviewers hold changes to it.
 
 ## DCO sign-off
 

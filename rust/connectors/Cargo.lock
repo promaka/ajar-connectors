@@ -13,7 +13,7 @@ dependencies = [
 
 [[package]]
 name = "ajar-adsb"
-version = "0.6.6"
+version = "0.6.7"
 dependencies = [
  "ajar-connector",
  "ajar-connector-common",
@@ -22,6 +22,7 @@ dependencies = [
  "hex",
  "proptest",
  "serde_json",
+ "thiserror 2.0.20",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -30,7 +31,7 @@ dependencies = [
 
 [[package]]
 name = "ajar-ais-nmea"
-version = "0.6.6"
+version = "0.6.7"
 dependencies = [
  "ajar-connector",
  "ajar-connector-common",
@@ -40,6 +41,8 @@ dependencies = [
  "proptest",
  "serde_json",
  "sha2",
+ "tempfile",
+ "thiserror 2.0.20",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -48,7 +51,7 @@ dependencies = [
 
 [[package]]
 name = "ajar-asterix"
-version = "0.6.6"
+version = "0.6.7"
 dependencies = [
  "ajar-connector",
  "ajar-connector-common",
@@ -58,6 +61,7 @@ dependencies = [
  "proptest",
  "serde_json",
  "sha2",
+ "thiserror 2.0.20",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -66,7 +70,7 @@ dependencies = [
 
 [[package]]
 name = "ajar-connector"
-version = "0.6.5"
+version = "0.6.6"
 dependencies = [
  "ed25519-dalek",
  "hex",
@@ -83,7 +87,7 @@ dependencies = [
 
 [[package]]
 name = "ajar-connector-common"
-version = "0.6.5"
+version = "0.6.6"
 dependencies = [
  "ajar-connector",
  "anyhow",
@@ -103,6 +107,8 @@ dependencies = [
  "serde",
  "serde_json",
  "socket2",
+ "tempfile",
+ "thiserror 2.0.20",
  "tokio",
  "tokio-rustls",
  "tokio-serial",
@@ -113,7 +119,7 @@ dependencies = [
 
 [[package]]
 name = "ajar-doctor"
-version = "0.6.6"
+version = "0.6.7"
 dependencies = [
  "ajar-connector-common",
  "anyhow",
@@ -123,6 +129,7 @@ dependencies = [
  "rustls",
  "rustls-pki-types",
  "serde_json",
+ "tempfile",
  "time",
  "tokio",
  "tokio-rustls",
@@ -131,7 +138,7 @@ dependencies = [
 
 [[package]]
 name = "ajar-feed-synthetic"
-version = "0.6.6"
+version = "0.6.7"
 dependencies = [
  "ajar-adsb",
  "ajar-ais-nmea",
@@ -157,7 +164,7 @@ dependencies = [
 
 [[package]]
 name = "ajar-generic"
-version = "0.6.6"
+version = "0.6.7"
 dependencies = [
  "ajar-connector",
  "ajar-connector-common",
@@ -168,6 +175,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "thiserror 2.0.20",
  "time",
  "tokio",
  "toml",
@@ -178,20 +186,19 @@ dependencies = [
 
 [[package]]
 name = "ajar-generic-egress"
-version = "0.6.6"
+version = "0.6.7"
 dependencies = [
  "ajar-connector",
  "ajar-connector-common",
  "anyhow",
  "async-nats",
- "bytes",
  "futures-util",
  "hex",
  "prost",
  "reqwest",
  "serde",
  "serde_json",
- "tempfile",
+ "thiserror 2.0.20",
  "tokio",
  "toml",
  "tracing",
@@ -200,7 +207,7 @@ dependencies = [
 
 [[package]]
 name = "ajar-gmti"
-version = "0.6.6"
+version = "0.6.7"
 dependencies = [
  "ajar-connector",
  "ajar-connector-common",
@@ -209,6 +216,7 @@ dependencies = [
  "hex",
  "proptest",
  "serde_json",
+ "thiserror 2.0.20",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -217,7 +225,7 @@ dependencies = [
 
 [[package]]
 name = "ajar-klv"
-version = "0.6.6"
+version = "0.6.7"
 dependencies = [
  "ajar-connector",
  "ajar-connector-common",
@@ -226,6 +234,7 @@ dependencies = [
  "hex",
  "proptest",
  "serde_json",
+ "thiserror 2.0.20",
  "time",
  "tokio",
  "tracing",
@@ -235,7 +244,7 @@ dependencies = [
 
 [[package]]
 name = "ajar-mavlink"
-version = "0.6.6"
+version = "0.6.7"
 dependencies = [
  "ajar-connector",
  "ajar-connector-common",
@@ -245,6 +254,7 @@ dependencies = [
  "proptest",
  "serde_json",
  "sha2",
+ "thiserror 2.0.20",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -253,7 +263,7 @@ dependencies = [
 
 [[package]]
 name = "ajar-sapient"
-version = "0.6.6"
+version = "0.6.7"
 dependencies = [
  "ajar-connector",
  "ajar-connector-common",
@@ -267,6 +277,7 @@ dependencies = [
  "prost-types",
  "serde",
  "serde_json",
+ "thiserror 2.0.20",
  "tokio",
  "toml",
  "tracing",
@@ -276,7 +287,7 @@ dependencies = [
 
 [[package]]
 name = "ajar-sapient-egress"
-version = "0.6.6"
+version = "0.6.7"
 dependencies = [
  "ajar-connector",
  "ajar-connector-common",
@@ -300,18 +311,20 @@ dependencies = [
 
 [[package]]
 name = "ajar-sapient-wire"
-version = "0.6.5"
+version = "0.6.6"
 dependencies = [
  "prost",
  "prost-build",
  "prost-types",
  "protoc-bin-vendored",
+ "thiserror 2.0.20",
  "time",
+ "tokio",
 ]
 
 [[package]]
 name = "ajar-sink"
-version = "0.6.5"
+version = "0.6.6"
 dependencies = [
  "ajar-connector",
  "ajar-connector-common",
@@ -325,6 +338,8 @@ dependencies = [
  "sha2",
  "socket2",
  "tempfile",
+ "thiserror 2.0.20",
+ "time",
  "tokio",
  "toml",
  "tracing",
@@ -333,7 +348,7 @@ dependencies = [
 
 [[package]]
 name = "ajar-stanag4586"
-version = "0.6.6"
+version = "0.6.7"
 dependencies = [
  "ajar-connector",
  "ajar-connector-common",
@@ -342,7 +357,7 @@ dependencies = [
  "hex",
  "proptest",
  "serde_json",
- "sha2",
+ "thiserror 2.0.20",
  "time",
  "tokio",
  "tracing",
@@ -352,7 +367,7 @@ dependencies = [
 
 [[package]]
 name = "ajar-stanag4676"
-version = "0.6.6"
+version = "0.6.7"
 dependencies = [
  "ajar-connector",
  "ajar-connector-common",
@@ -362,7 +377,7 @@ dependencies = [
  "proptest",
  "quick-xml",
  "serde_json",
- "sha2",
+ "thiserror 2.0.20",
  "time",
  "tokio",
  "tracing",
@@ -372,7 +387,7 @@ dependencies = [
 
 [[package]]
 name = "ajar-tak-cot"
-version = "0.6.6"
+version = "0.6.7"
 dependencies = [
  "ajar-connector",
  "ajar-connector-common",
@@ -383,6 +398,7 @@ dependencies = [
  "quick-xml",
  "serde_json",
  "sha2",
+ "thiserror 2.0.20",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -391,7 +407,7 @@ dependencies = [
 
 [[package]]
 name = "ajar-tak-egress"
-version = "0.6.6"
+version = "0.6.7"
 dependencies = [
  "ajar-connector-common",
  "anyhow",
@@ -402,6 +418,7 @@ dependencies = [
  "rustls-pki-types",
  "serde",
  "socket2",
+ "tempfile",
  "tokio",
  "tokio-rustls",
  "toml",
@@ -411,7 +428,7 @@ dependencies = [
 
 [[package]]
 name = "ajar-up"
-version = "0.6.6"
+version = "0.6.7"
 dependencies = [
  "ajar-connector",
  "ajar-connector-common",
@@ -426,9 +443,9 @@ dependencies = [
  "serde_json",
  "sha2",
  "tar",
+ "tempfile",
  "tokio",
  "toml",
- "tracing-subscriber",
 ]
 
 [[package]]

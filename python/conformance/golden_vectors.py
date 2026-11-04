@@ -1,9 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
-"""THE gate (Python): for every corpus fixture, reproduce the same
-canonicalSha256 + sealedSha256 the Rust/Go/C++ SDKs do, from the SAME
-vendor/contract/vectors.json. Exit 0 iff all hashes match.
+"""Check every corpus fixture against the hashes in vendor/contract/vectors.json.
 
-Run:  python conformance/golden_vectors.py   (from the python/ dir)
+Exits 0 only if each canonical and sealed SHA-256 matches.
 """
 
 import base64
@@ -23,9 +21,7 @@ def sha256_hex(data: bytes) -> str:
 
 
 def fixture_to_event(f: dict) -> Event:
-    """Build a canonical Event from a corpus fixture, verbatim (including
-    received_at, which a live connector leaves for Ajar to stamp) — bypassing
-    EventBuilder so byte-exact replay uses the raw fixture values."""
+    """Build an Event from a corpus fixture verbatim, received_at included, bypassing EventBuilder."""
     e = Event()
     e.schema_version = f["schemaVersion"]
     e.id = f["id"]
@@ -59,7 +55,6 @@ def main() -> int:
 
     failures = 0
 
-    # 1. verifying key derives from the TEST seed.
     got_vk = key.verifying_key.hex()
     if got_vk != vectors["verifyingKeyHex"]:
         print(f"FAIL verifying key: got {got_vk} want {vectors['verifyingKeyHex']}")
@@ -67,7 +62,6 @@ def main() -> int:
     else:
         print("ok   verifying key derives from TEST seed")
 
-    # 2. each fixture: canonical + sealed hashes.
     for name, expected in vectors["vectors"].items():
         fixture = json.loads((CONTRACT_DIR / "corpus" / f"{name}.json").read_text())
         event = fixture_to_event(fixture)

@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Render a governed event as the consumer's JSON: their field names on the
-//! left of the mapping, event paths on the right — the ingress `[mapping]`
-//! block, run in reverse. A path that names nothing present in a given event
-//! is omitted from that object rather than sent as null, so a consumer's
-//! presence checks mean what they say.
+//! Render a governed event as the consumer's JSON: consumer field names on the
+//! left of the mapping, event paths on the right. A path absent from an event
+//! is omitted from that object, not sent as null.
+
+use std::collections::BTreeMap;
 
 use ajar_connector::Event;
 use serde_json::{Map, Number, Value};
+
+use crate::label::{confidentiality_label, LabelConfig};
 
 /// The event paths a mapping may name.
 const PATHS: [&str; 9] = [
@@ -21,8 +23,8 @@ const PATHS: [&str; 9] = [
     "policy_tags",
 ];
 
-/// Refuse unknown paths at startup, not per event: a typo'd path would
-/// otherwise just silently never deliver that field.
+/// Checked at startup, so a mistyped path fails there instead of never
+/// delivering its field.
 pub fn validate_path(path: &str) -> anyhow::Result<()> {
     if PATHS.contains(&path) || path.starts_with("attr:") || path.starts_with("meta:") {
         return Ok(());
@@ -69,36 +71,31 @@ fn lookup(event: &Event, path: &str) -> Option<Value> {
 }
 
 /// What happens to governed content the mapping does not name. There is no
-/// silent-drop variant on purpose: a config file must not be able to launder a
-/// marked track into an unmarked JSON blob by leaving fields out.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+/// drop variant, so a mapping cannot strip content off a marked track.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Unmapped {
-    /// Deliver unmapped attributes and metadata under `unmapped`.
+    /// Deliver it under `unmapped`.
+    #[default]
     Include,
-    /// Refuse to deliver an event carrying content the mapping does not name;
-    /// the refusal is counted, never silent.
+    /// Refuse the whole event.
     Refuse,
 }
 
-/// One consumer object for one governed event, or `None` when `Unmapped::Refuse`
-/// rejects it.
+/// One consumer object for one governed event, or `None` when
+/// `Unmapped::Refuse` rejects it.
 ///
-/// Three things are present in EVERY delivered object, whatever the mapping
-/// says: the event id, the policy tags (classification and releasability
-/// markings), and the governance block recording that the egress signature
-/// verified. A mapping may RENAME them by mapping their paths; it cannot omit
-/// them — otherwise a field mapping could strip the markings off a governed
-/// track on its way out, which is the exact inversion of what this connector
-/// is for.
+/// The event id, the policy tags and the governance block are in every object.
+/// A mapping can rename the id and the tags by naming their paths; it cannot
+/// omit them.
 pub fn render(
     event: &Event,
-    fields: &std::collections::BTreeMap<String, String>,
+    fields: &BTreeMap<String, String>,
     unmapped: Unmapped,
-    label: Option<&crate::label::LabelConfig>,
+    label: Option<&LabelConfig>,
 ) -> Option<Value> {
     let mut out = Map::new();
-    let mut mapped_paths: Vec<&str> = Vec::new();
+    let mut mapped_paths: Vec<&str> = Vec::with_capacity(fields.len());
     for (consumer_name, path) in fields {
         mapped_paths.push(path.as_str());
         if let Some(v) = lookup(event, path) {
@@ -106,8 +103,6 @@ pub fn render(
         }
     }
 
-    // The unmappable-away trio, injected under default names when the mapping
-    // did not claim them under names of its own.
     if !mapped_paths.contains(&"id") {
         out.insert("event_id".into(), Value::String(event.id.clone()));
     }
@@ -122,27 +117,29 @@ pub fn render(
         serde_json::json!({ "egress_signature": "verified" }),
     );
 
-    // Opt-in 4774-shaped label, projected from the same tags delivered above;
-    // additive only, so consumers that never asked for it see no change.
     if let Some(cfg) = label {
-        if let Some(l) = crate::label::confidentiality_label(cfg, event) {
+        if let Some(l) = confidentiality_label(cfg, event) {
             out.insert("confidentiality_label".into(), l);
         }
     }
 
-    // Whatever governed content remains unnamed is included or refused; there
-    // is no way to make it vanish.
     let mut extra_attrs = Map::new();
     for a in &event.attributes {
-        let path = format!("attr:{}", a.key);
-        if !mapped_paths.contains(&path.as_str()) {
+        let name = a.key.as_str();
+        if !mapped_paths
+            .iter()
+            .any(|p| p.strip_prefix("attr:") == Some(name))
+        {
             extra_attrs.insert(a.key.clone(), Value::String(a.value.clone()));
         }
     }
     let mut extra_meta = Map::new();
     for m in &event.metadata {
-        let path = format!("meta:{}", m.key);
-        if !mapped_paths.contains(&path.as_str()) {
+        let name = m.key.as_str();
+        if !mapped_paths
+            .iter()
+            .any(|p| p.strip_prefix("meta:") == Some(name))
+        {
             extra_meta.insert(m.key.clone(), Value::String(m.value.clone()));
         }
     }
@@ -168,7 +165,6 @@ pub fn render(
 mod tests {
     use super::*;
     use ajar_connector::EventBuilder;
-    use std::collections::BTreeMap;
 
     fn mapping(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
         pairs
@@ -209,8 +205,7 @@ mod tests {
     }
 
     #[test]
-    fn markings_and_identity_cannot_be_mapped_away() {
-        // A mapping that names none of them still delivers all three.
+    fn id_and_markings_always_delivered() {
         let out = render(
             &event(),
             &mapping(&[("s", "attr:speed")]),
@@ -227,11 +222,14 @@ mod tests {
         );
     }
 
-    #[test]
-    fn the_label_is_additive_and_projected_from_the_delivered_tags() {
-        let cfg = crate::label::LabelConfig {
+    fn label_cfg() -> LabelConfig {
+        LabelConfig {
             policy_identifier: "TEST-POLICY".into(),
-        };
+        }
+    }
+
+    #[test]
+    fn label_is_added_alongside_the_tags() {
         let tagged = EventBuilder::new("coastal-radar", "mim:vessel")
             .new_id()
             .timestamp("2026-06-10T08:00:00Z")
@@ -239,23 +237,36 @@ mod tests {
             .policy_tag("rel:NATO")
             .build()
             .unwrap();
-        let out = render(&tagged, &mapping(&[]), Unmapped::Include, Some(&cfg)).unwrap();
-        // Everything a label-less consumer sees is still there, unchanged.
+        let out = render(
+            &tagged,
+            &mapping(&[]),
+            Unmapped::Include,
+            Some(&label_cfg()),
+        )
+        .unwrap();
         assert!(out["event_id"].is_string());
         assert!(out["policy_tags"].is_array());
-        // And the label is present, derived from those same tags.
         assert_eq!(
             out["confidentiality_label"]["policyIdentifier"],
             "TEST-POLICY"
         );
         assert_eq!(out["confidentiality_label"]["classification"], "SECRET");
-        // An untagged event under the same config gets no label and no error.
-        let out = render(&event(), &mapping(&[]), Unmapped::Include, Some(&cfg)).unwrap();
+    }
+
+    #[test]
+    fn untagged_event_gets_no_label() {
+        let out = render(
+            &event(),
+            &mapping(&[]),
+            Unmapped::Include,
+            Some(&label_cfg()),
+        )
+        .unwrap();
         assert!(out.get("confidentiality_label").is_none());
     }
 
     #[test]
-    fn markings_may_be_renamed_but_renaming_keeps_them() {
+    fn renamed_markings_are_not_duplicated() {
         let out = render(
             &event(),
             &mapping(&[
@@ -275,7 +286,7 @@ mod tests {
     }
 
     #[test]
-    fn unmapped_content_is_included_never_silently_dropped() {
+    fn unmapped_content_is_included() {
         let out = render(
             &event(),
             &mapping(&[("latitude", "lat")]),
@@ -288,7 +299,7 @@ mod tests {
     }
 
     #[test]
-    fn refuse_mode_rejects_rather_than_strips() {
+    fn refuse_rejects_unmapped_content() {
         assert!(render(
             &event(),
             &mapping(&[("latitude", "lat")]),
@@ -296,7 +307,10 @@ mod tests {
             None
         )
         .is_none());
-        // Naming everything satisfies it.
+    }
+
+    #[test]
+    fn refuse_accepts_fully_mapped_event() {
         assert!(render(
             &event(),
             &mapping(&[
@@ -311,7 +325,7 @@ mod tests {
     }
 
     #[test]
-    fn an_absent_field_is_omitted_not_null() {
+    fn absent_field_is_omitted() {
         let out = render(
             &event(),
             &mapping(&[
@@ -327,7 +341,7 @@ mod tests {
     }
 
     #[test]
-    fn a_typoed_path_is_refused_at_startup() {
+    fn unknown_path_is_refused() {
         assert!(validate_path("meta:anything").is_ok());
         assert!(validate_path("attrs:speed").is_err());
         assert!(validate_path("latitude").is_err());

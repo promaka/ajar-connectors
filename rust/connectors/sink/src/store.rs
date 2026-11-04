@@ -1,91 +1,77 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Persistence and the audit chain.
-//!
-//! Every accepted event is appended to a SQLite table as the exact bytes that
-//! arrived, plus the fields worth querying on. Each row also carries a link in a
-//! hash chain:
+//! Append-only SQLite store of verified events, hash-chained so a deleted,
+//! inserted, reordered or edited record breaks every link after it:
 //!
 //! ```text
 //! record_hash[n] = SHA-256( record_hash[n-1] ++ sealed[n] )
 //! record_hash[0] = SHA-256( 0x00 * 32       ++ sealed[0] )
 //! ```
-//!
-//! That gives two independent guarantees, and it is worth being precise about
-//! which is which. The **signature** on each event proves who produced it and
-//! that its contents are unaltered. The **chain** proves the record *set* is
-//! unaltered: deleting a row, inserting one, reordering two, or editing any
-//! stored byte all break every link from that point on. A signature alone cannot
-//! detect a deletion, because a removed event leaves nothing behind to check.
-//!
-//! Neither guarantee depends on trusting this process after the fact. [`audit`]
-//! recomputes both from the stored bytes, so a third party with the database file
-//! and the publishers' verifying keys can reach the same verdict independently.
 
 use std::collections::HashMap;
 use std::path::Path;
 
-use ajar_connector::{event::Event, verify, VerifyingKey};
+use ajar_connector::event::Event;
+use ajar_connector::{SealError, VerifyingKey, SEAL_SIGNATURE_LEN};
+use anyhow::Context;
 use prost::Message;
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension};
 use sha2::{Digest, Sha256};
 
 /// The hash a chain starts from, before any record exists.
 pub const GENESIS: [u8; 32] = [0u8; 32];
 
-/// An append-only, hash-chained store of verified events.
 pub struct Store {
     db: Connection,
 }
 
-/// What one appended record ended up as.
 pub struct Appended {
     /// 1-based position in the chain.
     pub seq: i64,
-    /// This record's link hash.
     pub record_hash: [u8; 32],
 }
 
-/// The result of re-verifying a stored chain.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Audit {
-    /// Every record verified and every link matched.
     Intact {
-        /// Number of records checked.
         records: i64,
-        /// The final link, which summarises the whole chain.
         head: [u8; 32],
     },
-    /// The chain is broken, or a record no longer verifies.
+    /// `seq` is the first record that failed.
     Broken {
-        /// Sequence number of the first record that failed.
         seq: i64,
-        /// What was wrong with it.
         reason: String,
     },
 }
 
+/// Why an incoming event was not recorded.
+#[derive(Debug, thiserror::Error)]
+pub enum Refusal {
+    #[error("not a decodable event: {0}")]
+    Undecodable(prost::DecodeError),
+    #[error("unregistered source {0}")]
+    UnregisteredSource(String),
+    #[error(transparent)]
+    Signature(#[from] SealError),
+}
+
 impl Store {
-    /// Open (creating if needed) the store at `path`.
+    /// Open the store at `path`, creating it and its directory if needed.
     pub fn open(path: &Path) -> anyhow::Result<Store> {
         if let Some(dir) = path.parent() {
             if !dir.as_os_str().is_empty() {
                 std::fs::create_dir_all(dir)?;
             }
         }
-        let db = Connection::open(path)?;
-        Self::init(db)
+        Self::init(Connection::open(path)?)
     }
 
-    /// Open an existing database without creating one. The audit and stats
-    /// commands use this: SQLite otherwise creates an empty file on open, and an
-    /// empty chain audits clean — so an auditor who mistypes the path would be
-    /// told the record is INTACT when they never looked at it.
+    /// Open an existing database without creating one. SQLite creates a file on
+    /// open, and an empty chain audits intact, so a mistyped path must fail.
     pub fn open_existing(path: &Path) -> anyhow::Result<Store> {
         if !path.is_file() {
-            anyhow::bail!("no database at {} — check the path", path.display());
+            anyhow::bail!("no database at {}, check the path", path.display());
         }
-        let db = Connection::open(path)?;
-        Self::init(db)
+        Self::init(Connection::open(path)?)
     }
 
     fn init(db: Connection) -> anyhow::Result<Store> {
@@ -120,26 +106,22 @@ impl Store {
     pub fn head(&self) -> anyhow::Result<[u8; 32]> {
         let hash: Option<Vec<u8>> = self
             .db
-            .query_row(
-                "SELECT record_hash FROM record ORDER BY seq DESC LIMIT 1",
-                [],
-                |r| r.get(0),
-            )
+            .prepare_cached("SELECT record_hash FROM record ORDER BY seq DESC LIMIT 1")?
+            .query_row([], |r| r.get(0))
             .optional()?;
-        Ok(match hash {
-            Some(bytes) => to_hash(&bytes)?,
-            None => GENESIS,
-        })
+        let Some(bytes) = hash else {
+            return Ok(GENESIS);
+        };
+        <[u8; 32]>::try_from(bytes.as_slice())
+            .with_context(|| format!("stored hash is {} bytes, expected 32", bytes.len()))
     }
 
-    /// Number of records held.
     pub fn count(&self) -> anyhow::Result<i64> {
         Ok(self
             .db
             .query_row("SELECT COUNT(*) FROM record", [], |r| r.get(0))?)
     }
 
-    /// Per-source counts, for a quick view of what a deployment is receiving.
     pub fn by_source(&self) -> anyhow::Result<Vec<(String, i64)>> {
         let mut stmt = self
             .db
@@ -150,11 +132,8 @@ impl Store {
         Ok(rows)
     }
 
-    /// Append an already-verified event, extending the chain.
-    ///
-    /// `sealed` must be the exact bytes received: they are what the signature
-    /// covers and what the chain hashes, so re-encoding here would make the store
-    /// unverifiable later.
+    /// Append an already-verified event, extending the chain. `sealed` is
+    /// stored as received: it is what the signature covers and the chain hashes.
     pub fn append(
         &mut self,
         sealed: &[u8],
@@ -165,35 +144,32 @@ impl Store {
         let record_hash = link(&prev, sealed);
         let loc = event.location.as_ref();
         let tx = self.db.transaction()?;
-        tx.execute(
+        tx.prepare_cached(
             r#"INSERT INTO record
                (received_at, source_id, event_id, entity_type, timestamp,
                 latitude, longitude, altitude_m, sealed, prev_hash, record_hash)
                VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)"#,
-            params![
-                received_at,
-                event.source_id,
-                event.id,
-                event.entity_type,
-                event.timestamp,
-                loc.map(|l| l.latitude),
-                loc.map(|l| l.longitude),
-                loc.map(|l| l.altitude_m),
-                sealed,
-                prev.as_slice(),
-                record_hash.as_slice(),
-            ],
-        )?;
+        )?
+        .execute(rusqlite::params![
+            received_at,
+            event.source_id,
+            event.id,
+            event.entity_type,
+            event.timestamp,
+            loc.map(|l| l.latitude),
+            loc.map(|l| l.longitude),
+            loc.map(|l| l.altitude_m),
+            sealed,
+            prev.as_slice(),
+            record_hash.as_slice(),
+        ])?;
         let seq = tx.last_insert_rowid();
         tx.commit()?;
         Ok(Appended { seq, record_hash })
     }
 
-    /// Re-verify the store from the beginning: every signature, every link.
-    ///
-    /// `keys` maps `source_id` to the verifying key it registered. A source with
-    /// no key is a failure rather than a skip, because an unverifiable record is
-    /// exactly what an audit exists to surface.
+    /// Re-verify the store from the beginning: every signature, every link. A
+    /// source with no key in `keys` breaks the audit rather than being skipped.
     pub fn audit(&self, keys: &HashMap<String, VerifyingKey>) -> anyhow::Result<Audit> {
         let mut stmt = self.db.prepare(
             "SELECT seq, source_id, sealed, prev_hash, record_hash FROM record ORDER BY seq",
@@ -211,7 +187,7 @@ impl Store {
             let stored_prev: Vec<u8> = row.get(3)?;
             let stored_hash: Vec<u8> = row.get(4)?;
 
-            // A gap means a row was deleted; SQLite will not reuse the rowid.
+            // A gap means a row was deleted; SQLite does not reuse the rowid.
             if seq != expected_seq {
                 return Ok(Audit::Broken {
                     seq: expected_seq,
@@ -231,21 +207,17 @@ impl Store {
                     reason: "record hash does not match its stored bytes".into(),
                 });
             }
-            match keys.get(&source_id) {
-                Some(key) => {
-                    if verify(&sealed, key).is_err() {
-                        return Ok(Audit::Broken {
-                            seq,
-                            reason: format!("signature does not verify for source {source_id}"),
-                        });
-                    }
-                }
-                None => {
-                    return Ok(Audit::Broken {
-                        seq,
-                        reason: format!("no verifying key configured for source {source_id}"),
-                    })
-                }
+            let Some(key) = keys.get(&source_id) else {
+                return Ok(Audit::Broken {
+                    seq,
+                    reason: format!("no verifying key configured for source {source_id}"),
+                });
+            };
+            if ajar_connector::verify(&sealed, key).is_err() {
+                return Ok(Audit::Broken {
+                    seq,
+                    reason: format!("signature does not verify for source {source_id}"),
+                });
             }
 
             expected_prev = recomputed;
@@ -260,7 +232,6 @@ impl Store {
     }
 }
 
-/// One link in the chain.
 fn link(prev: &[u8; 32], sealed: &[u8]) -> [u8; 32] {
     let mut hasher = Sha256::new();
     hasher.update(prev);
@@ -268,70 +239,66 @@ fn link(prev: &[u8; 32], sealed: &[u8]) -> [u8; 32] {
     hasher.finalize().into()
 }
 
-fn to_hash(bytes: &[u8]) -> anyhow::Result<[u8; 32]> {
-    bytes
-        .try_into()
-        .map_err(|_| anyhow::anyhow!("stored hash is {} bytes, expected 32", bytes.len()))
-}
-
-/// Verify a sealed event against a known source and decode it.
-///
-/// The `source_id` is taken from the decoded event rather than the NATS subject,
-/// so a publisher cannot claim one identity on the wire and another inside the
-/// signature. The event is decoded only after its signature verifies.
-pub fn accept(sealed: &[u8], keys: &HashMap<String, VerifyingKey>) -> Result<Event, String> {
-    // The source is inside the signed bytes, so read it from a provisional decode
-    // and then confirm the signature under that source's key.
-    let provisional =
-        Event::decode(&sealed[ajar_connector::SEAL_SIGNATURE_LEN.min(sealed.len())..])
-            .map_err(|e| format!("not a decodable event: {e}"))?;
+/// Verify a sealed event against its registered source and decode it. The
+/// source is read from the signed bytes, not the NATS subject, so a publisher
+/// cannot claim one identity on the wire and another inside the signature. The
+/// decoded bytes are exactly the ones the seal covers, so the event is returned
+/// only once the seal verifies.
+pub fn accept(sealed: &[u8], keys: &HashMap<String, VerifyingKey>) -> Result<Event, Refusal> {
+    let event = Event::decode(&sealed[SEAL_SIGNATURE_LEN.min(sealed.len())..])
+        .map_err(Refusal::Undecodable)?;
     let key = keys
-        .get(&provisional.source_id)
-        .ok_or_else(|| format!("unregistered source {}", provisional.source_id))?;
-    let canonical = verify(sealed, key).map_err(|e| e.to_string())?;
-    Event::decode(canonical).map_err(|e| format!("verified bytes are not an event: {e}"))
+        .get(&event.source_id)
+        .ok_or_else(|| Refusal::UnregisteredSource(event.source_id.clone()))?;
+    ajar_connector::verify(sealed, key)?;
+    Ok(event)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ajar_connector::{canonical_bytes, seal, EventBuilder, SigningKey};
+    use ajar_connector::{EventBuilder, SigningKey};
+
+    const SOURCE: &str = "acme-radar-1";
 
     fn key() -> SigningKey {
         SigningKey::from_bytes(&[0x47; 32])
     }
 
-    fn sealed_event(source: &str) -> (Vec<u8>, Event) {
-        let event = EventBuilder::new(source, "mim:aircraft")
+    fn sealed_event() -> (Vec<u8>, Event) {
+        let event = EventBuilder::new(SOURCE, "mim:aircraft")
             .new_id()
             .timestamp("2026-06-10T08:00:00Z")
             .location(26.4, 50.9, 1200.0)
             .build()
             .unwrap();
-        (seal(&canonical_bytes(&event), &key()), event)
+        (
+            ajar_connector::seal(&ajar_connector::canonical_bytes(&event), &key()),
+            event,
+        )
     }
 
-    fn keys(source: &str) -> HashMap<String, VerifyingKey> {
-        HashMap::from([(source.to_string(), key().verifying_key())])
+    fn keys() -> HashMap<String, VerifyingKey> {
+        HashMap::from([(SOURCE.to_string(), key().verifying_key())])
     }
 
-    fn store() -> (Store, tempfile::TempDir) {
+    fn store_with(records: usize) -> (Store, tempfile::TempDir) {
         let dir = tempfile::tempdir().unwrap();
-        let store = Store::open(&dir.path().join("sink.db")).unwrap();
-        (store, dir)
-    }
-
-    #[test]
-    fn appends_and_audits_an_intact_chain() {
-        let (mut store, _dir) = store();
-        for _ in 0..5 {
-            let (sealed, event) = sealed_event("acme-radar-1");
+        let mut store = Store::open(&dir.path().join("sink.db")).unwrap();
+        for _ in 0..records {
+            let (sealed, event) = sealed_event();
             store
                 .append(&sealed, &event, "2026-06-10T08:00:01Z")
                 .unwrap();
         }
+        (store, dir)
+    }
+
+    #[test]
+    fn intact_chain_audits_clean() {
+        let (store, _dir) = store_with(5);
         assert_eq!(store.count().unwrap(), 5);
-        match store.audit(&keys("acme-radar-1")).unwrap() {
+        match store.audit(&keys()).unwrap() {
             Audit::Intact { records, head } => {
                 assert_eq!(records, 5);
                 assert_ne!(head, GENESIS);
@@ -342,31 +309,25 @@ mod tests {
     }
 
     #[test]
-    fn each_link_covers_the_one_before_it() {
-        let (mut store, _dir) = store();
-        let (a, ea) = sealed_event("acme-radar-1");
+    fn each_link_covers_the_previous() {
+        let (mut store, _dir) = store_with(0);
+        let (a, ea) = sealed_event();
         let first = store.append(&a, &ea, "t").unwrap();
         assert_eq!(first.record_hash, link(&GENESIS, &a));
 
-        let (b, eb) = sealed_event("acme-radar-1");
+        let (b, eb) = sealed_event();
         let second = store.append(&b, &eb, "t").unwrap();
         assert_eq!(second.record_hash, link(&first.record_hash, &b));
     }
 
     #[test]
-    fn editing_a_stored_event_breaks_the_audit() {
-        let (mut store, _dir) = store();
-        for _ in 0..3 {
-            let (sealed, event) = sealed_event("acme-radar-1");
-            store.append(&sealed, &event, "t").unwrap();
-        }
-        // Tamper with the middle record's bytes, as an attacker with database
-        // access would.
+    fn edited_record_breaks_the_audit() {
+        let (store, _dir) = store_with(3);
         store
             .db
             .execute("UPDATE record SET sealed = X'00' WHERE seq = 2", [])
             .unwrap();
-        match store.audit(&keys("acme-radar-1")).unwrap() {
+        match store.audit(&keys()).unwrap() {
             Audit::Broken { seq, reason } => {
                 assert_eq!(seq, 2);
                 assert!(reason.contains("record hash"), "{reason}");
@@ -376,17 +337,13 @@ mod tests {
     }
 
     #[test]
-    fn deleting_a_record_breaks_the_audit() {
-        let (mut store, _dir) = store();
-        for _ in 0..3 {
-            let (sealed, event) = sealed_event("acme-radar-1");
-            store.append(&sealed, &event, "t").unwrap();
-        }
+    fn deleted_record_breaks_the_audit() {
+        let (store, _dir) = store_with(3);
         store
             .db
             .execute("DELETE FROM record WHERE seq = 2", [])
             .unwrap();
-        match store.audit(&keys("acme-radar-1")).unwrap() {
+        match store.audit(&keys()).unwrap() {
             Audit::Broken { seq, reason } => {
                 assert_eq!(seq, 2);
                 assert!(reason.contains("missing"), "{reason}");
@@ -396,10 +353,8 @@ mod tests {
     }
 
     #[test]
-    fn an_unregistered_source_fails_the_audit_rather_than_being_skipped() {
-        let (mut store, _dir) = store();
-        let (sealed, event) = sealed_event("acme-radar-1");
-        store.append(&sealed, &event, "t").unwrap();
+    fn unregistered_source_breaks_the_audit() {
+        let (store, _dir) = store_with(1);
         match store.audit(&HashMap::new()).unwrap() {
             Audit::Broken { reason, .. } => {
                 assert!(reason.contains("no verifying key"), "{reason}")
@@ -409,22 +364,29 @@ mod tests {
     }
 
     #[test]
-    fn accept_rejects_an_unregistered_source_and_a_bad_signature() {
-        let (sealed, _) = sealed_event("acme-radar-1");
-        assert!(accept(&sealed, &keys("acme-radar-1")).is_ok());
-        assert!(accept(&sealed, &HashMap::new())
-            .unwrap_err()
-            .contains("unregistered source"));
-
-        let mut tampered = sealed.clone();
-        let last = tampered.len() - 1;
-        tampered[last] ^= 0x01;
-        assert!(accept(&tampered, &keys("acme-radar-1")).is_err());
+    fn accept_takes_a_registered_source() {
+        let (sealed, event) = sealed_event();
+        assert_eq!(accept(&sealed, &keys()).unwrap(), event);
     }
 
     #[test]
-    fn an_empty_store_has_the_genesis_head() {
-        let (store, _dir) = store();
+    fn accept_refuses_an_unregistered_source() {
+        let (sealed, _) = sealed_event();
+        let err = accept(&sealed, &HashMap::new()).unwrap_err();
+        assert!(err.to_string().contains("unregistered source"), "{err}");
+    }
+
+    #[test]
+    fn accept_refuses_a_bad_signature() {
+        let (mut sealed, _) = sealed_event();
+        let last = sealed.len() - 1;
+        sealed[last] ^= 0x01;
+        assert!(accept(&sealed, &keys()).is_err());
+    }
+
+    #[test]
+    fn empty_store_has_the_genesis_head() {
+        let (store, _dir) = store_with(0);
         assert_eq!(store.head().unwrap(), GENESIS);
         assert_eq!(store.count().unwrap(), 0);
         assert!(matches!(
@@ -435,8 +397,6 @@ mod tests {
 
     #[test]
     fn open_existing_refuses_a_missing_database() {
-        // SQLite creates on open, and an empty chain audits clean — so a
-        // mistyped path must be an error, never an INTACT verdict.
         let dir = tempfile::tempdir().unwrap();
         let missing = dir.path().join("nope.db");
         assert!(Store::open_existing(&missing).is_err());

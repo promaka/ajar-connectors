@@ -1,19 +1,17 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Producer mode: packet -> credentials placed -> config written -> doctor
-//! preflight -> the right connector running. Zero questions, because every
-//! decision travels in the manifest.
+//! Producer mode: place the credentials, write the connector config from the
+//! manifest, run the doctor preflight, then exec the named connector.
 
 use std::path::PathBuf;
 
-use anyhow::{anyhow, bail, Context};
+use anyhow::Context;
 
 use crate::packet::Packet;
 
 pub struct Options {
-    /// The vendor-holds-key flow: place this seed at the manifest's path.
+    /// Copied to the manifest's signing_key_path (vendor-holds-key flow).
     pub signing_key: Option<PathBuf>,
-    /// Verify, place, configure and preflight, then PRINT the run command
-    /// instead of executing it (air-gapped prep, service files, tests).
+    /// Print the run command instead of executing it.
     pub no_exec: bool,
     pub timeout_secs: u64,
 }
@@ -21,7 +19,7 @@ pub struct Options {
 pub async fn run(packet: &Packet, opts: &Options) -> anyhow::Result<()> {
     let m = &packet.manifest;
     let protocol = m.protocol.as_deref().ok_or_else(|| {
-        anyhow!(
+        anyhow::anyhow!(
             "this producer packet names no protocol, so no connector can be chosen. \
              Ask the operator to re-issue it with --protocol (one of: tak-cot, \
              ais-nmea, asterix, mavlink, adsb, generic, klv, gmti, stanag4586, \
@@ -29,37 +27,35 @@ pub async fn run(packet: &Packet, opts: &Options) -> anyhow::Result<()> {
         )
     })?;
     let transport = m.transport.as_ref().ok_or_else(|| {
-        anyhow!("this producer packet carries no transport block; ask the operator to re-issue it")
+        anyhow::anyhow!(
+            "this producer packet carries no transport block; ask the operator to re-issue it"
+        )
     })?;
 
-    // The signing seed, by the agreed precedence: the flag, the file already
-    // at the manifest's path, or the seed the tar itself carried (mint flow).
-    let seed_rel = m
-        .keys
-        .signing_key_path
-        .as_deref()
-        .ok_or_else(|| anyhow!("this producer packet names no signing_key_path in keys{{}}"))?;
-    let seed_abs = packet.path(seed_rel);
+    // The seed is the flag's file, else whatever is already at the manifest's
+    // path (placed by hand, or carried in the tar by the mint flow).
+    let seed_rel = m.keys.signing_key_path.as_deref().ok_or_else(|| {
+        anyhow::anyhow!("this producer packet names no signing_key_path in keys{{}}")
+    })?;
+    let seed_path = packet.path(seed_rel);
     if let Some(src) = &opts.signing_key {
-        std::fs::copy(src, &seed_abs)
-            .with_context(|| format!("placing the signing seed at {}", seed_abs.display()))?;
+        std::fs::copy(src, &seed_path)
+            .with_context(|| format!("placing the signing seed at {}", seed_path.display()))?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&seed_abs, std::fs::Permissions::from_mode(0o600))?;
+            std::fs::set_permissions(&seed_path, std::fs::Permissions::from_mode(0o600))?;
         }
     }
-    if !seed_abs.exists() {
-        bail!(
+    if !seed_path.exists() {
+        anyhow::bail!(
             "no signing seed: pass --signing-key <path>, or place your registered seed \
              at {} first. This is the key whose public half your operator registered; \
              only a packet minted with --mint carries it inside.",
-            seed_abs.display()
+            seed_path.display()
         );
     }
 
-    // The connector config, synthesized from the manifest. Absolute paths
-    // throughout, so the connector runs from anywhere.
     let subject_prefix = match &m.subject {
         Some(s) => s
             .strip_suffix(&format!(".{}", m.source_id))
@@ -71,7 +67,11 @@ pub async fn run(packet: &Packet, opts: &Options) -> anyhow::Result<()> {
     cfg.insert("source_id".into(), m.source_id.clone().into());
     cfg.insert("nats_url".into(), m.nats_url.clone().into());
     cfg.insert("subject_prefix".into(), subject_prefix.into());
-    cfg.insert("signing_key_path".into(), seed_abs.to_str().unwrap().into());
+    // The config's paths are absolute only if the unpack directory is.
+    cfg.insert(
+        "signing_key_path".into(),
+        seed_path.to_str().unwrap().into(),
+    );
     let transport_toml: toml::Value = serde_json::from_value::<toml::Value>(transport.clone())
         .context("the manifest's transport block does not convert to config TOML")?;
     cfg.insert("transport".into(), transport_toml);
@@ -86,7 +86,6 @@ pub async fn run(packet: &Packet, opts: &Options) -> anyhow::Result<()> {
     std::fs::write(&config_path, toml::to_string_pretty(&cfg)?)
         .with_context(|| format!("writing {}", config_path.display()))?;
 
-    // mTLS environment, when the packet carries the triple.
     let tls_env = mtls_env(packet);
     for (k, v) in &tls_env {
         std::env::set_var(k, v);
@@ -97,8 +96,6 @@ pub async fn run(packet: &Packet, opts: &Options) -> anyhow::Result<()> {
         config_path.display()
     );
 
-    // The doctor is the trust moment: the same preflight a human would run,
-    // run for them, against the exact config the connector will use.
     let findings = ajar_doctor::run(&ajar_doctor::Options {
         config_path: Some(config_path.to_str().unwrap().to_string()),
         sources_dir: None,
@@ -108,7 +105,7 @@ pub async fn run(packet: &Packet, opts: &Options) -> anyhow::Result<()> {
     let (report, healthy) = ajar_doctor::report::render(&findings);
     print!("{report}");
     if !healthy {
-        bail!("the preflight failed; fix the first FAIL above and run ajar-up again");
+        anyhow::bail!("the preflight failed; fix the first FAIL above and run ajar-up again");
     }
 
     let binary = locate_binary(&format!("ajar-{protocol}"))?;
@@ -126,9 +123,8 @@ pub async fn run(packet: &Packet, opts: &Options) -> anyhow::Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
-        // exec replaces this process: the connector IS the command the
-        // operator sees in ps, signals land where they should, and ajar-up
-        // leaves nothing running behind it.
+        // exec, so the connector is the process the operator sees in ps and
+        // receives its signals.
         Err(std::process::Command::new(&binary)
             .arg(&config_path)
             .exec()
@@ -143,7 +139,7 @@ pub async fn run(packet: &Packet, opts: &Options) -> anyhow::Result<()> {
     }
 }
 
-/// The AJAR_TLS_* triple from the packet's key paths, when all present.
+/// The AJAR_TLS_* triple from the packet's key paths, when all three exist.
 pub fn mtls_env(packet: &Packet) -> Vec<(&'static str, String)> {
     let k = &packet.manifest.keys;
     match (&k.ca_cert_path, &k.mtls_cert_path, &k.mtls_key_path) {
@@ -168,8 +164,7 @@ pub fn mtls_env(packet: &Packet) -> Vec<(&'static str, String)> {
     }
 }
 
-/// Find the connector binary: beside ajar-up first (the tarball layout),
-/// then PATH.
+/// The connector binary beside ajar-up (the tarball layout), else on PATH.
 fn locate_binary(name: &str) -> anyhow::Result<PathBuf> {
     if let Ok(me) = std::env::current_exe() {
         if let Some(dir) = me.parent() {
@@ -187,7 +182,7 @@ fn locate_binary(name: &str) -> anyhow::Result<PathBuf> {
             }
         }
     }
-    bail!(
+    anyhow::bail!(
         "{name} is not beside ajar-up or on PATH. Download the {name} release for \
          your platform and unpack it next to ajar-up, or put {name} on PATH."
     )

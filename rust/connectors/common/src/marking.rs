@@ -1,41 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Security marking, stamped on every event a connector publishes.
-//!
-//! A site that cannot mark its data cannot use the clearance machinery it is
-//! paying for: Core's policy engine reads `class:`, `rel:`, `policy:` and
-//! `caveat:` tags off each event, and until now nothing on the way in set them,
-//! so every event from a stock connector arrived unclassified. The `[marking]`
-//! block is the operator's assertion about a feed, applied by the shared
-//! runtime before sealing so the tags are inside the signature. That is the
-//! difference between this and marking applied after ingest: a tag bound at
-//! origin is what the provenance statement claims, a tag added later is not.
-//!
-//! ```toml
-//! [marking]
-//! classification = "restricted"     # unclassified | restricted | confidential | secret | top-secret
-//! releasable_to = ["GBR", "ITA"]    # ISO 3166-1 alpha-3, or a group such as NATO
-//! policy = "NATO"                   # whose classification scheme the level is in
-//! caveats = ["EXERCISE"]
-//! ```
-//!
-//! Every field is optional and the block may name any one of them: a synthetic
-//! feed marks itself `caveats = ["EXERCISE"]` with no classification at all, so
-//! a training track carries the caveat inside its signature wherever it goes.
-//!
-//! The config is a floor, not a ceiling. Every event leaves with exactly one
-//! `class:` tag, the higher of what the wire carried and what the operator
-//! set, so a feed's own marking can raise the level but never lower it. Other
-//! tags the wire carried stay beside the operator's.
-//!
-//! Validation is at load and fails closed. Core ignores a tag it does not
-//! recognise, so a misspelt level is refused rather than shipped.
+//! Security marking: the operator's `[marking]` block, stamped on every event
+//! before sealing so the `class:`, `rel:`, `policy:` and `caveat:` tags Core's
+//! policy engine reads are inside the signature. The configured level is a
+//! floor: a wire marking can raise it, never lower it.
 
 use ajar_connector::Event;
 use serde::Deserialize;
 
-/// The canonical classification levels, lowest first. Core parses aliases
-/// (`u`, `unclass`, `ts`, `topsecret`, any case) and canonicalises to these; a
-/// connector emits the canonical form so two sites' events compare as strings.
+/// The canonical classification levels, lowest first. Connectors emit these
+/// so two sites' events compare as strings.
 pub const LEVELS: [&str; 5] = [
     "unclassified",
     "restricted",
@@ -45,80 +18,57 @@ pub const LEVELS: [&str; 5] = [
 ];
 
 /// The most tags one `[marking]` block may produce. The stamp runs after the
-/// builder's own tag limit has been checked, so this keeps the total under
-/// that limit with room for what a wire format adds.
+/// builder's tag limit is checked, so this leaves room under it for wire tags.
 pub const MAX_CONFIG_TAGS: usize = 16;
 
-/// The `[marking]` block as written.
 #[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct MarkingConfig {
-    /// Classification level. Any case, and the aliases Core accepts.
+    /// Any case, and the aliases Core accepts.
     #[serde(default)]
     pub classification: Option<String>,
-    /// Who the events are releasable to: country trigrams or a group name.
+    /// Country trigrams or a group name.
     #[serde(default)]
     pub releasable_to: Vec<String>,
     /// The classification policy the level belongs to (`NATO`, `UK`).
     #[serde(default)]
     pub policy: Option<String>,
-    /// Handling caveats (`NOFORN`, `EXERCISE`).
     #[serde(default)]
     pub caveats: Vec<String>,
 }
 
-/// Why a `[marking]` block was refused.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, thiserror::Error)]
 pub enum MarkingError {
-    /// The block exists but asserts nothing.
+    #[error(
+        "[marking] is present but sets nothing; give it a classification, \
+         releasable_to, policy or caveats, or remove the block"
+    )]
     Empty,
-    /// A classification outside the five levels and their aliases.
+    #[error(
+        "[marking] classification {0:?} is not a level; use one of {levels} (any case; \
+         Core would ignore the tag and the events would ship unclassified)",
+        levels = LEVELS.join(", ")
+    )]
     UnknownLevel(String),
-    /// A releasability, policy or caveat token that is empty or not plain
-    /// ASCII letters and digits.
+    /// A releasability, policy or caveat token that is empty, too long or not
+    /// ASCII letters, digits, `-` or `_`.
+    #[error(
+        "[marking] {field} entry {value:?} must be letters, digits, '-' or '_' \
+         with no spaces (a country trigram such as GBR, or a name such as NATO)"
+    )]
     BadToken { field: &'static str, value: String },
-    /// More tags than [`MAX_CONFIG_TAGS`].
+    #[error("[marking] produces {0} tags; at most {MAX_CONFIG_TAGS} are allowed")]
     TooMany(usize),
 }
 
-impl std::fmt::Display for MarkingError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            MarkingError::Empty => write!(
-                f,
-                "[marking] is present but sets nothing; give it a classification, \
-                 releasable_to, policy or caveats, or remove the block"
-            ),
-            MarkingError::UnknownLevel(v) => write!(
-                f,
-                "[marking] classification {v:?} is not a level; use one of {} (any case; \
-                 Core would ignore the tag and the events would ship unclassified)",
-                LEVELS.join(", ")
-            ),
-            MarkingError::BadToken { field, value } => write!(
-                f,
-                "[marking] {field} entry {value:?} must be letters, digits, '-' or '_' \
-                 with no spaces (a country trigram such as GBR, or a name such as NATO)"
-            ),
-            MarkingError::TooMany(n) => write!(
-                f,
-                "[marking] produces {n} tags; at most {MAX_CONFIG_TAGS} are allowed"
-            ),
-        }
-    }
-}
-
-impl std::error::Error for MarkingError {}
-
-/// A validated marking: the tags it stamps, in a fixed order, so two
-/// connectors with the same block sign identical bytes for identical events.
+/// A validated marking: its tags in a fixed order, so two connectors with the
+/// same block sign identical bytes for identical events.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Marking {
     tags: Vec<String>,
 }
 
 impl Marking {
-    /// Validate a block into the tags it will stamp.
     pub fn from_config(cfg: &MarkingConfig) -> Result<Marking, MarkingError> {
         let mut tags: Vec<String> = Vec::new();
         let mut push = |tag: String| {
@@ -149,15 +99,13 @@ impl Marking {
         Ok(Marking { tags })
     }
 
-    /// The tags this marking stamps, in emission order.
     pub fn tags(&self) -> &[String] {
         &self.tags
     }
 
     /// Stamp the marking on an event. The classification resolves to one
-    /// `class:` tag, the higher of the wire's and the operator's; every other
-    /// tag the wire placed stays, and a tag already present is not doubled,
-    /// so applying twice is harmless.
+    /// `class:` tag, the higher of the wire's and the operator's; other wire
+    /// tags stay, and no tag is doubled, so applying twice is harmless.
     pub fn apply(&self, event: &mut Event) {
         let floor = self
             .tags
@@ -170,9 +118,7 @@ impl Marking {
                 .policy_tags
                 .iter()
                 .filter_map(ranked)
-                .chain(std::iter::once(floor))
-                .max_by_key(|l| rank(l))
-                .expect("the floor is always present");
+                .fold(floor, |a, b| if rank(b) > rank(a) { b } else { a });
             // One class tag, where the wire's was or first, so a consumer that
             // reads the first class tag sees the resolved level.
             let at = event
@@ -199,8 +145,8 @@ impl std::fmt::Display for Marking {
 }
 
 /// The canonical level for a classification as an operator or a wire format
-/// spells it: case-insensitive, hyphen, underscore or space between words, and
-/// the short forms Core also accepts.
+/// spells it: any case, hyphen, underscore or space between words, and Core's
+/// short forms.
 pub fn classification_level(raw: &str) -> Option<&'static str> {
     let lower = raw.trim().to_ascii_lowercase().replace(['_', '-'], " ");
     let i = match lower.as_str() {
@@ -219,20 +165,13 @@ fn rank(level: &str) -> usize {
     LEVELS.iter().position(|l| *l == level).unwrap_or(0)
 }
 
-/// The tags for a 4774 confidentiality label as STANAG 4676 carries it: the
-/// classification string and, when the message states it, the policy
-/// identifier.
+/// The tags for a STANAG 4774 confidentiality label as STANAG 4676 carries it.
 ///
-/// The policy identifier is authoritative when present. When the message has
-/// none, the label's own wording decides: `NATO SECRET` is a level under the
-/// NATO policy and `COSMIC TOP SECRET` is NATO's name for its top level, so
-/// both carry `policy:NATO`; a bare `SECRET` carries no policy.
-///
-/// A non-empty label the normaliser cannot read is stamped at the top level.
-/// Under-classifying a track is the failure the marking exists to prevent;
-/// over-classifying one until the spelling is mapped is visible and safe. The
-/// raw string belongs in metadata regardless, so nothing is lost. An empty
-/// label yields nothing.
+/// A stated policy identifier wins. Without one, `NATO <level>` and
+/// `COSMIC TOP SECRET` carry `policy:NATO` and a bare level carries none. A
+/// non-empty label that does not normalise is stamped `top-secret`, since
+/// over-classifying is visible and under-classifying is not. An empty label
+/// yields nothing.
 pub fn wire_classification(raw: &str, policy_id: Option<&str>) -> Vec<String> {
     let upper = raw.trim().to_ascii_uppercase().replace(['_', '-'], " ");
     if upper.is_empty() {
@@ -256,9 +195,8 @@ pub fn wire_classification(raw: &str, policy_id: Option<&str>) -> Vec<String> {
     tags
 }
 
-/// A releasability, policy or caveat token: trimmed, uppercased (Core
-/// uppercases `rel:` and `caveat:` on parse, and every policy id it names is
-/// uppercase), and restricted to what a tag can carry unambiguously.
+/// A releasability, policy or caveat token: trimmed, uppercased as Core reads
+/// it, and restricted to what a tag can carry unambiguously.
 fn token(field: &'static str, raw: &str) -> Result<String, MarkingError> {
     let t = raw.trim().to_ascii_uppercase();
     let ok = !t.is_empty()
@@ -285,7 +223,7 @@ mod tests {
     }
 
     #[test]
-    fn the_documented_block_produces_the_tags_core_reads_in_a_fixed_order() {
+    fn block_yields_tags_in_a_fixed_order() {
         let m = Marking::from_config(&block(
             r#"classification = "restricted"
                releasable_to = ["GBR", "ITA"]
@@ -310,15 +248,13 @@ mod tests {
     }
 
     #[test]
-    fn a_caveat_alone_is_a_valid_marking() {
-        // The first consumer: a synthetic feed marks itself EXERCISE and
-        // asserts no classification at all.
+    fn caveat_alone_is_a_valid_marking() {
         let m = Marking::from_config(&block(r#"caveats = ["EXERCISE"]"#)).unwrap();
         assert_eq!(m.tags(), ["caveat:EXERCISE"]);
     }
 
     #[test]
-    fn levels_are_canonicalised_from_any_spelling_core_accepts() {
+    fn levels_canonicalise_from_any_spelling() {
         for (raw, want) in [
             ("SECRET", "secret"),
             ("Top Secret", "top-secret"),
@@ -333,7 +269,7 @@ mod tests {
     }
 
     #[test]
-    fn an_unknown_level_is_refused_and_names_the_five() {
+    fn unknown_level_is_refused_naming_the_levels() {
         let e = Marking::from_config(&block(r#"classification = "official""#)).unwrap_err();
         assert_eq!(e, MarkingError::UnknownLevel("official".into()));
         let msg = e.to_string();
@@ -344,7 +280,7 @@ mod tests {
     }
 
     #[test]
-    fn an_empty_block_is_refused_rather_than_silently_asserting_nothing() {
+    fn empty_block_is_refused() {
         assert_eq!(
             Marking::from_config(&block("")).unwrap_err(),
             MarkingError::Empty
@@ -376,7 +312,7 @@ mod tests {
     }
 
     #[test]
-    fn a_repeated_party_is_stamped_once_and_too_many_is_refused() {
+    fn repeated_party_once_and_too_many_refused() {
         let m = Marking::from_config(&block(r#"releasable_to = ["GBR", "ITA", "GBR"]"#)).unwrap();
         assert_eq!(m.tags(), ["rel:GBR", "rel:ITA"]);
         let many: Vec<String> = (0..MAX_CONFIG_TAGS + 1)
@@ -388,7 +324,7 @@ mod tests {
     }
 
     #[test]
-    fn a_config_is_a_floor_the_wire_can_raise_but_not_lower() {
+    fn config_level_is_a_floor_for_the_wire() {
         let m = Marking::from_config(&block(
             "classification = \"restricted\"\ncaveats = [\"EXERCISE\"]",
         ))
@@ -400,36 +336,41 @@ mod tests {
             }
             b.build().unwrap()
         };
-        // The wire is higher: its level stands, in its place, once.
         let mut ev = wire(&["class:secret", "policy:NATO", "caveat:EXERCISE"]);
         m.apply(&mut ev);
         assert_eq!(
             ev.policy_tags,
-            ["class:secret", "policy:NATO", "caveat:EXERCISE"]
+            ["class:secret", "policy:NATO", "caveat:EXERCISE"],
+            "a higher wire level stands"
         );
-        // The wire is lower: the operator's floor replaces it.
         let mut ev = wire(&["class:unclassified", "policy:NATO"]);
         m.apply(&mut ev);
         assert_eq!(
             ev.policy_tags,
-            ["class:restricted", "policy:NATO", "caveat:EXERCISE"]
+            ["class:restricted", "policy:NATO", "caveat:EXERCISE"],
+            "a lower wire level is raised to the floor"
         );
-        // No wire marking: the operator's, in order.
         let mut ev = wire(&[]);
         m.apply(&mut ev);
         assert_eq!(ev.policy_tags, ["class:restricted", "caveat:EXERCISE"]);
-        // Applying again changes nothing.
         m.apply(&mut ev);
-        assert_eq!(ev.policy_tags, ["class:restricted", "caveat:EXERCISE"]);
-        // A caveat-only marking leaves the wire's level alone.
+        assert_eq!(
+            ev.policy_tags,
+            ["class:restricted", "caveat:EXERCISE"],
+            "applying twice changes nothing"
+        );
         let only = Marking::from_config(&block(r#"caveats = ["EXERCISE"]"#)).unwrap();
         let mut ev = wire(&["class:secret"]);
         only.apply(&mut ev);
-        assert_eq!(ev.policy_tags, ["class:secret", "caveat:EXERCISE"]);
+        assert_eq!(
+            ev.policy_tags,
+            ["class:secret", "caveat:EXERCISE"],
+            "a caveat-only marking leaves the wire level alone"
+        );
     }
 
     #[test]
-    fn wire_labels_normalise_to_the_tags_core_reads() {
+    fn wire_labels_normalise_to_tags() {
         let w = |raw: &str, pid: Option<&str>| wire_classification(raw, pid);
         assert_eq!(
             w("NATO UNCLASSIFIED", None),
@@ -444,13 +385,11 @@ mod tests {
         assert_eq!(w("SECRET", None), ["class:secret"]);
         assert_eq!(w("Top Secret", None), ["class:top-secret"]);
         assert_eq!(w("TOP_SECRET", None), ["class:top-secret"]);
-        // The message's policy identifier is authoritative when present.
         assert_eq!(w("SECRET", Some("UK")), ["class:secret", "policy:UK"]);
         assert_eq!(
             w("NATO SECRET", Some("TEST")),
             ["class:secret", "policy:TEST"]
         );
-        // A spelling nobody mapped is stamped at the top, never left open.
         assert_eq!(w("PROTECTED B", None), ["class:top-secret"]);
         assert_eq!(
             w("SECRET//NOFORN", Some("US")),

@@ -110,16 +110,16 @@ Your process, your deployment. The SDK builds, seals and verifies. You publish.
 package registries in step 2. C++ builds from source:
 
 ```bash
-git clone --depth 1 --branch v0.6.5 https://github.com/promaka/ajar-connectors
+git clone --depth 1 --branch v0.6.6 https://github.com/promaka/ajar-connectors
 ```
 
 **Step 2. Add it to your build.**
 
 | Language | Command |
 |---|---|
-| Rust | `ajar-connector = "0.6.5"` |
-| Python | `pip install ajar-connector==0.6.5` |
-| Go | `go get github.com/promaka/ajar-connectors/go/ajarconnector@v0.6.5` |
+| Rust | `ajar-connector = "0.6.6"` |
+| Python | `pip install ajar-connector==0.6.6` |
+| Go | `go get github.com/promaka/ajar-connectors/go/ajarconnector@v0.6.6` |
 | C++ | `cmake -S cpp -B build && cmake --build build && cmake --install build --prefix /opt/ajar` |
 
 C++ then links with:
@@ -182,7 +182,7 @@ The prebuilt connectors set it automatically.
 **The same three steps in Rust:**
 
 ```rust
-use ajar_connector::{canonical_bytes, seal, EventBuilder, SigningKey};
+use ajar_connector::{EventBuilder, SigningKey};
 
 let seed: [u8; 32] = std::fs::read("acme-radar-1.seed")?.try_into().expect("a 32-byte seed");
 let key = SigningKey::from_bytes(&seed);
@@ -196,7 +196,7 @@ let event = EventBuilder::new("acme-radar-1", "mim:aircraft")
     .payload(frame)
     .build()?;
 
-let sealed = seal(&canonical_bytes(&event), &key);
+let sealed = ajar_connector::seal(&ajar_connector::canonical_bytes(&event), &key);
 ```
 
 **And in Go:**
@@ -290,6 +290,9 @@ group = "239.2.3.1"
 
 Any connector runs on any transport. The full list is in
 [section 10](#transport-is-orthogonal-to-protocol).
+
+A second feed is a second copy of this file with its own `source_id`, key and
+`[transport]`, run as a second process. Nothing is rebuilt.
 
 **Step 4. Run it once locally.** The seed file from section 1 must exist at
 the path you gave; nothing else is needed yet.
@@ -475,7 +478,7 @@ architecture. Add `--platform linux/arm64` for an ARM edge box.
 ```bash
 docker build -f deploy/docker/Dockerfile.build \
   --build-arg WSDIR=rust/connectors --build-arg PKG=ajar-asterix \
-  -t ajar-connector-asterix:0.6.5 .
+  -t ajar-connector-asterix:0.6.7 .
 ```
 
 A connector you wrote in section 6a is the same command with its crate name,
@@ -487,7 +490,7 @@ A connector you wrote in section 6a is the same command with its crate name,
 docker run \
   -v ./asterix.toml:/etc/ajar/connector.toml:ro \
   -v ./acme-radar-1.seed:/etc/ajar/seed:ro \
-  ajar-connector-asterix:0.6.5 /etc/ajar/connector.toml
+  ajar-connector-asterix:0.6.7 /etc/ajar/connector.toml
 ```
 
 Set `signing_key_path = "/etc/ajar/seed"` in the mounted config. Prebuilt
@@ -513,7 +516,7 @@ kubectl create secret generic radar-seed --from-file=seed=acme-radar-1.seed
 
 helm install radar deploy/helm/connector \
   --set connector.name=asterix \
-  --set image.tag=0.6.5 \
+  --set image.tag=0.6.7 \
   --set signingSeed.existingSecret=radar-seed \
   --set-file connector.config=./asterix.toml
 ```
@@ -529,9 +532,14 @@ Set `AJAR_HEALTH_ADDR=0.0.0.0:9090` on any method. Gives `/healthz` and
 `/metrics` with counters for received, published, rejected and
 backpressure-dropped events, the spool (`connector_spooled_total`,
 `connector_drained_total`, `connector_spool_failed_total`,
-`connector_spool_corrupt_total`, `connector_spool_dropped_segments_total`)
-and any connector-specific counters (e.g. `asterix_test_targets_total`,
-`ttm_non_tracking_total`).
+`connector_spool_corrupt_total`, `connector_spool_dropped_segments_total`),
+`connector_ungoverned_total` (events carrying an attribute their entity type
+does not govern) and any connector-specific counters (e.g.
+`asterix_test_targets_total`, `ttm_non_tracking_total`).
+
+Sustained growth in `connector_spooled_total`, or in
+`connector_dropped_backpressure_total` without a spool, means the link is the
+bottleneck, not the source.
 
 ### 7e. Intermittent links (store-and-forward)
 
@@ -567,6 +575,23 @@ failed appends, and segments dropped at the bound (the bound is enforced
 per segment, so reconcile loss against
 `connector_spool_dropped_segments_total`, not an event count).
 
+The spool protects against link loss. Against power loss it is best-effort:
+segments reach the disk on rotation and shutdown, not on every append, and a torn
+last record is truncated on reopen.
+
+A crash between a replay and its cursor update replays that record, and a lost
+cursor replays from the oldest byte. The broker drops those duplicates inside the
+duplicate window on Core's ingest stream, 120 s by Core's setting. Beyond the
+window a duplicate is stored again and shows in Core's audit plane.
+
+Keep `drain_rate` under the registered rate because Core's per-source token
+bucket acknowledges and discards over-rate events, and live traffic shares that
+bucket. The cursor has already advanced on the broker's acknowledgement, so a
+discarded event is not replayed.
+
+The bound drops the oldest because the newest observations are worth the most in
+a tactical picture, and hours-old events already render stale downstream.
+
 ### 7f. Mark what you publish
 
 Core's clearance rules read a marking off each event: a classification, who
@@ -596,13 +621,19 @@ flows.
 ### 7g. When nothing flows
 
 `ajar-doctor connector.toml` checks the setup step by step (config, signing
-key, marking, registration, endpoint, TLS, clock) and says which onboarding step is
+key, spool, marking, transport, registration, endpoint, TLS, clock) and says which onboarding step is
 broken and what to do, reading the same config and `AJAR_TLS_*` environment
 the connector uses. With no config file it reads `NATS_URL`, `AJAR_SOURCE_ID`
 and `AJAR_SIGNING_SEED` instead, so a connector embedded in your own code
 (option A) is diagnosed with zero files. Read-only on the wire, so it is safe
 against a production endpoint. Ships in the release binaries next to the
 connectors.
+
+The transport step joins the multicast group, opens the serial device, probes
+the DDS domain or parses the pcap capture the config names. With a failover
+`nats_url` it dials every endpoint and warns about a standby that does not
+answer. Exit status is 0 when no check fails, 1 when one does, and 2 on a usage
+error.
 
 ---
 
@@ -617,9 +648,23 @@ cargo build --release --manifest-path rust/Cargo.toml -p conformance --bin ajar-
 ```
 
 **Step 2. Write an adapter** that reads a fixture on stdin and writes raw bytes
-on stdout. Three lines. Copy
+on stdout. Copy
 [the Python one](python/examples/conformance_adapter.py) or
 [the Rust one](rust/examples/conformance-adapter/).
+
+The harness runs it once per fixture in each of two modes, passed as the last
+argument:
+
+- `canonical`: write the event's canonical bytes.
+- `sealed`: write the 64-byte signature followed by the canonical bytes. The
+  32-byte test seed arrives as hex in `AJAR_TEST_SIGNING_SEED`.
+
+A fixture is an event as JSON: camelCase field names, with `payload` in base64.
+Keep every field as given, including `receivedAt`. A live connector leaves that
+field for Core to stamp, but the vectors hash the fixture as Core did. The SDK
+builders have no setter for it, so construct the event directly.
+
+Only stdout is hashed. Stderr is shown when a fixture fails.
 
 **Step 3. Run it.**
 
@@ -772,14 +817,15 @@ stations and TAK devices.
 ### Transport is orthogonal to protocol
 
 Parsing and delivery are separate concerns. No connector hard-codes how bytes
-arrive, so any connector runs on any transport by config:
+arrive, so any connector runs on any transport by config. Every key, default and
+limit is in [docs/transports.md](docs/transports.md).
 
 | `kind` | Method | Notes |
 |--------|--------|-------|
 | `udp-multicast`, `udp` | UDP datagrams | one packet per frame (SA broadcast) |
 | `tcp-client` | TCP stream (dial out) | `framing = "line"`, `"length-delimited"` (2-byte big-endian prefix) or `"length-u32le"` (4-byte little-endian prefix, as SAPIENT frames), auto-reconnect |
 | `tcp-server` | TCP listen | sources that push to a configured address; multiple pushers |
-| `http-server` | HTTP(S) listen (webhooks) | sources that only POST to a URL; optional TLS and client certs; refuses with 503 when saturated so the sender retries |
+| `http-server` | HTTP(S) listen (webhooks) | sources that only POST to a URL; optional TLS and client certs; refuses with 503 when saturated so the sender retries. Without TLS, data is readable on the network: use only on a physically protected segment |
 | `file` | tail a file | follows appends, handles rotation; `framing` as for TCP, so a binary capture replays from the start |
 | `dir` | watch a drop directory | batch file drops (SFTP exports); reads files once settled |
 | `exec` | run a CLI tool | reads its stdout; wraps any vendor binary |
@@ -878,7 +924,7 @@ The SDK API (`EventBuilder`, `seal` and the rest) is a convenience for building
 those bytes. If it changes, only a deliberate rebuild is affected, never a
 running binary.
 
-Pin the released tag `v0.6.5`, not a branch.
+Pin the released tag `v0.6.6`, not a branch.
 
 Three things carry a version, and each moves on its own:
 

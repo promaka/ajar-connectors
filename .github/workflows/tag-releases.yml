@@ -1,17 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
-#
-# Merging a version bump is the release. On every push to main, each released
-# package whose current version is not tagged yet (scripts/release-tags.sh) is
-# tagged <name>-vX.Y.Z and released by release-connector.yml. The human gate is
-# the review of the PR that bumps the version.
-#
-# It compares against the existing tags rather than the previous commit, so a
-# run that stopped before tagging (cancelled, or refused by the guard) is caught
-# up by the next push, or by running this workflow from the Actions tab. Once a
-# tag exists, a failed build is re-run with release-connector instead.
-#
-# A tag pushed with GITHUB_TOKEN starts no other workflow, so this calls the
-# release workflow directly rather than relying on the tag push to start it.
+# Tag every released package whose version is untagged on main and release it.
+# A tag pushed with GITHUB_TOKEN starts no workflow, so release-connector.yml is called.
 name: tag-releases
 
 on:
@@ -42,7 +31,7 @@ jobs:
         with:
           fetch-depth: 0
       - id: tags
-        name: Tag every released package whose version is not tagged yet
+        name: Tag untagged versions
         run: |
           set -euo pipefail
           tags="$(./scripts/release-tags.sh)"
@@ -55,8 +44,7 @@ jobs:
             git tag "$t" "$GITHUB_SHA"
             refs+=("refs/tags/$t")
           done
-          # All or none: a tag pushed without its release would be skipped by
-          # every later run.
+          # Atomic: a tag pushed without its release is skipped by every later run.
           if [ "${#refs[@]}" -gt 0 ]; then
             git push --atomic origin "${refs[@]}"
             echo "tagged ${refs[*]}"

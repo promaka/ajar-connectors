@@ -126,7 +126,7 @@ The whole connector is a loop of four steps. The SDK gives you 2–4; you write 
 Here is the core of it in Rust (the same shape exists in every language):
 
 ```rust
-use ajar_connector::{canonical_bytes, seal, EventBuilder, SigningKey};
+use ajar_connector::{EventBuilder, SigningKey};
 
 // STEP 1 — NORMALIZE (the only Ajar-specific code you write):
 let event = EventBuilder::new("acme-radar-1", "mim:aircraft")
@@ -137,10 +137,10 @@ let event = EventBuilder::new("acme-radar-1", "mim:aircraft")
     .build()?;                      // validates — can't emit a bad event
 
 // STEP 2 — CANONICAL ENCODE:
-let canonical = canonical_bytes(&event);
+let canonical = ajar_connector::canonical_bytes(&event);
 
 // STEP 3 — SEAL (sign):
-let sealed = seal(&canonical, &signing_key);   // 64-byte sig ++ canonical
+let sealed = ajar_connector::seal(&canonical, &signing_key);   // 64-byte sig ++ canonical
 
 // STEP 4 — PUBLISH:
 client.publish("ajar.ingest.acme-radar-1", sealed.into()).await?;
@@ -210,8 +210,8 @@ correctly signed.
 | **Go** | [go/examples/connector-template/](go/examples/connector-template/) | `MyRecord` struct (`EDIT 1`) + `toEvent()` (`EDIT 2`) + the stdin loop |
 | **C++** | [cpp/examples/connector_template.cpp](cpp/examples/connector_template.cpp) | `MyRecord` + `parse_record()` (`EDIT 1`) + `to_event()` (`EDIT 2`) + the stdin loop |
 
-(All four languages ship a dedicated minimal copy-me `connector-template` with the
-same `EDIT 1` / `EDIT 2` spots.)
+(All four languages ship a dedicated minimal copy-me `connector-template`. Rust, Go
+and C++ mark the same `EDIT 1` / `EDIT 2` spots; Python marks its `to_event`.)
 
 **5. Generate your key and declare your profile** — once. The seal/key mechanics
 are §6–§7 below; the exact commands (`scripts/gen-connector-key.sh`, then build a
@@ -495,5 +495,3 @@ produce exactly what step 8 will accept.
 | Deployment | [deploy/helm/connector/](deploy/helm/connector/), [deploy/docker/](deploy/docker/) |
 
 For "what do I type to get started," go to [ONBOARDING.md](ONBOARDING.md).
-</content>
-</invoke>

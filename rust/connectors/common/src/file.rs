@@ -1,22 +1,19 @@
 // SPDX-License-Identifier: Apache-2.0
-//! File transport — follow a file a source appends to (a log, a spooled
-//! capture), one frame at a time, and keep following across rotation.
-//!
-//! Lines are the common case. A binary capture, such as a SAPIENT recording,
-//! carries a length prefix instead; the reader then holds whatever bytes have
-//! arrived until a whole frame is present, so a frame half-written by the
-//! appender is never delivered as two.
+//! File transport: follow a file a source appends to, across rotation. With a
+//! length-prefixed framing, bytes are held until a whole frame has arrived, so
+//! a frame half-written by the appender is never delivered as two.
 
 use std::time::Duration;
 
+use anyhow::Context;
 use tokio::fs::File;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncSeekExt, BufReader};
 
 use crate::config::Framing;
 use crate::runtime::FrameSource;
 
-/// A frame can be at most the runtime's buffer; one prefix is held beyond it
-/// only so an oversized length is reported rather than waited for.
+/// The runtime's buffer plus one prefix, so an oversized length is reported
+/// rather than waited for.
 const MAX_HELD: usize = crate::MAX_FRAME_BYTES + 4;
 
 pub struct FileSource {
@@ -30,8 +27,8 @@ pub struct FileSource {
 }
 
 impl FileSource {
-    /// The length of the prefix and the payload length it declares, if `held`
-    /// has a whole prefix.
+    /// The prefix length and the payload length it declares, once `held` has a
+    /// whole prefix.
     fn declared(&self) -> Option<(usize, usize)> {
         match self.framing {
             Framing::Line => None,
@@ -98,8 +95,6 @@ impl FrameSource for FileSource {
                 if let Some(n) = self.take_frame(buf)? {
                     return Ok(n);
                 }
-                // Read what has arrived so far; a frame still being appended
-                // stays held until the rest lands.
                 let mut chunk = [0u8; 8192];
                 let n = self.reader.read(&mut chunk).await?;
                 if n > 0 {
@@ -126,7 +121,7 @@ impl FrameSource for FileSource {
 pub async fn open(path: &str, from_start: bool, framing: Framing) -> anyhow::Result<FileSource> {
     let mut file = File::open(path)
         .await
-        .map_err(|e| anyhow::anyhow!("opening {path}: {e}"))?;
+        .with_context(|| format!("opening {path}"))?;
     let mut pos = 0;
     if !from_start {
         pos = file.seek(std::io::SeekFrom::End(0)).await?;
@@ -144,25 +139,29 @@ pub async fn open(path: &str, from_start: bool, framing: Framing) -> anyhow::Res
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
 
-    fn tmp(name: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("ajar-file-{}-{}", std::process::id(), name));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir.join("feed.bin")
+    /// A capture of u32le-prefixed `frames`, then `tail` raw bytes.
+    fn capture(frames: &[&[u8]], tail: &[u8]) -> tempfile::NamedTempFile {
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        for payload in frames {
+            f.write_all(&(payload.len() as u32).to_le_bytes()).unwrap();
+            f.write_all(payload).unwrap();
+        }
+        f.write_all(tail).unwrap();
+        f
+    }
+
+    async fn open_u32le(f: &tempfile::NamedTempFile) -> FileSource {
+        open(f.path().to_str().unwrap(), true, Framing::LengthU32le)
+            .await
+            .unwrap()
     }
 
     #[tokio::test]
-    async fn length_prefixed_frames_are_delivered_whole_and_in_order() {
-        let path = tmp("u32le");
-        let mut bytes = Vec::new();
-        for payload in [&b"first"[..], &b"second one"[..], &[0u8, 1, 2][..]] {
-            bytes.extend_from_slice(&(payload.len() as u32).to_le_bytes());
-            bytes.extend_from_slice(payload);
-        }
-        std::fs::write(&path, &bytes).unwrap();
-        let mut src = open(path.to_str().unwrap(), true, Framing::LengthU32le)
-            .await
-            .unwrap();
+    async fn length_prefixed_frames_arrive_whole_in_order() {
+        let f = capture(&[b"first", b"second one", &[0, 1, 2]], &[]);
+        let mut src = open_u32le(&f).await;
         let mut buf = vec![0u8; 64];
         let n = src.recv(&mut buf).await.unwrap();
         assert_eq!(&buf[..n], b"first");
@@ -173,20 +172,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_frame_still_being_written_waits_for_its_rest() {
-        let path = tmp("partial");
-        let mut bytes = Vec::new();
-        bytes.extend_from_slice(&7u32.to_le_bytes());
-        bytes.extend_from_slice(b"abc");
-        std::fs::write(&path, &bytes).unwrap();
-        let mut src = open(path.to_str().unwrap(), true, Framing::LengthU32le)
-            .await
-            .unwrap();
+    async fn partial_frame_waits_for_its_rest() {
+        let mut tail = 7u32.to_le_bytes().to_vec();
+        tail.extend_from_slice(b"abc");
+        let f = capture(&[], &tail);
+        let mut src = open_u32le(&f).await;
         let mut buf = vec![0u8; 64];
-        let p = path.clone();
+        let p = f.path().to_path_buf();
         tokio::spawn(async move {
             tokio::time::sleep(Duration::from_millis(700)).await;
-            use std::io::Write;
             let mut f = std::fs::OpenOptions::new().append(true).open(p).unwrap();
             f.write_all(b"defg").unwrap();
         });
@@ -195,14 +189,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_oversized_prefix_is_an_error_not_a_wait() {
-        let path = tmp("oversized");
-        let mut bytes = Vec::new();
-        bytes.extend_from_slice(&(u32::MAX).to_le_bytes());
-        std::fs::write(&path, &bytes).unwrap();
-        let mut src = open(path.to_str().unwrap(), true, Framing::LengthU32le)
-            .await
-            .unwrap();
+    async fn oversized_prefix_is_an_error_not_a_wait() {
+        let f = capture(&[], &u32::MAX.to_le_bytes());
+        let mut src = open_u32le(&f).await;
         let mut buf = vec![0u8; 64];
         let err = src.recv(&mut buf).await.unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);

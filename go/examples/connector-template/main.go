@@ -1,22 +1,22 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Command connector-template is a copy-me starting point for a new Ajar connector
-// in Go. Make the two edits marked EDIT 1 and EDIT 2 below, then run it.
+// in Go. Make the two edits marked EDIT 1 and EDIT 2, then run it.
 //
-// See a sealed event right now — no key, no NATS, no feed:
+// Print a sealed event without a key, NATS or a feed:
 //
 //	echo '{"lat":26.4,"lon":50.9,"alt_m":11000,"quality":0.9}' | go run ./connector-template -dry-run
 //
-// Run for real (key from scripts/gen-connector-key.sh; mTLS materials + endpoint
-// issued by your operator):
+// Run against NATS (key from scripts/gen-connector-key.sh; mTLS materials and
+// endpoint from your operator):
 //
 //	AJAR_TLS_CA=ca.pem AJAR_TLS_CERT=client.pem AJAR_TLS_KEY=client.key \
 //	AJAR_SIGNING_SEED=connector.seed AJAR_SOURCE_ID=acme-radar-1 \
 //	NATS_URL=tls://nats.you.mil:443  go run ./connector-template
 //
-// Production behaviour (built in, no edits): a malformed/un-mappable record is
-// logged and skipped, publish errors are non-fatal (auto-reconnect), and setting
-// AJAR_HEALTH_ADDR exposes GET /healthz + GET /metrics.
+// A malformed or unmappable record is logged and skipped, publish errors are
+// non-fatal (the client reconnects), and AJAR_HEALTH_ADDR exposes GET /healthz
+// and GET /metrics.
 package main
 
 import (
@@ -38,10 +38,10 @@ import (
 	"github.com/promaka/ajar-connectors/go/eventpb"
 )
 
-// ╔═══════════════════════════════════════════════════════════════════════════╗
-// ║ EDIT 1 — describe ONE record from your feed.                              ║
-// ║ (These fields match the demo JSON above; change them to match your data.) ║
-// ╚═══════════════════════════════════════════════════════════════════════════╝
+// =============================================================================
+// EDIT 1: describe one record from your feed. These fields match the demo
+// input; change them to match your data.
+// =============================================================================
 type MyRecord struct {
 	Lat     float64 `json:"lat"`
 	Lon     float64 `json:"lon"`
@@ -49,11 +49,10 @@ type MyRecord struct {
 	Quality float64 `json:"quality"`
 }
 
-// ╔═══════════════════════════════════════════════════════════════════════════╗
-// ║ EDIT 2 — map your record into a canonical Event.                          ║
-// ║ Use the entity_type your operator assigned. Add .Attribute(k, v) only for ║
-// ║ attributes that type's ontology schema defines.                          ║
-// ╚═══════════════════════════════════════════════════════════════════════════╝
+// =============================================================================
+// EDIT 2: map your record to an Event. Use the entity_type your operator
+// assigned, and add .Attribute(k, v) for attributes its ontology declares.
+// =============================================================================
 func toEvent(sourceID string, r MyRecord) (*eventpb.Event, error) {
 	return ajarconnector.NewEventBuilder(sourceID, "mim:aircraft").
 		NewID().
@@ -63,9 +62,10 @@ func toEvent(sourceID string, r MyRecord) (*eventpb.Event, error) {
 		Build()
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// You usually don't need to touch anything below this line.
-// ─────────────────────────────────────────────────────────────────────────────
+// =============================================================================
+// Nothing below this line usually needs changing, except the feed reader
+// marked EDIT.
+// =============================================================================
 
 var (
 	publishedTotal     atomic.Uint64
@@ -87,7 +87,7 @@ func main() {
 		log.Fatalf("signing key: %v", err)
 	}
 
-	spawnHealth() // no-op unless AJAR_HEALTH_ADDR is set
+	spawnHealth()
 
 	var nc *nats.Conn
 	if *dryRun {
@@ -102,8 +102,8 @@ func main() {
 	}
 	log.Printf("[connector] source_id=%s  subject=%s", sourceID, subject)
 
-	// Your feed: by default, newline-delimited JSON on stdin. Swap this scanner
-	// for your TCP socket / file / API / serial port — the rest stays the same.
+	// EDIT: the feed is newline-delimited JSON on stdin; swap this scanner for
+	// your socket, file, API or serial port.
 	sc := bufio.NewScanner(os.Stdin)
 	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for sc.Scan() {
@@ -111,7 +111,6 @@ func main() {
 		if len(line) == 0 {
 			continue
 		}
-		// Resilient: a bad record is logged and skipped, never fatal.
 		var rec MyRecord
 		if err := json.Unmarshal(line, &rec); err != nil {
 			log.Printf("[connector] skip: malformed record: %v", err)
@@ -132,8 +131,8 @@ func main() {
 		}
 		sealed := ajarconnector.Seal(canonical, key)
 		if nc != nil {
-			// Nats-Msg-Id = event id: the broker's duplicate window drops
-			// retransmissions keyed on it.
+			// The broker's duplicate window drops retransmissions keyed on the
+			// Nats-Msg-Id header.
 			msg := &nats.Msg{
 				Subject: subject,
 				Data:    sealed,
@@ -165,8 +164,8 @@ func envOr(key, def string) string {
 }
 
 // natsConnect dials NATS, enabling mTLS when AJAR_TLS_CA / AJAR_TLS_CERT /
-// AJAR_TLS_KEY are all set (production; client-cert CN = source_id) and falling
-// back to plaintext for local dev. Retries the initial connect and auto-reconnects.
+// AJAR_TLS_KEY are all set (the client-cert CN is the source_id) and plaintext
+// otherwise. It retries the initial connect and reconnects.
 func natsConnect(url string) (*nats.Conn, error) {
 	opts := []nats.Option{
 		nats.RetryOnFailedConnect(true),
@@ -182,9 +181,8 @@ func natsConnect(url string) (*nats.Conn, error) {
 	return nats.Connect(url, opts...)
 }
 
-// loadSeed reads the 32-byte Ed25519 seed from the file named by
-// AJAR_SIGNING_SEED. In -dry-run with no seed set, falls back to a dev seed so
-// you can try it instantly — never used for real publishing.
+// loadSeed reads the Ed25519 seed from the file named by AJAR_SIGNING_SEED.
+// In -dry-run with no seed set, it mints a random ephemeral seed.
 func loadSeed(dryRun bool) []byte {
 	if path := os.Getenv("AJAR_SIGNING_SEED"); path != "" {
 		seed, err := os.ReadFile(path)
@@ -205,8 +203,8 @@ func loadSeed(dryRun bool) []byte {
 	return nil
 }
 
-// spawnHealth starts a tiny health/metrics HTTP server if AJAR_HEALTH_ADDR is set
-// (e.g. 0.0.0.0:9090). GET /healthz -> liveness; GET /metrics -> Prometheus text.
+// spawnHealth serves GET /healthz (liveness) and GET /metrics (Prometheus text)
+// on AJAR_HEALTH_ADDR (e.g. 0.0.0.0:9090), and does nothing when it is unset.
 func spawnHealth() {
 	addr := os.Getenv("AJAR_HEALTH_ADDR")
 	if addr == "" {

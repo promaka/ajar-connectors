@@ -1,35 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Check a connector's declared mapping against the vendored ontology, at boot.
-//!
-//! Nothing fails at the connector when a mapping is wrong. Core rejects an
-//! entity type it does not recognise. An attribute the event's type does not
-//! declare, or a value outside its vocabulary, unit or range, is quarantined on
-//! a graceful site, the default: moved into metadata, kept and signed, but
-//! invisible to policy and to the typed picture. On a strict site the whole
-//! event is rejected. Either way the connector runs, seals, publishes and
-//! reports healthy; the shared runtime logs what it can see, but nothing fails.
-//!
-//! So the check happens here instead, before the first frame: a mapping that
-//! names something the ontology does not declare stops the connector with a
-//! message naming the offender.
-//!
-//! The ontology is vendored and hash-pinned alongside `event.proto`, so this
-//! never reaches the network and works in an air-gapped build.
-//!
-//! Attributes are not inherited. Core looks an attribute up on the event's own
-//! entity type, so the per-type list in the ontology is the whole truth and the
-//! narrowing in it is deliberate: `environment` is declared on `mim:object`
-//! alone, because a typed class already implies its domain, and `mim:sensor`
-//! lacks the kinematics its parent `mim:equipment` allows. A validator that
-//! walked the parent chain would accept mappings Core does not govern. One
-//! `Declared` is therefore one entity type and what a connector sets on it; a
-//! connector that emits several types checks each.
-//!
-//! Two runtime helpers use the same index. [`GovernedAttribute::governed`]
-//! routes a value to a governed attribute when the event's own type declares
-//! it and to metadata otherwise, so a connector never loses a field to the
-//! boundary. [`ungoverned`] lists what an already-built event carries that its
-//! type does not declare, which the shared runtime reports once per name.
+//! Check a connector's mapping against the vendored ontology at boot, and route
+//! values per event. Core does not inherit attributes: it looks a name up on the
+//! event's own entity type, so every check here reads that type's list alone.
+//! A mapping fault would only show as quarantined fields or rejected events.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::OnceLock;
@@ -37,7 +10,6 @@ use std::sync::OnceLock;
 use ajar_connector::{Event, EventBuilder};
 use serde::Deserialize;
 
-/// The vendored ontology, compiled in so a connector validates without a file.
 const ONTOLOGY_JSON: &str = include_str!("../../../../vendor/contract/ontology.json");
 
 #[derive(Debug, Deserialize)]
@@ -63,40 +35,30 @@ struct AttrDef {
     values: Option<Vec<String>>,
 }
 
-/// What a connector proposes to emit on ONE entity type, checked before it
-/// starts. A connector that emits several types builds one of these per type,
-/// because the ontology governs attributes per type and so does Core.
+/// What a connector proposes to emit on one entity type. A connector that
+/// emits several types declares each.
 #[derive(Debug, Default)]
 pub struct Declared {
-    /// The entity type, or an `x:`-namespaced vendor type (not checked here;
-    /// the operator registers those).
+    /// A `mim:` type; an `x:` vendor type is the operator's and passes.
     pub entity_type: String,
-    /// Governed attribute names the mapping sets on that type.
     pub attributes: Vec<String>,
-    /// Attribute values fixed at config time, so checkable now. A list, not a
-    /// map: one attribute may take several fixed values across a connector's
-    /// paths, and every one of them is checked.
+    /// Attribute values fixed at config time. One attribute may appear with
+    /// several values, and each is checked.
     pub fixed_values: Vec<(String, String)>,
 }
 
-/// A mapping fault worth refusing to start over.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Fault {
-    /// An entity type the ontology does not declare.
     UnknownEntityType {
         name: String,
         closest: Option<String>,
     },
-    /// An attribute the declared entity type does not allow. Not inherited:
-    /// see the module doc.
     UnknownAttribute {
         name: String,
         closest: Option<String>,
-        /// The nearest ancestor that declares it, so the fault can say where
-        /// the attribute is governed.
+        /// The nearest ancestor that declares it.
         governed_on: Option<String>,
     },
-    /// A value outside a controlled vocabulary, which case errors trip.
     NotInVocabulary {
         attribute: String,
         value: String,
@@ -147,9 +109,8 @@ impl std::fmt::Display for Fault {
     }
 }
 
-/// The nearest ancestor of `from` that declares `attribute`, if any. The parent
-/// chain is read for this reason alone, so the fault can name where the
-/// attribute is governed.
+/// The nearest ancestor of `from` that declares `attribute`. The parent chain
+/// is read only to name it in a fault.
 fn nearest_ancestor_governing(
     by_id: &BTreeMap<&str, &TypeDef>,
     from: &TypeDef,
@@ -170,8 +131,8 @@ fn load() -> Ontology {
     serde_json::from_str(ONTOLOGY_JSON).expect("vendored ontology is valid JSON")
 }
 
-/// The ontology parsed once, with a per-type attribute index, for the two
-/// helpers that run per event.
+/// The ontology parsed once into a per-type attribute index, for the per-event
+/// helpers.
 struct Index {
     version: String,
     attrs: BTreeMap<String, BTreeSet<String>>,
@@ -192,17 +153,14 @@ fn index() -> &'static Index {
     })
 }
 
-/// Whether `entity_type` lives in a namespace the operator governs rather than
-/// the vendored contract: a vendor extension (`x:<vendor>:<type>`) or a type
-/// fragment the operator registered with Core under its own namespace, such as
-/// `sapient:detection`. Only `mim:` types are checked against the contract
-/// here; Core checks the rest against what the operator registered.
+/// Whether `entity_type` is outside the vendored contract (`x:acme:radar-hit`,
+/// `sapient:detection`), so the operator's registration with Core governs it.
 pub fn operator_namespace(entity_type: &str) -> bool {
     !entity_type.starts_with("mim:")
 }
 
-/// Whether the ontology declares `attribute` on `entity_type` itself. A type in
-/// an operator namespace is the operator's to govern and is always allowed.
+/// Whether the ontology declares `attribute` on `entity_type` itself. An
+/// operator-namespace type allows anything.
 pub fn governs(entity_type: &str, attribute: &str) -> bool {
     operator_namespace(entity_type)
         || index()
@@ -211,17 +169,15 @@ pub fn governs(entity_type: &str, attribute: &str) -> bool {
             .is_some_and(|set| set.contains(attribute))
 }
 
-/// Whether the ontology declares `entity_type`. A type in an operator namespace
-/// is the operator's to register and counts as known.
+/// Whether the ontology declares `entity_type`. An operator-namespace type
+/// counts as known.
 pub fn knows_type(entity_type: &str) -> bool {
     operator_namespace(entity_type) || index().attrs.contains_key(entity_type)
 }
 
-/// The governed attributes on a built event that its own entity type does not
-/// declare. Core quarantines these into metadata on a graceful site and
-/// rejects the event on a strict one, so the runtime reports each name once.
-/// An unknown entity type lists every attribute; Core rejects such an event
-/// on every site, which [`knows_type`] tells apart.
+/// The attributes on a built event that its own entity type does not declare:
+/// quarantined on a graceful site, rejected on a strict one. For an unknown
+/// entity type this is every attribute; see [`knows_type`].
 pub fn ungoverned(event: &Event) -> Vec<String> {
     event
         .attributes
@@ -231,10 +187,8 @@ pub fn ungoverned(event: &Event) -> Vec<String> {
         .collect()
 }
 
-/// Route a value to where the boundary keeps it: a governed attribute when
-/// the event's own type declares the name, metadata otherwise. This is the
-/// demotion Core applies, done on the producer's side so the field is never
-/// lost and the choice is visible in the event.
+/// Route a value to an attribute when the event's own type declares the name,
+/// to metadata otherwise: Core's demotion, done visibly at the producer.
 pub trait GovernedAttribute {
     fn governed(self, entity_type: &str, key: &str, value: impl Into<String>) -> Self;
 }
@@ -249,13 +203,11 @@ impl GovernedAttribute for EventBuilder {
     }
 }
 
-/// The ontology revision compiled in.
 pub fn version() -> &'static str {
     &index().version
 }
 
-/// Case-insensitive near match, which is what catches `friendly` for `Friend`
-/// and `mim:Aircraft` for `mim:aircraft`, the two mistakes that cost most.
+/// Case-insensitive match, which catches `mim:Aircraft` for `mim:aircraft`.
 fn closest<'a, S: AsRef<str> + 'a>(
     needle: &str,
     hay: impl Iterator<Item = &'a S>,
@@ -266,14 +218,12 @@ fn closest<'a, S: AsRef<str> + 'a>(
         .map(str::to_string)
 }
 
-/// Validate a declared mapping. Returns every fault, so one restart shows all of
-/// them rather than one per attempt.
+/// Every fault in a declared mapping, so one restart shows them all.
 pub fn check(declared: &Declared) -> Vec<Fault> {
     let ont = load();
     let by_id: BTreeMap<&str, &TypeDef> = ont.types.iter().map(|t| (t.id.as_str(), t)).collect();
     let mut faults = Vec::new();
 
-    // A vendor namespace is registered with the operator, not declared here.
     if declared.entity_type.starts_with("x:") {
         return faults;
     }
@@ -283,13 +233,10 @@ pub fn check(declared: &Declared) -> Vec<Fault> {
             name: declared.entity_type.clone(),
             closest: closest(&declared.entity_type, all.iter()),
         });
-        // With no recognised type there is nothing to check attributes against,
-        // and reporting every attribute as unknown would bury the real fault.
+        // Every attribute would be unknown too, burying the real fault.
         return faults;
     };
 
-    // The type's own list, and nothing from its parents: Core reads it the same
-    // way (see the module doc).
     let allowed: BTreeMap<&str, &AttrDef> = def
         .attributes
         .iter()
@@ -327,21 +274,24 @@ pub fn check(declared: &Declared) -> Vec<Fault> {
 pub fn enforce(declared: &Declared) -> anyhow::Result<()> {
     let faults = check(declared);
     if faults.is_empty() {
-        tracing::info!(ontology = %load().version, "mapping validated against the ontology");
+        tracing::info!(
+            ontology = version(),
+            "mapping validated against the ontology"
+        );
         return Ok(());
     }
     for f in &faults {
-        tracing::error!("{f}");
+        tracing::error!(fault = %f, "mapping fault");
     }
     anyhow::bail!(
         "{} mapping fault(s) against ontology {}: Core would reject these events or \
          quarantine the fields, so the connector is refusing to start",
         faults.len(),
-        load().version
+        version()
     )
 }
 
-/// The unit the ontology declares for an attribute, for diagnostics.
+/// The unit the ontology declares for an attribute.
 pub fn unit_of(attribute: &str) -> Option<String> {
     load()
         .types
@@ -369,12 +319,7 @@ mod tests {
     }
 
     #[test]
-    fn attributes_are_not_inherited_because_core_does_not_inherit_them() {
-        // The ontology lists every attribute a type allows, including the ones
-        // it shares with its parent, and Core reads only that list. So the
-        // deliberate narrowings are enforced here too: a sensor has no speed
-        // even though its parent equipment does, and only a bare mim:object
-        // carries environment, because a typed class implies its domain.
+    fn attributes_are_not_inherited() {
         assert!(check(&d("mim:aircraft", &["hostility", "speed"])).is_empty());
         assert!(check(&d("mim:equipment", &["speed"])).is_empty());
         let f = check(&d("mim:sensor", &["speed"]));
@@ -385,23 +330,19 @@ mod tests {
             matches!(f.as_slice(), [Fault::UnknownAttribute { name, .. }] if name == "environment"),
             "{f:?}"
         );
-        // The fault names the type that does govern it, which is the mistake
-        // stated back to the author rather than left to guess.
         let msg = f[0].to_string();
         assert!(msg.contains("mim:object"), "{msg}");
         assert!(msg.contains("not inherited"), "{msg}");
         assert!(msg.contains("metadata"), "{msg}");
-        // A sensor's missing speed points at the parent that has it.
         let msg = check(&d("mim:sensor", &["speed"]))[0].to_string();
         assert!(msg.contains("mim:equipment"), "{msg}");
-        // A name nobody governs says so without inventing an ancestor.
         let msg = check(&d("mim:aircraft", &["not_a_thing"]))[0].to_string();
         assert!(!msg.contains("it is governed on"), "{msg}");
         assert!(msg.contains("Core would not govern it"), "{msg}");
     }
 
     #[test]
-    fn an_invented_entity_type_is_caught() {
+    fn invented_entity_type_is_caught() {
         let f = check(&d("mim:banana", &[]));
         assert!(
             matches!(f.as_slice(), [Fault::UnknownEntityType { name, .. }] if name == "mim:banana")
@@ -409,7 +350,7 @@ mod tests {
     }
 
     #[test]
-    fn a_case_error_in_the_type_suggests_the_real_one() {
+    fn type_case_error_suggests_the_real_type() {
         let f = check(&d("mim:Aircraft", &[]));
         match f.as_slice() {
             [Fault::UnknownEntityType { closest, .. }] => {
@@ -420,7 +361,7 @@ mod tests {
     }
 
     #[test]
-    fn an_undeclared_attribute_is_caught_and_points_at_metadata() {
+    fn undeclared_attribute_points_at_metadata() {
         let f = check(&d("mim:aircraft", &["speed_kn"]));
         assert!(
             matches!(f.as_slice(), [Fault::UnknownAttribute { name, .. }] if name == "speed_kn")
@@ -429,7 +370,7 @@ mod tests {
     }
 
     #[test]
-    fn a_lowercase_hostility_is_caught_with_the_correct_value() {
+    fn lowercase_hostility_is_a_vocabulary_fault() {
         let mut decl = d("mim:aircraft", &["hostility"]);
         decl.fixed_values
             .push(("hostility".into(), "friendly".into()));
@@ -444,7 +385,7 @@ mod tests {
     }
 
     #[test]
-    fn governed_routes_by_the_events_own_type_and_ungoverned_lists_the_rest() {
+    fn governed_routes_by_the_events_own_type() {
         assert!(governs("mim:aircraft", "squawk"));
         assert!(!governs("mim:object", "squawk"));
         assert!(governs("mim:object", "environment"));
@@ -478,8 +419,7 @@ mod tests {
     }
 
     #[test]
-    fn a_vendor_namespace_is_not_second_guessed() {
-        // x: types are registered with the operator, not declared in the ontology.
+    fn vendor_namespace_is_not_checked() {
         assert!(check(&d("x:acme:radar-hit", &[])).is_empty());
     }
 
@@ -490,7 +430,7 @@ mod tests {
     }
 
     #[test]
-    fn the_declared_unit_is_available_for_diagnostics() {
+    fn declared_unit_is_available() {
         assert_eq!(unit_of("speed").as_deref(), Some("m/s"));
     }
 }

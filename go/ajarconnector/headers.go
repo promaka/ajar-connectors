@@ -7,8 +7,8 @@ import "github.com/promaka/ajar-connectors/go/eventpb"
 // NatsMsgIDHeader is the NATS header the ingest broker dedupes on. Publish
 // every sealed event with this header set to the event's Id: the broker keeps
 // a duplicate window keyed on it, so a retransmission or reconnect race is
-// dropped instead of stored twice. The SDK deliberately has no transport
-// dependency, so this is the contract as data; your NATS client sets it.
+// dropped instead of stored twice. The SDK has no transport dependency, so
+// your NATS client sets it.
 const NatsMsgIDHeader = "Nats-Msg-Id"
 
 // IngestHeaders returns the headers an ingest publish must carry for event,

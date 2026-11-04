@@ -1,12 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
-# Builds and pushes the REFERENCE connector image with SLSA build provenance +
-# SBOM attestations (mirrors Core's image.yml). The image is reference-only —
-# vendors build their own connector image from their code.
-#
-# A vX.Y.Z tag is an SDK release: the C++ tarball, the GitHub release and the
-# go/vX.Y.Z module tag (crates.io and PyPI publish from their own workflows).
-# The production connector images, their binaries and the chart are released
-# per package by release-connector.yml.
+# Build and push the reference connector image with provenance and SBOM. A vX.Y.Z
+# tag also releases the SDK: C++ tarball, GitHub release and go/vX.Y.Z tag.
 name: image
 
 on:
@@ -65,17 +59,14 @@ jobs:
           subject-digest: ${{ steps.build.outputs.digest }}
           push-to-registry: true
 
-  # A vX.Y.Z tag is an SDK release (Rust, Go, Python, C++ at one version);
-  # connectors are released on their own tags by release-connector.yml. Checked
-  # before anything else publishes, so a tag that cannot produce an honest
-  # release fails first.
+  # cpp-tarball and release need this job; build-push runs independently.
   guard:
     name: release-guard (SDK)
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - name: tag, SDK manifests, changelog and doc pins agree
+      - name: Check tag, manifests and changelog
         run: |
           set -euo pipefail
           tag="${GITHUB_REF_NAME#v}"
@@ -84,16 +75,10 @@ jobs:
             echo "::error::CHANGELOG.md has no entry for $tag; write one before tagging"
             exit 1
           fi
-          # Install instructions that pin an older release send vendors to an SDK
-          # from an earlier ontology, whose events Core rejects or quarantines.
           bash scripts/check-doc-pins.sh "$tag"
           echo "release-guard OK: tag, SDK manifests, changelog and doc pins agree ($tag)"
 
-  # The C++ SDK as one self-contained source tarball. An air-gapped site, or a
-  # partner whose build system is CMake and nothing else, takes this file and
-  # needs nothing from this repository: the vendored contract travels inside it.
-  # Proven by building the extracted tree and running its conformance gate, so a
-  # tarball that cannot reproduce contract-v1 never reaches the release.
+  # The extracted tarball is built and run on its own to prove it is self-contained.
   cpp-tarball:
     name: package + verify the C++ tarball
     needs: [guard]
@@ -105,14 +90,14 @@ jobs:
       attestations: write
     steps:
       - uses: actions/checkout@v7
-      - name: Toolchain
+      - name: Install the toolchain
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             cmake g++ protobuf-compiler libprotobuf-dev
-      - name: Package
+      - name: Package the tarball
         run: ./scripts/package-cpp.sh "${GITHUB_REF_NAME#v}" dist
-      - name: The extracted tarball builds and is conformant on its own
+      - name: Build the extracted tarball
         run: |
           set -euo pipefail
           ver="${GITHUB_REF_NAME#v}"
@@ -132,9 +117,7 @@ jobs:
             dist/ajar-connector-cpp-*.tar.gz
             dist/ajar-connector-cpp-*.tar.gz.sha256
 
-  # The GitHub release is created here and nowhere else, after every image it
-  # refers to has been pushed. A failed build therefore leaves no release rather
-  # than one whose images do not exist.
+  # The only job that creates the GitHub release, after every image it names is pushed.
   release:
     name: publish the release
     needs: [build-push, guard, cpp-tarball]
@@ -149,7 +132,7 @@ jobs:
           pattern: cpp-tarball
           merge-multiple: true
           path: dist
-      - name: SBOM for the release (SPDX)
+      - name: Generate the SPDX SBOM
         uses: anchore/sbom-action@v0
         with:
           path: .
@@ -157,9 +140,9 @@ jobs:
           output-file: dist/ajar-connectors-${{ github.ref_name }}.spdx.json
           upload-artifact: false
           upload-release-assets: false
-      - name: the SBOM exists before anything publishes
+      - name: Check the SBOM exists
         run: test -s "dist/ajar-connectors-${{ github.ref_name }}.spdx.json"
-      - name: notes for this version, from CHANGELOG.md
+      - name: Extract release notes
         run: |
           ver="${GITHUB_REF_NAME#v}"
           awk -v v="$ver" '
@@ -173,7 +156,8 @@ jobs:
             exit 1
           fi
           cat notes.md
-      - env:
+      - name: Create the GitHub release
+        env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "$GITHUB_REF_NAME" \
@@ -182,10 +166,7 @@ jobs:
             --notes-file notes.md \
             --verify-tag \
             dist/*
-      # Go resolves a module in a subdirectory through a tag carrying the
-      # directory prefix, so every release creates go/vX.Y.Z beside vX.Y.Z;
-      # without it, `go get ...@vX.Y.Z` cannot resolve the module. Skipped when
-      # the tag exists so a re-run cannot fail on its own tag.
+      # Go resolves a module in go/ through the tag go/vX.Y.Z; skipped if it exists.
       - name: Tag the Go module
         run: |
           set -euo pipefail

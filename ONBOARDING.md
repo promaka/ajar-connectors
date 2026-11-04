@@ -39,7 +39,8 @@ need, and nothing you have to create yourself:
 | File | What it is |
 |---|---|
 | `manifest.json` | your name, your role, the broker address, the data format, the subject |
-| `manifest.sig` | the operator's signature over the manifest, so tampering is detected |
+| `manifest.sig` | the operator's signature over the manifest. See [Keys](#keys) for what it proves |
+| `egress.pub` | the public half of the operator's egress key, which verifies that signature |
 | `<your-id>.signing.key` | your private signing key (producers only) |
 | `<your-id>.mtls.crt`, `<your-id>.mtls.key` | your certificate and key for connecting to the broker |
 | `ca.crt` | the operator's certificate authority, so you know you are talking to the real broker |
@@ -104,8 +105,8 @@ the packet to name the matching format, `cot` for TAK and `geojson` or
 `ajar-up` stops before starting anything and prints what is wrong and how to
 fix it. The three common ones:
 
-- **"does not verify under the packet's egress key"**: the file was altered
-  or corrupted in transit. Ask the operator to resend it.
+- **"does not verify under the packet's egress key"**: the file changed after
+  the operator signed it. Ask the operator to resend it.
 - **Broker unreachable**: your firewall must allow one outbound connection to
   the broker address in the manifest. Nothing connects back to you.
 - **No data on the local port**: your equipment broadcasts on a different
@@ -143,11 +144,11 @@ the library for your language, pinned to the release:
 
 ```toml
 # Rust, in Cargo.toml
-ajar-connector = "0.6.5"
+ajar-connector = "0.6.6"
 ```
 ```bash
-go get github.com/promaka/ajar-connectors/go/ajarconnector@v0.6.5
-pip install "ajar-connector[producer]==0.6.5"
+go get github.com/promaka/ajar-connectors/go/ajarconnector@v0.6.6
+pip install "ajar-connector[producer]==0.6.6"
 ```
 
 For C++ see [docs/embedding-cpp.md](docs/embedding-cpp.md).
@@ -201,7 +202,8 @@ Go uses `VerifyingHandler`, Rust `consumer::verified_events` (feature
 `consumer`), C++ `ajar::verifying_handler`. All take the same two guards:
 `skip_source_ids`, so you never consume your own output, and `skip_derived`,
 to keep only sensor-original events. All count accepted, rejected and skipped
-for your metrics.
+for your metrics. These calls handle one message at a time; the `verify` call
+beneath them takes no lock, so you can verify distinct events in parallel.
 
 ## 5. Building a new connector
 
@@ -281,6 +283,12 @@ Three kinds of key material exist. All of them arrive in the packet.
    connection, plus the operator's CA certificate. These protect the pipe;
    the signing key protects the data.
 
+`ajar-up` verifies `manifest.sig` with the `egress.pub` in the packet, then
+checks each file the manifest lists against its sha256. That detects a change
+made after the operator signed the packet. Someone who also replaces
+`egress.pub` can re-sign it, so the first handover rests on the channel the
+operator sends the packet over, the same as `ca.crt`.
+
 If your policy says a private key must be born on your own hardware, generate
 it yourself and send the operator only the public half:
 
@@ -346,7 +354,7 @@ The install commands above fetch from the internet. On a connected machine,
 at the release tag you intend to ship:
 
 ```bash
-git clone --depth 1 --branch v0.6.5 https://github.com/promaka/ajar-connectors
+git clone --depth 1 --branch v0.6.6 https://github.com/promaka/ajar-connectors
 cd ajar-connectors
 mkdir -p .cargo && cargo vendor --manifest-path rust/Cargo.toml \
   -s rust/connectors/Cargo.toml -s rust/examples/Cargo.toml \

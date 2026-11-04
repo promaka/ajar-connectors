@@ -1,14 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
-//! TCP server transport — listen on a local address and accept connections from
-//! sources that *push* their feed to a configured endpoint ("point your output at
-//! 10.0.0.5:9000"), the common legacy pattern that is the mirror image of
-//! `tcp-client`. Multiple pushers may connect at once; each connection is framed
-//! independently and their frames interleave. A dropped pusher simply reconnects.
-//!
-//! Frames flow through a bounded channel, so a flooding pusher is backpressured
-//! rather than growing memory; an over-long line on one connection is dropped
-//! and that connection resynchronises, exactly like the other stream transports.
+//! TCP server transport: accept sources that push their feed to a local port.
+//! Each connection is framed on its own and their frames interleave. A bounded
+//! channel backpressures a flooding pusher.
 
+use anyhow::Context;
 use tokio::io::BufReader;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc;
@@ -17,8 +12,6 @@ use crate::config::Framing;
 use crate::runtime::FrameSource;
 use crate::stream;
 
-/// Matches the runtime's receive buffer: one frame can never exceed it.
-const MAX_FRAME: usize = 64 * 1024;
 /// Frames buffered across all connections before pushers are backpressured.
 const CHANNEL_FRAMES: usize = 256;
 
@@ -37,8 +30,7 @@ impl FrameSource for TcpServerSource {
                 buf[..n].copy_from_slice(&frame[..n]);
                 Ok(n)
             }
-            // The accept loop holds a sender for the lifetime of the source, so
-            // this only happens if it died — surface it rather than spin.
+            // The accept loop holds a sender for the source's lifetime.
             None => Err(std::io::Error::new(
                 std::io::ErrorKind::UnexpectedEof,
                 "tcp-server accept loop ended",
@@ -51,12 +43,11 @@ impl FrameSource for TcpServerSource {
     }
 }
 
-/// Bind and start accepting pushers. Binding is eager (a bad `bind` fails fast at
-/// startup); connections are handled in the background.
+/// Bind now, so a bad `bind` fails at startup, and accept in the background.
 pub async fn open(bind: &str, framing: Framing) -> anyhow::Result<TcpServerSource> {
     let listener = TcpListener::bind(bind)
         .await
-        .map_err(|e| anyhow::anyhow!("binding tcp-server {bind}: {e}"))?;
+        .with_context(|| format!("binding tcp-server {bind}"))?;
     let local = listener.local_addr()?;
     let (tx, rx) = mpsc::channel(CHANNEL_FRAMES);
     tokio::spawn(accept_loop(listener, framing, tx));
@@ -88,17 +79,18 @@ async fn connection_loop(stream: TcpStream, framing: Framing, tx: mpsc::Sender<V
         .map(|a| a.to_string())
         .unwrap_or_else(|_| "unknown".into());
     let mut reader = BufReader::new(stream);
-    let mut buf = vec![0u8; MAX_FRAME];
+    let mut buf = vec![0u8; crate::MAX_FRAME_BYTES];
     loop {
         let framed = stream::read_frame(&mut reader, framing, &mut buf).await;
         match framed {
             Ok(n) => {
-                // Backpressure: a full channel slows the pusher, never grows memory.
+                // The source is gone: the connector is shutting down.
                 if tx.send(buf[..n].to_vec()).await.is_err() {
-                    return; // source dropped; connector shutting down
+                    return;
                 }
             }
-            // Over-long frame: drop it, keep the connection (it resynchronised).
+            // A long line was drained, so the stream is in sync; an oversize
+            // length prefix left its payload unread, so the next read is not.
             Err(e) if e.kind() == std::io::ErrorKind::InvalidData => {
                 tracing::warn!(peer = %peer, error = %e, "dropping oversized frame");
             }
@@ -115,17 +107,21 @@ mod tests {
     use super::*;
     use tokio::io::AsyncWriteExt;
 
-    #[tokio::test]
-    async fn receives_pushed_lines_from_a_connecting_source() {
-        let mut src = open("127.0.0.1:0", Framing::Line).await.unwrap();
-        let addr = src.describe();
-        let addr = addr
+    /// The bound address, read back from the description.
+    fn addr(src: &TcpServerSource) -> String {
+        src.describe()
             .strip_prefix("tcp-server ")
             .unwrap()
             .split(' ')
             .next()
             .unwrap()
-            .to_string();
+            .to_string()
+    }
+
+    #[tokio::test]
+    async fn receives_lines_from_concurrent_pushers() {
+        let mut src = open("127.0.0.1:0", Framing::Line).await.unwrap();
+        let addr = addr(&src);
 
         let mut pusher = TcpStream::connect(&addr).await.unwrap();
         pusher.write_all(b"first\r\nsecond\n").await.unwrap();
@@ -136,7 +132,6 @@ mod tests {
         let n = src.recv(&mut buf).await.unwrap();
         assert_eq!(&buf[..n], b"second");
 
-        // A second pusher's frames interleave on the same source.
         let mut pusher2 = TcpStream::connect(&addr).await.unwrap();
         pusher2.write_all(b"third\n").await.unwrap();
         let n = src.recv(&mut buf).await.unwrap();
@@ -144,28 +139,20 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn source_survives_a_pusher_disconnecting() {
+    async fn survives_a_pusher_disconnecting() {
         let mut src = open("127.0.0.1:0", Framing::Line).await.unwrap();
-        let addr = src.describe();
-        let addr = addr
-            .strip_prefix("tcp-server ")
-            .unwrap()
-            .split(' ')
-            .next()
-            .unwrap()
-            .to_string();
+        let addr = addr(&src);
 
         {
             let mut pusher = TcpStream::connect(&addr).await.unwrap();
             pusher.write_all(b"before-drop\n").await.unwrap();
             pusher.shutdown().await.unwrap();
-        } // pusher gone
+        }
 
         let mut buf = vec![0u8; 1024];
         let n = src.recv(&mut buf).await.unwrap();
         assert_eq!(&buf[..n], b"before-drop");
 
-        // A fresh pusher connects and is heard — no restart needed.
         let mut pusher = TcpStream::connect(&addr).await.unwrap();
         pusher.write_all(b"after-reconnect\n").await.unwrap();
         let n = src.recv(&mut buf).await.unwrap();

@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
-//! TCP client transport — connect out to a feed and read framed messages. This is
-//! how the stream feeds arrive: AIS aggregators and ship-network NMEA servers
-//! expose a TCP port. If the feed drops, the source reconnects on the next read
-//! rather than ending the loop.
+//! TCP client transport: connect out to a feed and read framed messages,
+//! reconnecting on the next read if the feed drops.
+
+use std::time::Duration;
 
 use tokio::io::BufReader;
 use tokio::net::TcpStream;
@@ -11,29 +11,26 @@ use crate::config::Framing;
 use crate::runtime::FrameSource;
 use crate::stream;
 
-/// A reconnecting TCP client presented as a [`FrameSource`], framed per config.
 pub struct TcpSource {
     remote: String,
     framing: Framing,
     reader: Option<BufReader<TcpStream>>,
 }
 
-impl TcpSource {
-    async fn ensure_connected(&mut self) -> std::io::Result<()> {
-        while self.reader.is_none() {
-            match TcpStream::connect(&self.remote).await {
-                Ok(stream) => {
-                    let _ = stream.set_nodelay(true);
-                    tracing::info!(remote = %self.remote, "feed connected");
-                    self.reader = Some(BufReader::new(stream));
-                }
-                Err(e) => {
-                    tracing::warn!(remote = %self.remote, error = %e, "feed connect failed, retrying");
-                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-                }
+/// Connect to `remote`, retrying until it answers.
+async fn connect(remote: &str) -> BufReader<TcpStream> {
+    loop {
+        match TcpStream::connect(remote).await {
+            Ok(stream) => {
+                let _ = stream.set_nodelay(true);
+                tracing::info!(remote = %remote, "feed connected");
+                return BufReader::new(stream);
+            }
+            Err(e) => {
+                tracing::warn!(remote = %remote, error = %e, "feed connect failed, retrying");
+                tokio::time::sleep(Duration::from_secs(2)).await;
             }
         }
-        Ok(())
     }
 }
 
@@ -41,10 +38,11 @@ impl TcpSource {
 impl FrameSource for TcpSource {
     async fn recv(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         loop {
-            self.ensure_connected().await?;
-            let reader = self.reader.as_mut().expect("connected above");
-            let framed = stream::read_frame(reader, self.framing, buf).await;
-            match framed {
+            let reader = match &mut self.reader {
+                Some(reader) => reader,
+                None => self.reader.insert(connect(&self.remote).await),
+            };
+            match stream::read_frame(reader, self.framing, buf).await {
                 Ok(n) => return Ok(n),
                 Err(e) => {
                     tracing::warn!(remote = %self.remote, error = %e, "feed read error, reconnecting");
@@ -59,8 +57,8 @@ impl FrameSource for TcpSource {
     }
 }
 
-/// Build a TCP client source. The connection is opened lazily on the first read
-/// (and re-opened after a drop), so startup never blocks on the feed.
+/// Build a TCP client source. It connects on the first read, so startup never
+/// blocks on the feed.
 pub fn open(connect: &str, framing: Framing) -> anyhow::Result<TcpSource> {
     Ok(TcpSource {
         remote: connect.to_string(),

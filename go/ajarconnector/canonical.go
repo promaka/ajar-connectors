@@ -16,12 +16,11 @@ import (
 // CanonicalBytes returns the canonical protobuf encoding of event.
 //
 // Determinism comes from proto.MarshalOptions{Deterministic: true}, which emits
-// fields in ascending tag order and omits proto3 defaults — the same shape prost
+// fields in ascending tag order and omits proto3 defaults, the same shape prost
 // produces in Rust. The contract has no map fields, so the encoding is fully
 // determined by the field values.
 //
-// The caller owns the attribute invariant (sorted by key, unique). When the
-// event came from EventBuilder, that holds by construction.
+// The caller keeps attributes sorted by key and unique; EventBuilder does this.
 func CanonicalBytes(event *eventpb.Event) ([]byte, error) {
 	return proto.MarshalOptions{Deterministic: true}.Marshal(event)
 }

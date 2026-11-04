@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-// Reference connector: Cursor-on-Target (CoT) XML <-> canonical Ajar event.
-// Teaching example, not a production CoT stack — minimal XML handling (no XML
-// dependency) so the data flow stays readable. Mirrors the Rust and Go examples.
+// Teaching example between Cursor-on-Target (CoT) XML and canonical Ajar events,
+// with minimal XML handling and no XML dependency. Not a production CoT stack;
+// for production CoT ingest, use rust/connectors/tak-cot. Mirrors the Rust and Go
+// examples.
 
 #ifndef AJAR_COT_CONNECTOR_HPP
 #define AJAR_COT_CONNECTOR_HPP

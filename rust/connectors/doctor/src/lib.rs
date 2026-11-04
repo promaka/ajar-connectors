@@ -1,41 +1,34 @@
 // SPDX-License-Identifier: Apache-2.0
-//! `ajar-doctor`: preflight for a connector that publishes nothing.
-//!
-//! One command a partner runs against their own config, before or instead of a
-//! support call. It walks the onboarding steps in order (config, key,
-//! registration, endpoint, TLS, clock) and reports, for the first thing that is
-//! broken, what to DO about it, in the words of the onboarding guide rather
-//! than the words of a TLS library.
-//!
-//! The doctor is read-only on the wire: it dials, greets and handshakes, but
-//! never publishes an event, so it is safe to point at a production endpoint.
+//! `ajar-doctor`: preflight for a connector that publishes nothing. Walks the
+//! onboarding steps in order (config, key, transport, registration, endpoint,
+//! TLS, clock) and says what to do about the first broken one. Read-only on
+//! the wire: it dials, greets and handshakes, but never publishes an event.
 
 pub mod certs;
 pub mod net;
 pub mod report;
 pub mod tls;
+mod transport;
 
 use std::time::Duration;
 
 use ajar_connector_common as common;
 use report::Finding;
 
-/// What a run needs to know.
+const ENV_VARS: [&str; 3] = ["NATS_URL", "AJAR_SOURCE_ID", "AJAR_SIGNING_SEED"];
+
 pub struct Options {
-    /// Path to the connector's own config TOML, the same file the connector
-    /// runs with. `None` reads the environment instead: `NATS_URL`,
-    /// `AJAR_SOURCE_ID` and `AJAR_SIGNING_SEED`, the same variables the
-    /// examples and the embedding guides use, so an SDK embedder needs no
-    /// file at all.
+    /// The connector's own config TOML. `None` reads `NATS_URL`,
+    /// `AJAR_SOURCE_ID` and `AJAR_SIGNING_SEED` instead, the variables an SDK
+    /// embedder runs with.
     pub config_path: Option<String>,
-    /// A local sink's registered-keys directory, when the operator's sink runs
-    /// on a box you can see. Enables a real registration check instead of a note.
+    /// A local sink's registered-keys directory; enables a real registration
+    /// check instead of a note.
     pub sources_dir: Option<String>,
-    /// Per-network-operation deadline.
+    /// Deadline per network operation.
     pub timeout: Duration,
 }
 
-/// The facts every check runs against, however they were supplied.
 struct Inputs {
     source_id: String,
     nats_url: String,
@@ -43,8 +36,7 @@ struct Inputs {
     subject_prefix: String,
     spool: Option<common::spool::SpoolConfig>,
     transport: Option<common::Transport>,
-    /// The validated marking, when the config declares one. A config with a
-    /// bad marking does not load at all, so this is never an error here.
+    /// A config with a bad marking does not load, so this is never an error.
     marking: Option<common::marking::Marking>,
 }
 
@@ -52,14 +44,12 @@ struct Inputs {
 pub async fn run(opts: &Options) -> Vec<Finding> {
     let mut out = Vec::new();
 
-    // Step 1: the connector's own configuration, from its config file or from
-    // the environment an SDK embedder runs with.
     let resolved = match &opts.config_path {
         Some(path) => match common::Config::load(path) {
             Ok(cfg) => Ok(Inputs {
                 spool: cfg.spool_config(),
                 marking: cfg.marking().ok().flatten(),
-                transport: Some(cfg.transport.clone()),
+                transport: Some(cfg.transport),
                 source_id: cfg.source_id,
                 nats_url: cfg.nats_url,
                 signing_key_path: cfg.signing_key_path,
@@ -71,8 +61,7 @@ pub async fn run(opts: &Options) -> Vec<Finding> {
                 "The doctor reads the same file the connector runs with. Fix the error \
                  above; the example config shipped next to your connector (the \
                  *.example.toml in the tarball and the repo) shows every required \
-                 field."
-                    .to_string(),
+                 field.",
             )),
         },
         None => inputs_from_env(),
@@ -107,42 +96,26 @@ pub async fn run(opts: &Options) -> Vec<Finding> {
         }
     };
 
-    // Step 2: the signing key, via the same loader the runtime uses.
     let verifying_hex = check_signing_key(&mut out, &cfg);
-
-    // Step 2a: the spool, when configured; a one-line hint when not.
     check_spool(&mut out, &cfg);
-
-    // Step 2a': the marking every event will carry, shown before any event
-    // flows, because an unmarked feed is the failure a site notices last.
     check_marking(&mut out, &cfg);
-
-    // Step 2b: the native-feed transport, where a naval first hour actually
-    // fails (a serial adapter that is not there, a multicast group joined on
-    // the wrong network of a dual-homed box).
-    check_transport(&mut out, &cfg, opts.timeout);
-
-    // Step 3: registration, as far as it can be seen from this box.
+    transport::check(&mut out, cfg.transport.as_ref(), opts.timeout);
     check_registration(
         &mut out,
         &cfg,
         opts.sources_dir.as_deref(),
         verifying_hex.as_deref(),
     );
-
-    // Step 4: reaching the endpoint.
     let (endpoint, greeting) = check_endpoint(&mut out, &cfg, opts.timeout).await;
 
-    // Step 5: the TLS policy table, mirroring the runtime's fail-closed rules.
-    // The demand comes from the URL itself, not from whether the endpoint
-    // answered: a dead tls:// endpoint still forbids a cleartext connector.
+    // The TLS demand comes from the URL, so a dead tls:// endpoint still
+    // forbids a cleartext connector.
     let url_demands_tls = net::parse_urls(&cfg.nats_url)
         .map(|eps| eps.iter().any(|e| e.tls_scheme))
         .unwrap_or(false);
     let policy = tls::policy(url_demands_tls);
     let mtls = check_policy(&mut out, &policy, greeting.as_ref());
 
-    // Steps 6..8: certificate files, the live handshake, and the clock.
     match (mtls, endpoint) {
         (Some((ca, cert, key)), Some(ep)) => {
             let identity = check_certificate_files(&mut out, &cfg, &ca, &cert, &key);
@@ -184,22 +157,15 @@ pub async fn run(opts: &Options) -> Vec<Finding> {
     out
 }
 
-/// Resolve the doctor's inputs from the environment: the variables the
-/// examples and embedding guides use, so a partner who built the SDK into
-/// their own process (with no connector config file) can still run the
-/// doctor with zero files.
 fn inputs_from_env() -> Result<Inputs, Finding> {
-    let get = |name: &str| std::env::var(name).ok().filter(|v| !v.trim().is_empty());
-    let missing: Vec<&str> = [
-        ("NATS_URL", get("NATS_URL")),
-        ("AJAR_SOURCE_ID", get("AJAR_SOURCE_ID")),
-        ("AJAR_SIGNING_SEED", get("AJAR_SIGNING_SEED")),
-    ]
-    .iter()
-    .filter(|(_, v)| v.is_none())
-    .map(|(n, _)| *n)
-    .collect();
-    if !missing.is_empty() {
+    let values = ENV_VARS.map(|name| std::env::var(name).ok().filter(|v| !v.trim().is_empty()));
+    let [Some(nats_url), Some(source_id), Some(signing_key_path)] = values.clone() else {
+        let missing: Vec<&str> = ENV_VARS
+            .iter()
+            .zip(&values)
+            .filter(|(_, v)| v.is_none())
+            .map(|(n, _)| *n)
+            .collect();
         return Err(Finding::fail(
             "config",
             format!(
@@ -209,14 +175,13 @@ fn inputs_from_env() -> Result<Inputs, Finding> {
             "Either pass the connector's config file (ajar-doctor connector.toml) or export \
              the three variables your embedded connector runs with: NATS_URL (the operator's \
              endpoint), AJAR_SOURCE_ID (your registered source id) and AJAR_SIGNING_SEED \
-             (the path to your 32-byte seed file)."
-                .to_string(),
+             (the path to your 32-byte seed file).",
         ));
-    }
+    };
     Ok(Inputs {
-        source_id: get("AJAR_SOURCE_ID").expect("checked"),
-        nats_url: get("NATS_URL").expect("checked"),
-        signing_key_path: get("AJAR_SIGNING_SEED").expect("checked"),
+        source_id,
+        nats_url,
+        signing_key_path,
         subject_prefix: "ajar.ingest".to_string(),
         spool: None,
         marking: None,
@@ -234,8 +199,7 @@ fn check_signing_key(out: &mut Vec<Finding>, cfg: &Inputs) -> Option<String> {
                 "The seed file must be exactly 32 raw bytes or 64 hex characters. If you have \
                  an OpenSSL-generated PEM, extract the seed as shown in the onboarding guide \
                  (Keys section), or mint a fresh pair with `ajar-sink mint <source_id> <dir>` \
-                 and register the new .pub with your operator."
-                    .to_string(),
+                 and register the new .pub with your operator.",
             ));
             return None;
         }
@@ -277,10 +241,9 @@ fn check_signing_key(out: &mut Vec<Finding>, cfg: &Inputs) -> Option<String> {
                 ),
                 "The seed and its .pub no longer match; one of them was replaced without the \
                  other. Whichever value your operator has registered is the one that counts: \
-                 if it is the .pub, the original seed is gone and you need to re-mint AND \
+                 if it is the .pub, the original seed is gone and you need to re-mint and \
                  re-register; if the operator has the derived value above, delete the stale \
-                 .pub file."
-                    .to_string(),
+                 .pub file.",
             ));
             return Some(derived);
         }
@@ -322,21 +285,20 @@ fn check_spool(out: &mut Vec<Finding>, cfg: &Inputs) {
     match common::spool::Spool::open(spool_cfg) {
         Ok(spool) => {
             let depth = spool.depth_bytes();
-            // Prove the connector could append here, not just that we could open it.
+            // Opening is not appending: write and remove a probe file.
             let probe = std::path::Path::new(&spool_cfg.dir).join(".doctor-probe");
             match std::fs::write(&probe, b"probe").and_then(|_| std::fs::remove_file(&probe)) {
                 Ok(_) if depth > 0 => out.push(Finding::warn(
                     "spool",
                     format!(
-                        "{} is writable and holds {depth} bytes WAITING TO DRAIN",
+                        "{} is writable and holds {depth} bytes waiting to drain",
                         spool_cfg.dir
                     ),
                     "Events queued during an outage are still on disk. If the endpoint \
                      check above passes, the running connector is draining them at its \
                      paced rate - watch connector_drained_total on /metrics. If nothing \
                      is draining, the connector is not running or still cannot reach \
-                     the endpoint."
-                        .to_string(),
+                     the endpoint.",
                 )),
                 Ok(_) => out.push(Finding::ok(
                     "spool",
@@ -348,8 +310,7 @@ fn check_spool(out: &mut Vec<Finding>, cfg: &Inputs) {
                     "The connector will fail to spool during an outage. Fix ownership or \
                      mode on the directory (it must be writable by the connector's user), \
                      and in a container make sure it is a mounted volume, not the \
-                     container filesystem."
-                        .to_string(),
+                     container filesystem.",
                 )),
             }
         }
@@ -358,225 +319,8 @@ fn check_spool(out: &mut Vec<Finding>, cfg: &Inputs) {
             format!("{e:#}"),
             "The spool directory could not be opened. Check the path exists (or its \
              parent is creatable), the connector's user owns it, and in a container \
-             that it is a mounted volume so spooled events survive a restart."
-                .to_string(),
+             that it is a mounted volume so spooled events survive a restart.",
         )),
-    }
-}
-
-/// DDS says nothing when a subscription does not pair: a topic name, a type
-/// name, a partition or a QoS that differs from the publisher's produces
-/// silence. A bounded wait on the domain tells the cases apart, and the
-/// verdict is a pure function of what the probe saw, so each branch is tested
-/// without a network.
-#[cfg(feature = "dds")]
-fn check_dds(out: &mut Vec<Finding>, opts: &common::dds::Options, wait: Duration) {
-    match common::dds::probe(opts, wait) {
-        Ok(probe) => out.push(dds_verdict(opts, &probe, wait)),
-        Err(e) => out.push(Finding::fail(
-            "transport",
-            format!("{e:#}"),
-            "The connector will fail the same way. Check the domain id and, on a \
-             dual-NIC box, set transport.interface_ip to the address of the NIC \
-             on the DDS network."
-                .to_string(),
-        )),
-    }
-}
-
-#[cfg(feature = "dds")]
-fn dds_verdict(opts: &common::dds::Options, probe: &common::dds::Probe, wait: Duration) -> Finding {
-    let secs = wait.as_secs();
-    let same_topic: Vec<&(String, String)> = probe
-        .publishers
-        .iter()
-        .filter(|(name, _)| name == &opts.topic)
-        .collect();
-    let exact = same_topic.iter().any(|(_, ty)| ty == &opts.type_name);
-    let other_type = same_topic
-        .iter()
-        .find(|(_, ty)| ty != &opts.type_name)
-        .map(|(_, ty)| ty.clone());
-    match (probe.matched, probe.first_sample_len) {
-        (true, Some(n)) => Finding::ok(
-            "transport",
-            format!("dds publisher matched on {opts}; first sample {n} bytes"),
-        ),
-        // This stack reports a match on topic name alone, so a publisher of
-        // the same topic under another type name looks matched and silent.
-        // The publisher's own announcement is the decisive evidence.
-        (true, None) if !exact && other_type.is_some() => type_mismatch(opts, other_type),
-        (true, None) => Finding::warn(
-            "transport",
-            format!("dds publisher matched on {opts} but sent nothing in {secs} s"),
-            "A matched publisher that stays silent is usually idle (a radar between \
-             detections, a status topic that reports on change), or it keeps history \
-             only for readers that joined earlier. Wait for the source to emit, or \
-             ask its owner how often it publishes."
-                .to_string(),
-        ),
-        (false, _) if exact => Finding::fail(
-            "transport",
-            format!("a publisher of {opts} exists but did not pair with this reader"),
-            "Same topic, same type, no match: the QoS disagrees or the publisher is in a \
-             named partition. If reliability = \"reliable\" is set, the publisher is \
-             best-effort: use \"best-effort\", which pairs with either. This transport \
-             joins the default partition only."
-                .to_string(),
-        ),
-        (false, _) if other_type.is_some() => type_mismatch(opts, other_type),
-        (false, _) if probe.publishers.is_empty() => Finding::fail(
-            "transport",
-            format!("no dds publisher matched on {opts}"),
-            format!(
-                "No publisher of anything was seen in {secs} s: nothing DDS is reachable \
-                 from this box on domain {}. Check the domain id, that the DDS LAN is \
-                 the one this box is on (transport.interface_ip on a dual-NIC box), and \
-                 that multicast is not filtered.",
-                opts.domain
-            ),
-        ),
-        (false, _) => {
-            let mut names: Vec<&str> = probe.publishers.iter().map(|(n, _)| n.as_str()).collect();
-            names.dedup();
-            Finding::fail(
-                "transport",
-                format!("no dds publisher matched on {opts}"),
-                format!(
-                    "The domain is reachable (publishing: {}) but nothing publishes {:?}. \
-                     Check the topic name; the doctor lists what it can hear.",
-                    names.join(", "),
-                    opts.topic
-                ),
-            )
-        }
-    }
-}
-
-#[cfg(feature = "dds")]
-fn type_mismatch(opts: &common::dds::Options, other_type: Option<String>) -> Finding {
-    let other = other_type.unwrap_or_default();
-    Finding::fail(
-        "transport",
-        format!(
-            "dds topic {:?} is published under type name {other:?}, not {:?}",
-            opts.topic, opts.type_name
-        ),
-        format!("DDS pairs only on an exact type name. Set type_name = {other:?}."),
-    )
-}
-
-fn check_transport(out: &mut Vec<Finding>, cfg: &Inputs, timeout: Duration) {
-    match &cfg.transport {
-        Some(common::Transport::UdpMulticast {
-            bind,
-            group,
-            interface,
-        }) => {
-            // A real join-and-leave, not a guess: SO_REUSE means this is safe
-            // next to a running connector, and it exercises the exact
-            // interface-selection logic the connector will use.
-            match common::udp::open(bind, Some(group), interface.as_deref()) {
-                Ok(src) => out.push(Finding::ok("transport", {
-                    use common::FrameSource as _;
-                    format!("multicast join works ({})", src.describe())
-                })),
-                Err(e) => out.push(Finding::fail(
-                    "transport",
-                    format!("{e:#}"),
-                    "The connector will fail the same way. On a dual-homed box, set \
-                     transport.interface to the IP of the NIC on the surveillance \
-                     network (or put that IP in bind), so the group is joined where \
-                     the traffic actually is."
-                        .to_string(),
-                )),
-            }
-        }
-        #[cfg(feature = "serial")]
-        Some(common::Transport::Serial { device, baud }) => {
-            check_serial_device(out, device, *baud);
-        }
-        #[cfg(feature = "dds")]
-        Some(common::Transport::Dds(opts)) => check_dds(out, opts, timeout),
-        Some(common::Transport::PcapReplay { path, port, .. }) => {
-            match std::fs::read(path)
-                .map_err(|e| anyhow::anyhow!("reading capture {path}: {e}"))
-                .and_then(|data| common::replay::parse_pcap(&data, *port))
-            {
-                Ok(cap) => out.push(Finding::ok(
-                    "transport",
-                    format!(
-                        "capture {path} parses: {} datagrams to replay ({} skipped as noise)",
-                        cap.datagrams.len(),
-                        cap.skipped
-                    ),
-                )),
-                Err(e) => out.push(Finding::fail(
-                    "transport",
-                    format!("{e:#}"),
-                    "The connector will refuse the same capture. The error above names \
-                     the fix (a pcapng needs converting; an empty result usually means \
-                     the port filter does not match what was recorded)."
-                        .to_string(),
-                )),
-            }
-        }
-        _ => {}
-    }
-}
-
-fn check_serial_device(out: &mut Vec<Finding>, device: &str, baud: u32) {
-    match std::fs::metadata(device) {
-        Err(_) => out.push(Finding::fail(
-            "transport",
-            format!("serial device {device} does not exist"),
-            "Nothing is at that path: check the adapter is plugged in and the port \
-             name (ls /dev/tty* — a USB adapter is usually /dev/ttyUSB0 or \
-             /dev/ttyACM0, and the name can shift when replugged)."
-                .to_string(),
-        )),
-        Ok(_) => {
-            // Open read-only and non-blocking: a tty open without O_NONBLOCK can
-            // hang on carrier-detect, and the doctor never hangs.
-            #[cfg(unix)]
-            let opened = {
-                use std::os::unix::fs::OpenOptionsExt as _;
-                #[cfg(target_os = "linux")]
-                const O_NONBLOCK: i32 = 0o4000;
-                #[cfg(not(target_os = "linux"))]
-                const O_NONBLOCK: i32 = 0x0004;
-                std::fs::OpenOptions::new()
-                    .read(true)
-                    .custom_flags(O_NONBLOCK)
-                    .open(device)
-            };
-            #[cfg(not(unix))]
-            let opened = std::fs::OpenOptions::new().read(true).open(device);
-            match opened {
-                Ok(_) => out.push(Finding::ok(
-                    "transport",
-                    format!("serial device {device} present and readable ({baud} baud configured)"),
-                )),
-                Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
-                    out.push(Finding::fail(
-                        "transport",
-                        format!("serial device {device} exists but this user cannot read it"),
-                        "Add the connector's service user to the port's group (usually \
-                         `usermod -aG dialout <user>`, then log in again), or fix the \
-                         device permissions. The connector would retry forever and \
-                         publish nothing."
-                            .to_string(),
-                    ))
-                }
-                Err(e) => out.push(Finding::fail(
-                    "transport",
-                    format!("serial device {device}: {e}"),
-                    "The device exists but cannot be opened; check nothing else holds \
-                     it exclusively and that it is a real serial port."
-                        .to_string(),
-                )),
-            }
-        }
     }
 }
 
@@ -598,7 +342,7 @@ fn check_registration(
             "registration",
             format!(
                 "cannot be verified from this box. Ask your operator to confirm that source \
-                 {:?} is registered with EXACTLY this public key: {derived}",
+                 {:?} is registered with exactly this public key: {derived}",
                 cfg.source_id
             ),
         ));
@@ -623,8 +367,7 @@ fn check_registration(
                 "The sink will refuse every event as a signature failure. Either point \
                  signing_key_path at the seed that belongs to the registered key, or \
                  re-register: copy the new .pub into the sink's sources_dir (or re-run \
-                 `ajar-sink mint`) and restart the sink."
-                    .to_string(),
+                 `ajar-sink mint`) and restart the sink.",
             ));
         }
         Err(_) => {
@@ -680,14 +423,11 @@ async fn check_endpoint(
                 format!("nats_url {:?}: {e:#}", cfg.nats_url),
                 "nats_url must look like nats://host:4222 or tls://host:4222, with a \
                  comma-separated list for failover. Use the exact endpoint(s) the \
-                 operator sent back in registration step 3."
-                    .to_string(),
+                 operator sent back in registration step 3.",
             ));
             return (None, None);
         }
     };
-    // A failover list means EVERY endpoint gets probed: a dead standby is
-    // exactly what this tool exists to find before the drill does.
     if endpoints.len() > 1 {
         let mut dead: Vec<String> = Vec::new();
         for ep in &endpoints[1..] {
@@ -711,8 +451,7 @@ async fn check_endpoint(
                 "failover",
                 format!("standby endpoint(s) not answering: {}", dead.join("; ")),
                 "The connector still runs on the surviving endpoint(s), but the two-box \
-                 story is one box short. Fix the standby before you need it."
-                    .to_string(),
+                 story is one box short. Fix the standby before you need it.",
             ));
         }
     }
@@ -752,8 +491,7 @@ async fn check_endpoint(
                         format!("{} answers but does not speak NATS: {e:#}", ep.addr()),
                         "Something is listening there, but it is not a NATS server. The usual \
                          cause is the wrong port (a metrics or HTTP port instead of the client \
-                         port). Check nats_url against what the operator sent."
-                            .to_string(),
+                         port). Check nats_url against what the operator sent.",
                     ));
                     (None, None)
                 }
@@ -766,8 +504,7 @@ async fn check_endpoint(
                 "This machine cannot look the name up, which usually means the wrong network \
                  (the endpoint may be a name inside the operator's enclave) or missing DNS. \
                  Try the IP form of the endpoint if the operator gave one, and confirm which \
-                 network this box must sit on."
-                    .to_string(),
+                 network this box must sit on.",
             ));
             (None, None)
         }
@@ -778,8 +515,7 @@ async fn check_endpoint(
                 "The name is right but nothing accepted the connection: either NATS is not \
                  listening on that port or a firewall between here and there drops it. \
                  Confirm host:port with the operator; if it is correct, the firewall request \
-                 goes to whoever owns the network path."
-                    .to_string(),
+                 goes to whoever owns the network path.",
             ));
             (None, None)
         }
@@ -810,8 +546,7 @@ fn check_policy(
                 ),
                 "The runtime refuses a partial TLS config rather than guessing, so the \
                  connector will not start like this. Set the missing variable(s) to the files \
-                 the operator issued, or unset all three for a local cleartext dev run."
-                    .to_string(),
+                 the operator issued, or unset all three for a local cleartext dev run.",
             ));
             None
         }
@@ -822,8 +557,7 @@ fn check_policy(
                 "The runtime refuses to connect in cleartext when TLS is demanded. Export \
                  AJAR_TLS_CA, AJAR_TLS_CERT and AJAR_TLS_KEY pointing at the CA bundle, \
                  client certificate and key from your operator (the onboarding guide's \
-                 Production behaviour section shows the exact block)."
-                    .to_string(),
+                 Production behaviour section shows the exact block).",
             ));
             None
         }
@@ -835,16 +569,14 @@ fn check_policy(
                     "The endpoint answered with tls_required=true: every cleartext connection \
                      will be dropped. Export AJAR_TLS_CA, AJAR_TLS_CERT and AJAR_TLS_KEY with \
                      the files from your operator, and use a tls:// URL so the demand is \
-                     explicit on your side too."
-                        .to_string(),
+                     explicit on your side too.",
                 ));
             } else {
                 out.push(Finding::warn(
                     "tls policy",
                     "no AJAR_TLS_* set: cleartext, dev only",
                     "Fine against a local dev broker, never for a real link. The production \
-                     setup is the three AJAR_TLS_* variables plus a tls:// URL."
-                        .to_string(),
+                     setup is the three AJAR_TLS_* variables plus a tls:// URL.",
                 ));
             }
             None
@@ -865,9 +597,8 @@ fn check_certificate_files(
             "certificate files",
             format!("{ca} parses, but its first certificate is not marked as a CA"),
             "AJAR_TLS_CA must hold the operator's CA bundle (the roots that signed the \
-             SERVER certificate), not a copy of a server or client certificate. If the \
-             handshake below fails with an unknown issuer, this is why."
-                .to_string(),
+             server certificate), not a copy of a server or client certificate. If the \
+             handshake below fails with an unknown issuer, this is why.",
         )),
         Ok(_) => {}
         Err(e) => {
@@ -875,8 +606,7 @@ fn check_certificate_files(
                 "certificate files",
                 format!("{e:#}"),
                 "AJAR_TLS_CA must be a PEM file holding the operator's CA certificate(s). \
-                 Re-download or re-copy it from the operator's registration reply."
-                    .to_string(),
+                 Re-download or re-copy it from the operator's registration reply.",
             ));
             return None;
         }
@@ -891,8 +621,7 @@ fn check_certificate_files(
                 "AJAR_TLS_CERT must be your client certificate (PEM) and AJAR_TLS_KEY its \
                  private key (PEM). The most common slip is the two paths swapped; the next \
                  most common is pointing AJAR_TLS_KEY at the Ed25519 signing seed, which is a \
-                 different key entirely."
-                    .to_string(),
+                 different key entirely.",
             ));
             return None;
         }
@@ -907,8 +636,7 @@ fn check_certificate_files(
                 identity.leaf.not_after_text
             ),
             "Ask the operator to reissue your client certificate. Until then the server \
-             will refuse the handshake."
-                .to_string(),
+             will refuse the handshake.",
         ));
     } else if identity.leaf.not_before > now {
         out.push(Finding::fail(
@@ -919,8 +647,7 @@ fn check_certificate_files(
             ),
             "Either this machine's clock is behind (run `date -u` and compare with a clock \
              you trust) or the certificate was postdated. A skewed clock also corrupts \
-             event timestamps, so fix it either way."
-                .to_string(),
+             event timestamps, so fix it either way.",
         ));
     } else {
         match &identity.leaf.common_name {
@@ -940,15 +667,13 @@ fn check_certificate_files(
                 "The client certificate's CN is the connector's transport identity and must \
                  be exactly the source_id. Some operators map identities differently, but if \
                  the server refuses you or the sink attributes events oddly, this mismatch \
-                 is the first thing to fix (reissue the certificate with the right CN)."
-                    .to_string(),
+                 is the first thing to fix (reissue the certificate with the right CN).",
             )),
             None => out.push(Finding::warn(
                 "certificate files",
-                "the client certificate has no CN".to_string(),
+                "the client certificate has no CN",
                 "The convention is CN = source_id. Confirm with the operator that your \
-                 certificate is mapped to your registered identity some other way."
-                    .to_string(),
+                 certificate is mapped to your registered identity some other way.",
             )),
         }
     }
@@ -980,7 +705,7 @@ async fn check_handshake(
             out.push(Finding::fail(
                 "tls handshake",
                 format!("{e:#}"),
-                "Fix the file named above and re-run; the handshake was not attempted.".to_string(),
+                "Fix the file named above and re-run; the handshake was not attempted.",
             ));
             None
         }
@@ -1007,8 +732,7 @@ fn check_clock(out: &mut Vec<Finding>, server_cert: Option<&certs::CertInfo>) {
             ),
             "The local clock is almost certainly behind. Fix it (NTP where available, \
              `date -u -s` on an air-gapped box) before trusting any timestamps this \
-             connector produces."
-                .to_string(),
+             connector produces.",
         ));
     } else if now > cert.not_after {
         out.push(Finding::warn(
@@ -1019,8 +743,7 @@ fn check_clock(out: &mut Vec<Finding>, server_cert: Option<&certs::CertInfo>) {
                 cert.not_after_text
             ),
             "Run `date -u` and compare with a clock you trust before blaming the \
-             certificate."
-                .to_string(),
+             certificate.",
         ));
     } else {
         out.push(Finding::ok(
@@ -1030,139 +753,5 @@ fn check_clock(out: &mut Vec<Finding>, server_cert: Option<&certs::CertInfo>) {
                 cert.not_before_text, cert.not_after_text
             ),
         ));
-    }
-}
-
-#[cfg(all(test, feature = "dds"))]
-mod dds_verdict_tests {
-    use super::*;
-    use crate::report::Status;
-    use common::dds::{Options, Probe};
-    use common::{DdsPayload, DdsReliability};
-
-    fn opts() -> Options {
-        Options {
-            domain: 0,
-            topic: "RadarAsterix".into(),
-            type_name: "Radar::AsterixBlock".into(),
-            reliability: DdsReliability::BestEffort,
-            payload: DdsPayload::Octets,
-            interface_ip: None,
-        }
-    }
-    fn probe(matched: bool, sample: Option<usize>, publishers: &[(&str, &str)]) -> Probe {
-        Probe {
-            matched,
-            first_sample_len: sample,
-            publishers: publishers
-                .iter()
-                .map(|(t, ty)| (t.to_string(), ty.to_string()))
-                .collect(),
-        }
-    }
-    const WAIT: Duration = Duration::from_secs(5);
-
-    #[test]
-    fn a_matched_publisher_with_a_sample_passes() {
-        let f = dds_verdict(
-            &opts(),
-            &probe(true, Some(28), &[("RadarAsterix", "Radar::AsterixBlock")]),
-            WAIT,
-        );
-        assert_eq!(f.status, Status::Ok);
-        assert!(f.detail.contains("28 bytes"), "{}", f.detail);
-    }
-
-    #[test]
-    fn the_topic_under_another_type_name_names_the_right_one() {
-        // Matched on the topic name alone, silent: the publisher's own
-        // announcement says why.
-        let f = dds_verdict(
-            &opts(),
-            &probe(true, None, &[("RadarAsterix", "Other::Type")]),
-            WAIT,
-        );
-        assert_eq!(f.status, Status::Fail);
-        assert!(
-            f.fix
-                .as_deref()
-                .unwrap_or("")
-                .contains("type_name = \"Other::Type\""),
-            "{:?}",
-            f.fix
-        );
-        // And the same when the stack did not even report a match.
-        let f = dds_verdict(
-            &opts(),
-            &probe(false, None, &[("RadarAsterix", "Other::Type")]),
-            WAIT,
-        );
-        assert_eq!(f.status, Status::Fail);
-        assert!(f.detail.contains("Other::Type"), "{}", f.detail);
-    }
-
-    #[test]
-    fn a_matched_but_idle_publisher_is_a_warning_not_a_failure() {
-        let f = dds_verdict(
-            &opts(),
-            &probe(true, None, &[("RadarAsterix", "Radar::AsterixBlock")]),
-            WAIT,
-        );
-        assert_eq!(f.status, Status::Warn);
-        assert!(f.detail.contains("5 s"), "{}", f.detail);
-        assert!(
-            f.fix.as_deref().unwrap_or("").contains("idle"),
-            "{:?}",
-            f.fix
-        );
-    }
-
-    #[test]
-    fn same_topic_same_type_no_pairing_points_at_qos_and_partition() {
-        let mut o = opts();
-        o.reliability = DdsReliability::Reliable;
-        let f = dds_verdict(
-            &o,
-            &probe(false, None, &[("RadarAsterix", "Radar::AsterixBlock")]),
-            WAIT,
-        );
-        assert_eq!(f.status, Status::Fail);
-        let fix = f.fix.unwrap_or_default();
-        assert!(
-            fix.contains("best-effort") && fix.contains("partition"),
-            "{fix}"
-        );
-    }
-
-    #[test]
-    fn a_silent_domain_points_at_the_network_not_the_topic_name() {
-        let f = dds_verdict(&opts(), &probe(false, None, &[]), WAIT);
-        assert_eq!(f.status, Status::Fail);
-        let fix = f.fix.unwrap_or_default();
-        assert!(
-            fix.contains("interface_ip") && fix.contains("multicast"),
-            "{fix}"
-        );
-        assert!(!fix.contains("topic name"), "{fix}");
-    }
-
-    #[test]
-    fn a_reachable_domain_without_the_topic_lists_what_it_heard() {
-        let f = dds_verdict(
-            &opts(),
-            &probe(
-                false,
-                None,
-                &[
-                    ("Other", "X::Y"),
-                    ("rt/chatter", "std_msgs::msg::dds_::String_"),
-                ],
-            ),
-            WAIT,
-        );
-        assert_eq!(f.status, Status::Fail);
-        let fix = f.fix.unwrap_or_default();
-        assert!(fix.contains("rt/chatter") && fix.contains("Other"), "{fix}");
-        assert!(fix.contains("\"RadarAsterix\""), "{fix}");
     }
 }

@@ -1,11 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-// A compact, dependency-free JSON reader for the VENDORED contract files only:
-// vectors.json and the corpus fixtures (conformance harness) and ontology.json
-// (mapping validation). Those inputs are hash-pinned and trusted; this is not a
-// parser for wire data. It is intentionally small and auditable rather than a
-// general-purpose library; numbers are parsed with strtod (correct nearest
-// double, matching serde_json / encoding/json).
+// A dependency-free JSON reader for the vendored, hash-pinned contract files
+// only: vectors.json, the corpus fixtures and ontology.json. It is not a parser
+// for wire data. Numbers are parsed with strtod (nearest double, matching
+// serde_json and encoding/json).
 
 #ifndef AJAR_MINI_JSON_HPP
 #define AJAR_MINI_JSON_HPP

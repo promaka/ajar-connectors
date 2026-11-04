@@ -2,7 +2,7 @@
 [package]
 name = "ajar-mavlink"
 description = "Ajar ingress connector for MAVLink vehicle position telemetry (UAS / drones)."
-version = "0.6.6"
+version = "0.6.7"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -15,9 +15,7 @@ name = "ajar-mavlink"
 path = "src/main.rs"
 
 [features]
-# DDS is compiled in so the shipped binary can read a topic on a ship's or a
-# ROS 2 platform's bus; it is inert unless a config says kind = "dds".
-# A lean build is one flag away: --no-default-features.
+# Inert unless a config sets kind = "dds"; --no-default-features drops it.
 default = ["dds"]
 dds = ["ajar-connector-common/dds"]
 
@@ -28,14 +26,15 @@ tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 anyhow.workspace = true
+thiserror.workspace = true
 
 [dev-dependencies]
 ed25519-dalek.workspace = true
-sha2 = "0.11"
+sha2.workspace = true
 hex.workspace = true
-serde_json = "1"
-proptest = "1"
-uuid = "1"
+serde_json.workspace = true
+proptest.workspace = true
+uuid.workspace = true
 
 # See CONTRIBUTING.md, "Releases".
 [package.metadata.ajar]

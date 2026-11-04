@@ -4,7 +4,7 @@
 
 use std::time::Duration;
 
-use anyhow::{anyhow, Context};
+use anyhow::Context;
 use tokio::io::AsyncReadExt;
 use tokio::net::TcpStream;
 
@@ -23,45 +23,34 @@ impl Endpoint {
     }
 }
 
-/// Parse every endpoint of a `nats_url` failover list (a single URL is the
-/// one-element case). Accepts `nats://host:port`, `tls://host:port`, bare
-/// `host:port`, and an optional `user:pass@` block per entry.
+/// Every endpoint of a comma-separated `nats_url` failover list. Each entry is
+/// `nats://host:port`, `tls://host:port` or bare `host:port`, with an optional
+/// `user:pass@`; the port defaults to 4222.
 pub fn parse_urls(url: &str) -> anyhow::Result<Vec<Endpoint>> {
     url.split(',').map(|u| parse_one(u.trim())).collect()
 }
 
-/// Parse the first endpoint out of a `nats_url` (compat: probes that only
-/// need somewhere to dial).
-pub fn parse_url(url: &str) -> anyhow::Result<Endpoint> {
-    parse_one(
-        url.split(',')
-            .next()
-            .expect("split yields at least one item")
-            .trim(),
-    )
-}
-
-fn parse_one(first: &str) -> anyhow::Result<Endpoint> {
-    let lower = first.to_ascii_lowercase();
+fn parse_one(entry: &str) -> anyhow::Result<Endpoint> {
+    let lower = entry.to_ascii_lowercase();
     let (tls_scheme, rest) = if let Some(r) = lower.strip_prefix("tls://") {
-        (true, &first[first.len() - r.len()..])
+        (true, &entry[entry.len() - r.len()..])
     } else if let Some(r) = lower.strip_prefix("nats://") {
-        (false, &first[first.len() - r.len()..])
+        (false, &entry[entry.len() - r.len()..])
     } else {
-        (false, first)
+        (false, entry)
     };
-    // Credentials in the URL are the operator's business; strip them for dialing.
+    // Credentials are stripped for dialing.
     let rest = rest.rsplit('@').next().unwrap_or(rest);
     let (host, port) = match rest.rsplit_once(':') {
         Some((h, p)) => (
             h,
             p.parse::<u16>()
-                .map_err(|_| anyhow!("{p:?} is not a port number"))?,
+                .map_err(|_| anyhow::anyhow!("{p:?} is not a port number"))?,
         ),
         None => (rest, 4222),
     };
     if host.is_empty() {
-        return Err(anyhow!("no host in nats_url entry {first:?}"));
+        return Err(anyhow::anyhow!("no host in nats_url entry {entry:?}"));
     }
     Ok(Endpoint {
         host: host.to_string(),
@@ -70,7 +59,6 @@ fn parse_one(first: &str) -> anyhow::Result<Endpoint> {
     })
 }
 
-/// What a TCP dial found out.
 #[derive(Debug)]
 pub enum Dial {
     Connected(TcpStream),
@@ -80,9 +68,8 @@ pub enum Dial {
     NoAnswer(String),
 }
 
-/// Resolve and connect, with a bounded wait. Distinguishes "the name is wrong
-/// for this network" from "the name is right but nothing is listening", which
-/// are fixed by different people.
+/// Resolve and connect, with a bounded wait. A name that does not resolve and
+/// a name nothing answers on are fixed by different people.
 pub async fn dial(ep: &Endpoint, timeout: Duration) -> Dial {
     let addrs = match tokio::net::lookup_host(ep.addr()).await {
         Ok(a) => a.collect::<Vec<_>>(),
@@ -102,29 +89,28 @@ pub async fn dial(ep: &Endpoint, timeout: Duration) -> Dial {
     Dial::NoAnswer(last)
 }
 
-/// The server's cleartext greeting, when it sends one. In the standard NATS
-/// handshake the server speaks first with `INFO {json}` before any TLS
-/// upgrade; a server in TLS-first mode sends nothing until the handshake.
+/// The cleartext `INFO {json}` a NATS server sends before any TLS upgrade.
 #[derive(Debug, Default)]
 pub struct ServerInfo {
     pub tls_required: bool,
     pub tls_available: bool,
-    /// The raw JSON, for the curious.
-    pub raw: String,
 }
 
-/// Read the INFO greeting off a fresh connection, if the server sends one
-/// within the wait. `Ok(None)` means silence, which is what a TLS-first
-/// server looks like; it is not an error.
+/// The INFO greeting off a fresh connection. `Ok(None)` is silence within the
+/// wait, which is what a TLS-first server looks like.
 pub async fn read_info(
     stream: &mut TcpStream,
     wait: Duration,
 ) -> anyhow::Result<Option<ServerInfo>> {
     let mut buf = vec![0u8; 8192];
     let n = match tokio::time::timeout(wait, stream.read(&mut buf)).await {
-        Ok(Ok(0)) => return Err(anyhow!("the server closed the connection immediately")),
+        Ok(Ok(0)) => {
+            return Err(anyhow::anyhow!(
+                "the server closed the connection immediately"
+            ))
+        }
         Ok(Ok(n)) => n,
-        Ok(Err(e)) => return Err(anyhow!("reading the server greeting: {e}")),
+        Ok(Err(e)) => return Err(anyhow::anyhow!("reading the server greeting: {e}")),
         Err(_) => return Ok(None),
     };
     let text = String::from_utf8_lossy(&buf[..n]);
@@ -133,7 +119,7 @@ pub async fn read_info(
 
 pub fn parse_info(text: &str) -> anyhow::Result<ServerInfo> {
     let rest = text.trim_start().strip_prefix("INFO ").ok_or_else(|| {
-        anyhow!(
+        anyhow::anyhow!(
             "the server did not greet with INFO (got {:?})",
             text.chars().take(40).collect::<String>()
         )
@@ -144,7 +130,6 @@ pub fn parse_info(text: &str) -> anyhow::Result<ServerInfo> {
     Ok(ServerInfo {
         tls_required: v["tls_required"].as_bool().unwrap_or(false),
         tls_available: v["tls_available"].as_bool().unwrap_or(false),
-        raw: line.trim().to_string(),
     })
 }
 
@@ -152,38 +137,53 @@ pub fn parse_info(text: &str) -> anyhow::Result<ServerInfo> {
 mod tests {
     use super::*;
 
+    fn first(url: &str) -> Endpoint {
+        parse_urls(url).unwrap().remove(0)
+    }
+
     #[test]
-    fn parses_every_url_shape_a_config_can_carry() {
-        let ep = parse_url("tls://nats.example.mil:4443").unwrap();
+    fn tls_scheme_host_and_port() {
         assert_eq!(
-            ep,
+            first("tls://nats.example.mil:4443"),
             Endpoint {
                 host: "nats.example.mil".into(),
                 port: 4443,
                 tls_scheme: true
             }
         );
-        let ep = parse_url("nats://127.0.0.1:4222").unwrap();
-        assert!(!ep.tls_scheme);
-        // Bare host defaults to the NATS port.
-        assert_eq!(parse_url("localhost").unwrap().port, 4222);
-        // Credentials are stripped, never printed back.
-        let ep = parse_url("nats://user:secret@10.0.0.5:4222").unwrap();
-        assert_eq!(ep.host, "10.0.0.5");
-        // Only the first entry of a list is probed.
-        assert_eq!(parse_url("nats://a:4222,nats://b:4222").unwrap().host, "a");
-        // Scheme casing does not matter; the host's own casing is preserved.
-        assert_eq!(parse_url("TLS://UpperHost:4443").unwrap().host, "UpperHost");
+        assert!(!first("nats://127.0.0.1:4222").tls_scheme);
     }
 
     #[test]
-    fn rejects_the_urls_that_would_confuse_the_connector_too() {
-        assert!(parse_url("nats://host:notaport").is_err());
-        assert!(parse_url("tls://:4222").is_err());
+    fn bare_host_defaults_to_nats_port() {
+        assert_eq!(first("localhost").port, 4222);
     }
 
     #[test]
-    fn reads_the_tls_flags_out_of_a_real_greeting() {
+    fn credentials_are_stripped() {
+        assert_eq!(first("nats://user:secret@10.0.0.5:4222").host, "10.0.0.5");
+    }
+
+    #[test]
+    fn failover_list_keeps_order() {
+        let eps = parse_urls("nats://a:4222, nats://b:4222").unwrap();
+        let hosts: Vec<&str> = eps.iter().map(|e| e.host.as_str()).collect();
+        assert_eq!(hosts, ["a", "b"]);
+    }
+
+    #[test]
+    fn scheme_case_ignored_host_case_kept() {
+        assert_eq!(first("TLS://UpperHost:4443").host, "UpperHost");
+    }
+
+    #[test]
+    fn bad_port_or_empty_host_rejected() {
+        assert!(parse_urls("nats://host:notaport").is_err());
+        assert!(parse_urls("tls://:4222").is_err());
+    }
+
+    #[test]
+    fn reads_tls_flags_from_greeting() {
         let info = parse_info(
             "INFO {\"server_id\":\"X\",\"tls_required\":true,\"tls_available\":true}\r\n",
         )
@@ -193,7 +193,7 @@ mod tests {
     }
 
     #[test]
-    fn a_non_nats_service_is_named_not_guessed_at() {
+    fn non_nats_service_named() {
         let err = parse_info("HTTP/1.1 400 Bad Request\r\n").unwrap_err();
         assert!(err.to_string().contains("did not greet with INFO"));
     }

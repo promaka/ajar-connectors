@@ -1,25 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Contract conformance for the AIS/NMEA connector.
-//!
-//! Two things Core relies on, checked here without importing Core (its rules are
-//! mirrored, not linked):
-//!  1. the produced event satisfies Core's **content** contract — the id is a
-//!     UUIDv7 and the timestamp is RFC 3339 (the two rules the encoding vectors do
-//!     not cover, and the ones that rejected real events in the field);
-//!  2. the seal verifies under the published contract key.
-//!
-//! Plus a mapping check: the native MMSI is preserved as an attribute, never used
-//! as the id.
+//! Events meet Core's content contract and seal under the published contract key.
 
 use ajar_ais_nmea::AisParser;
-use ajar_connector::{canonical_bytes, seal, SEAL_SIGNATURE_LEN};
+use ajar_connector::SEAL_SIGNATURE_LEN;
 use ajar_connector_common::Enrichment;
 use ed25519_dalek::{Signature, SigningKey, Verifier, VerifyingKey};
 use uuid::Uuid;
 
-// Real AIVDM sentence, independently decoded (checksum verifies): type 1, MMSI
-// 227006760, 49.475577 N, 0.131380 E, COG 36.7. A real, non-UUID native id — the
-// point being that the connector must NOT let it reach the event id field.
+// Type 1, MMSI 227006760, 49.475577 N 0.131380 E, COG 36.7.
 const REAL: &[u8] = b"!AIVDM,1,1,,A,13HOI:0P0000VOHLCnHQKwvL05Ip,0*23";
 const OBSERVED: &str = "2026-06-10T08:00:00Z";
 
@@ -39,7 +27,6 @@ fn hex32(v: &serde_json::Value, key: &str) -> [u8; 32] {
 }
 
 fn parser() -> AisParser {
-    // Governed mode: a deployment that declared its ontology.
     AisParser::new(
         "ais-coast-1",
         Enrichment::default().with_hostility("Neutral"),
@@ -52,16 +39,14 @@ fn connector_event() -> ajar_connector::Event {
         .parse_sentence(REAL)
         .expect("sentence parses")
         .expect("is a position report");
-    p.to_event_at(&pos, OBSERVED).expect("builds")
+    p.to_event_at(pos, OBSERVED).expect("builds")
 }
 
 #[test]
 fn event_satisfies_core_content_contract() {
     let ev = connector_event();
-    // id is a fresh UUIDv7 (Core rejects anything else).
     let uuid = Uuid::parse_str(&ev.id).expect("id must be a UUID");
     assert_eq!(uuid.get_version_num(), 7, "id must be a UUIDv7");
-    // timestamp is RFC 3339.
     assert!(is_rfc3339(&ev.timestamp), "timestamp must be RFC 3339");
     assert!(!ev.source_id.is_empty());
     assert!(!ev.entity_type.is_empty());
@@ -73,8 +58,6 @@ fn native_mmsi_is_preserved_as_metadata_not_id() {
     assert_eq!(ev.entity_type, "mim:vessel");
     assert_ne!(ev.id, "mmsi:227006760");
     assert_ne!(ev.id, "227006760");
-    // The native key names stay in metadata and never become the id; the
-    // MMSI is also governed, as alt_id under the AIS standard code.
     assert!(
         ev.metadata
             .iter()
@@ -94,8 +77,8 @@ fn seal_verifies_under_the_published_contract_key() {
     let vk = VerifyingKey::from_bytes(&hex32(&contract, "verifyingKeyHex"))
         .expect("published verifying key is valid");
 
-    let canonical = canonical_bytes(&connector_event());
-    let sealed = seal(&canonical, &SigningKey::from_bytes(&seed));
+    let canonical = ajar_connector::canonical_bytes(&connector_event());
+    let sealed = ajar_connector::seal(&canonical, &SigningKey::from_bytes(&seed));
 
     assert_eq!(sealed.len(), SEAL_SIGNATURE_LEN + canonical.len());
     let (sig, body) = sealed.split_at(SEAL_SIGNATURE_LEN);
@@ -105,13 +88,12 @@ fn seal_verifies_under_the_published_contract_key() {
         .expect("seal signature must verify under the contract key");
 }
 
-/// Canonical repeated `Attribute`: keys strictly increasing (sorted + unique).
+/// Keys strictly increasing: sorted and unique.
 fn is_canonical(entries: &[ajar_connector::Attribute]) -> bool {
     entries.windows(2).all(|w| w[0].key < w[1].key)
 }
 
-/// Mirror Core's timestamp rule without importing it: RFC 3339, `Z` or numeric
-/// offset, optional fractional seconds.
+/// Core's timestamp rule: RFC 3339 with `Z` or a numeric offset.
 fn is_rfc3339(s: &str) -> bool {
     let b = s.as_bytes();
     if b.len() < 20 {

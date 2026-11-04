@@ -1,40 +1,26 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Timing-aware replay of a recorded capture — "email us yesterday's radar
-//! log, watch your own traffic as a live governed picture."
-//!
-//! Naval and ATC evaluations start from recordings, not live feeds: a PCAP of
-//! the multicast ASTERIX or NMEA traffic is the field's standard exchange
-//! (the same shape the established radar record/replay tools consume). This
-//! transport replays each captured UDP payload as one frame, preserving the
-//! original inter-packet timing (scaled by `speed`), so any connector runs a
-//! recording exactly as it would have run the day it was captured.
-//!
-//! Scope, stated honestly: classic pcap (v2.4, the `tcpdump -w` format),
-//! Ethernet link type, IPv4/UDP, with optional 802.1Q VLAN tags. That is
-//! what radar recorders emit. pcapng (Wireshark's default) is converted in
-//! one line: `tshark -F pcap -r capture.pcapng -w capture.pcap`. Non-UDP and
-//! non-IPv4 packets are skipped and counted, never errors: a real capture
-//! carries ARP and the odd TCP session alongside the feed.
+//! Capture replay: each UDP payload in a classic pcap (v2.4, Ethernet, IPv4,
+//! optional 802.1Q tags) becomes one frame, delivered with the original
+//! inter-packet timing scaled by `speed`. Other packets are skipped and
+//! counted.
 
 use std::time::Duration;
 
-use anyhow::{bail, Context};
+use anyhow::Context;
 
 use crate::runtime::FrameSource;
 
-/// One replayable datagram: the delay since the previous packet, the payload.
+/// One datagram and the delay since the previous one.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Datagram {
     pub delay: Duration,
     pub payload: Vec<u8>,
 }
 
-/// A parsed capture, plus what was skipped getting there.
 #[derive(Debug)]
 pub struct Capture {
     pub datagrams: Vec<Datagram>,
-    /// Packets that were not IPv4/UDP (ARP, TCP, IPv6...) or did not match
-    /// the port filter: normal capture noise, skipped and counted.
+    /// Packets that were not IPv4/UDP or did not match the port filter.
     pub skipped: u64,
 }
 
@@ -42,31 +28,30 @@ pub struct Capture {
 /// those to `port`) with their inter-packet timing.
 pub fn parse_pcap(data: &[u8], port: Option<u16>) -> anyhow::Result<Capture> {
     if data.len() < 24 {
-        bail!(
+        anyhow::bail!(
             "not a pcap: {} bytes is shorter than the global header",
             data.len()
         );
     }
-    let magic = u32::from_le_bytes(data[0..4].try_into().expect("len checked"));
-    // Magic tells us byte order and timestamp resolution.
-    let (le, nanos) = match magic {
+    let magic = [data[0], data[1], data[2], data[3]];
+    // The magic gives byte order and timestamp resolution.
+    let (le, nanos) = match u32::from_le_bytes(magic) {
         0xa1b2_c3d4 => (true, false),
         0xa1b2_3c4d => (true, true),
-        _ => match u32::from_be_bytes(data[0..4].try_into().expect("len checked")) {
+        _ => match u32::from_be_bytes(magic) {
             0xa1b2_c3d4 => (false, false),
             0xa1b2_3c4d => (false, true),
-            other => bail!(
+            other => anyhow::bail!(
                 "not a classic pcap (magic {other:#010x}). A .pcapng converts with: \
                  tshark -F pcap -r in.pcapng -w out.pcap"
             ),
         },
     };
     let u32_at = |off: usize| -> anyhow::Result<u32> {
-        let b: [u8; 4] = data
-            .get(off..off + 4)
-            .context("pcap truncated")?
-            .try_into()
-            .expect("len checked");
+        let Some(&[b0, b1, b2, b3]) = data.get(off..off + 4) else {
+            anyhow::bail!("pcap truncated");
+        };
+        let b = [b0, b1, b2, b3];
         Ok(if le {
             u32::from_le_bytes(b)
         } else {
@@ -75,7 +60,7 @@ pub fn parse_pcap(data: &[u8], port: Option<u16>) -> anyhow::Result<Capture> {
     };
     let linktype = u32_at(20)?;
     if linktype != 1 {
-        bail!(
+        anyhow::bail!(
             "pcap link type {linktype} is not Ethernet (1); radar recorders emit \
              Ethernet captures, and anything else needs re-capturing or conversion"
         );
@@ -83,15 +68,15 @@ pub fn parse_pcap(data: &[u8], port: Option<u16>) -> anyhow::Result<Capture> {
 
     let mut datagrams = Vec::new();
     let mut skipped = 0u64;
-    let mut prev_ts: Option<u64> = None; // nanoseconds
+    let mut prev_ts_ns: Option<u64> = None;
     let mut off = 24usize;
     while off + 16 <= data.len() {
         let ts_sec = u32_at(off)? as u64;
         let ts_frac = u32_at(off + 4)? as u64;
         let incl_len = u32_at(off + 8)? as usize;
         off += 16;
+        // A torn tail record from a killed recorder ends the capture.
         let Some(frame) = data.get(off..off + incl_len) else {
-            // A torn tail record (killed recorder): replay what we have.
             break;
         };
         off += incl_len;
@@ -99,11 +84,11 @@ pub fn parse_pcap(data: &[u8], port: Option<u16>) -> anyhow::Result<Capture> {
 
         match udp_payload(frame, port) {
             Some(payload) => {
-                let delay = match prev_ts {
+                let delay = match prev_ts_ns {
                     Some(p) => Duration::from_nanos(ts_ns.saturating_sub(p)),
                     None => Duration::ZERO,
                 };
-                prev_ts = Some(ts_ns);
+                prev_ts_ns = Some(ts_ns);
                 datagrams.push(Datagram {
                     delay,
                     payload: payload.to_vec(),
@@ -115,7 +100,7 @@ pub fn parse_pcap(data: &[u8], port: Option<u16>) -> anyhow::Result<Capture> {
     Ok(Capture { datagrams, skipped })
 }
 
-/// The UDP payload of an Ethernet/IPv4 frame, or None for capture noise.
+/// The UDP payload of an Ethernet/IPv4 frame, if it is one.
 fn udp_payload(frame: &[u8], port: Option<u16>) -> Option<&[u8]> {
     // Ethernet: dst(6) src(6) ethertype(2), with optional 802.1Q tag(s).
     let mut off = 12;
@@ -125,13 +110,15 @@ fn udp_payload(frame: &[u8], port: Option<u16>) -> Option<&[u8]> {
         ethertype = u16::from_be_bytes(frame.get(off + 2..off + 4)?.try_into().ok()?);
         off += 4;
     }
+    // 0x0800: IPv4
     if ethertype != 0x0800 {
-        return None; // not IPv4
+        return None;
     }
     let ip = frame.get(off..)?;
     let ihl = (usize::from(*ip.first()?) & 0x0f) * 4;
+    // Protocol 17: UDP
     if ihl < 20 || *ip.get(9)? != 17 {
-        return None; // malformed or not UDP
+        return None;
     }
     let udp = ip.get(ihl..)?;
     let dst_port = u16::from_be_bytes(udp.get(2..4)?.try_into().ok()?);
@@ -147,21 +134,18 @@ fn udp_payload(frame: &[u8], port: Option<u16>) -> Option<&[u8]> {
     udp.get(8..udp_len.min(udp.len()))
 }
 
-/// The capture presented as a [`FrameSource`]: each payload delivered after
-/// its original delay, scaled by `speed`, long gaps clamped so a recorder
-/// left running over lunch does not stall the demo.
+/// Each payload delivered after its original delay scaled by `speed`, gaps
+/// clamped to `max_gap` so an idle recorder does not stall the replay.
 pub struct ReplaySource {
-    datagrams: std::vec::IntoIter<Datagram>,
-    all: Vec<Datagram>,
+    datagrams: Vec<Datagram>,
+    next: usize,
     speed: f64,
     max_gap: Duration,
     looping: bool,
     describe: String,
-    /// Set once the capture (non-looping) is fully delivered.
     done_logged: bool,
 }
 
-/// Open a replay source per the transport config.
 pub fn open(
     path: &str,
     speed: f64,
@@ -170,12 +154,12 @@ pub fn open(
     max_gap_ms: u64,
 ) -> anyhow::Result<ReplaySource> {
     if speed <= 0.0 {
-        bail!("transport.speed must be positive (1.0 = real time, 10 = ten times faster)");
+        anyhow::bail!("transport.speed must be positive (1.0 = real time, 10 = ten times faster)");
     }
     let data = std::fs::read(path).with_context(|| format!("reading capture {path}"))?;
     let capture = parse_pcap(&data, port).with_context(|| format!("parsing capture {path}"))?;
     if capture.datagrams.is_empty() {
-        bail!(
+        anyhow::bail!(
             "capture {path} contains no matching UDP datagrams \
              ({} packets skipped as non-UDP/other-port); check the port filter \
              against what the recorder actually captured",
@@ -190,8 +174,8 @@ pub fn open(
         "replaying capture"
     );
     Ok(ReplaySource {
-        datagrams: capture.datagrams.clone().into_iter(),
-        all: capture.datagrams,
+        datagrams: capture.datagrams,
+        next: 0,
         speed,
         max_gap: Duration::from_millis(max_gap_ms),
         looping,
@@ -204,8 +188,9 @@ pub fn open(
 impl FrameSource for ReplaySource {
     async fn recv(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         loop {
-            match self.datagrams.next() {
+            match self.datagrams.get(self.next) {
                 Some(d) => {
+                    self.next += 1;
                     let scaled = d.delay.div_f64(self.speed).min(self.max_gap);
                     if !scaled.is_zero() {
                         tokio::time::sleep(scaled).await;
@@ -215,14 +200,13 @@ impl FrameSource for ReplaySource {
                     return Ok(n);
                 }
                 None if self.looping => {
-                    self.datagrams = self.all.clone().into_iter();
+                    self.next = 0;
                 }
                 None => {
                     if !self.done_logged {
                         self.done_logged = true;
-                        tracing::info!("capture fully replayed; connector stays up (loop = true replays forever)");
+                        tracing::info!("capture fully replayed");
                     }
-                    // No more frames, ever: park without spinning.
                     std::future::pending::<()>().await;
                 }
             }
@@ -236,6 +220,8 @@ impl FrameSource for ReplaySource {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const PORT: u16 = 8600;
 
     /// Craft a classic pcap (LE, microseconds) of Ethernet/IPv4/UDP packets:
     /// (ts_micros, dst_port, payload).
@@ -255,6 +241,13 @@ mod tests {
             out.extend_from_slice(&frame);
         }
         out
+    }
+
+    /// A capture file holding `pcap(packets)`.
+    fn capture_file(packets: &[(u64, u16, &[u8])]) -> tempfile::NamedTempFile {
+        let f = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(f.path(), pcap(packets)).unwrap();
+        f
     }
 
     fn eth_udp(dst_port: u16, payload: &[u8]) -> Vec<u8> {
@@ -279,11 +272,11 @@ mod tests {
     }
 
     #[test]
-    fn payloads_and_timing_survive_the_round_trip() {
+    fn payloads_and_timing_round_trip() {
         let data = pcap(&[
-            (1_000_000, 8600, b"first"),
-            (1_250_000, 8600, b"second"),
-            (1_250_000 + 300_000, 8600, b"third"),
+            (1_000_000, PORT, b"first"),
+            (1_250_000, PORT, b"second"),
+            (1_250_000 + 300_000, PORT, b"third"),
         ]);
         let cap = parse_pcap(&data, None).unwrap();
         assert_eq!(cap.skipped, 0);
@@ -295,12 +288,12 @@ mod tests {
     }
 
     #[test]
-    fn capture_noise_is_skipped_and_counted_never_an_error() {
-        // An ARP frame (ethertype 0x0806) between two UDP packets.
+    fn capture_noise_is_skipped_and_counted() {
+        // An ARP frame (ethertype 0x0806) after a UDP packet.
         let mut arp = vec![0u8; 12];
         arp.extend_from_slice(&0x0806u16.to_be_bytes());
         arp.extend_from_slice(&[0; 28]);
-        let mut data = pcap(&[(0, 8600, b"a")]);
+        let mut data = pcap(&[(0, PORT, b"a")]);
         data.extend_from_slice(&0u32.to_le_bytes());
         data.extend_from_slice(&0u32.to_le_bytes());
         data.extend_from_slice(&(arp.len() as u32).to_le_bytes());
@@ -312,19 +305,19 @@ mod tests {
     }
 
     #[test]
-    fn the_port_filter_selects_the_feed_out_of_a_busy_capture() {
+    fn port_filter_selects_the_feed() {
         let data = pcap(&[
-            (0, 8600, b"radar"),
+            (0, PORT, b"radar"),
             (100, 5631, b"ais"),
-            (200, 8600, b"radar2"),
+            (200, PORT, b"radar2"),
         ]);
-        let cap = parse_pcap(&data, Some(8600)).unwrap();
+        let cap = parse_pcap(&data, Some(PORT)).unwrap();
         assert_eq!(cap.datagrams.len(), 2);
         assert_eq!(cap.skipped, 1);
     }
 
     #[test]
-    fn a_pcapng_is_named_with_its_conversion_not_rejected_cryptically() {
+    fn pcapng_error_names_the_conversion() {
         // pcapng section header block magic.
         let data = [
             0x0a, 0x0d, 0x0d, 0x0a, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
@@ -334,9 +327,9 @@ mod tests {
     }
 
     #[test]
-    fn a_torn_tail_replays_what_was_captured() {
-        let mut data = pcap(&[(0, 8600, b"whole")]);
-        // A record header promising more bytes than exist (killed recorder).
+    fn torn_tail_replays_what_was_captured() {
+        let mut data = pcap(&[(0, PORT, b"whole")]);
+        // A record header promising more bytes than exist.
         data.extend_from_slice(&1u32.to_le_bytes());
         data.extend_from_slice(&0u32.to_le_bytes());
         data.extend_from_slice(&999u32.to_le_bytes());
@@ -347,15 +340,9 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn replay_paces_to_the_original_timing_scaled_by_speed() {
-        let dir = std::env::temp_dir().join(format!("ajar-replay-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("cap.pcap");
-        std::fs::write(&path, pcap(&[(0, 8600, b"a"), (1_000_000, 8600, b"b")])).unwrap();
-
-        // speed 2: the 1s gap becomes 500ms. Paused tokio time proves the
-        // sleep is exactly the scaled delta, no wall-clock flakiness.
-        let mut src = open(path.to_str().unwrap(), 2.0, false, None, 5_000).unwrap();
+    async fn replay_paces_to_timing_scaled_by_speed() {
+        let f = capture_file(&[(0, PORT, b"a"), (1_000_000, PORT, b"b")]);
+        let mut src = open(f.path().to_str().unwrap(), 2.0, false, None, 5_000).unwrap();
         let mut buf = [0u8; 64];
         let t0 = tokio::time::Instant::now();
         let n = src.recv(&mut buf).await.unwrap();
@@ -363,36 +350,26 @@ mod tests {
         let n = src.recv(&mut buf).await.unwrap();
         assert_eq!(&buf[..n], b"b");
         assert_eq!(t0.elapsed(), Duration::from_millis(500));
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[tokio::test(start_paused = true)]
-    async fn long_gaps_are_clamped_so_lunch_breaks_do_not_stall_the_demo() {
-        let dir = std::env::temp_dir().join(format!("ajar-replay-gap-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("cap.pcap");
-        // 10 minutes of recorder idle between packets.
-        std::fs::write(&path, pcap(&[(0, 8600, b"a"), (600_000_000, 8600, b"b")])).unwrap();
-        let mut src = open(path.to_str().unwrap(), 1.0, false, None, 5_000).unwrap();
+    async fn long_gaps_are_clamped() {
+        let f = capture_file(&[(0, PORT, b"a"), (600_000_000, PORT, b"b")]);
+        let mut src = open(f.path().to_str().unwrap(), 1.0, false, None, 5_000).unwrap();
         let mut buf = [0u8; 64];
         let t0 = tokio::time::Instant::now();
         src.recv(&mut buf).await.unwrap();
         src.recv(&mut buf).await.unwrap();
         assert_eq!(t0.elapsed(), Duration::from_secs(5));
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
-    fn an_empty_or_filtered_out_capture_names_the_fix() {
-        let dir = std::env::temp_dir().join(format!("ajar-replay-empty-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("cap.pcap");
-        std::fs::write(&path, pcap(&[(0, 5631, b"ais")])).unwrap();
-        let err = open(path.to_str().unwrap(), 1.0, false, Some(8600), 5_000)
+    fn filtered_out_capture_names_the_port_filter() {
+        let f = capture_file(&[(0, 5631, b"ais")]);
+        let err = open(f.path().to_str().unwrap(), 1.0, false, Some(PORT), 5_000)
             .map(|_| ())
             .unwrap_err()
             .to_string();
         assert!(err.contains("port filter"), "{err}");
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }

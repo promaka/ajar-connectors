@@ -12,7 +12,7 @@ import (
 	"github.com/promaka/ajar-connectors/go/eventpb"
 )
 
-// Contract limits (§3).
+// Contract limits on an event.
 const (
 	MaxAttributes = 128
 	MaxMetadata   = 128
@@ -23,7 +23,7 @@ const (
 // EventBuilder constructs a canonical Event so a connector author cannot emit a
 // non-canonical one by accident: it auto-sorts attributes, rejects duplicate
 // keys, enforces required fields and limits, and offers UUIDv7 / RFC 3339
-// helpers. received_at is intentionally absent — Ajar stamps its own clock.
+// helpers. It has no received_at setter: Ajar stamps its own clock.
 //
 // Setters return the builder for chaining; the first error encountered is held
 // and returned by Build.
@@ -74,8 +74,8 @@ func (b *EventBuilder) Location(latitude, longitude, altitudeM float64) *EventBu
 	return b
 }
 
-// Payload sets the opaque payload bytes. Keep this small — a reference or
-// metadata, never bulk media.
+// Payload sets the opaque payload bytes. Keep it small: a reference or metadata,
+// never bulk media.
 func (b *EventBuilder) Payload(payload []byte) *EventBuilder { b.payload = payload; return b }
 
 // PolicyTag adds one policy tag (e.g. class:secret, rel:DEU).
@@ -90,17 +90,17 @@ func (b *EventBuilder) Confidence(confidence float64) *EventBuilder {
 	return b
 }
 
-// Attribute adds one structured attribute. Order does not matter — Build sorts
-// by key and rejects duplicate keys.
+// Attribute adds one structured attribute. Order does not matter: Build sorts by
+// key and rejects duplicate keys.
 func (b *EventBuilder) Attribute(key, value string) *EventBuilder {
 	b.attributes = append(b.attributes, &eventpb.Attribute{Key: key, Value: value})
 	return b
 }
 
-// Metadata adds one ungoverned passthrough metadata entry (ADR-0030): a
-// vendor-specific field carried and audited opaquely, but not type-validated or
-// correlated (e.g. a source's native identifier). Order does not matter — Build
-// sorts by key and rejects duplicate keys.
+// Metadata adds one ungoverned passthrough metadata entry: a vendor-specific
+// field carried and audited opaquely, but not type-validated or correlated
+// (e.g. a source's native identifier). Order does not matter: Build sorts by key
+// and rejects duplicate keys.
 func (b *EventBuilder) Metadata(key, value string) *EventBuilder {
 	b.metadata = append(b.metadata, &eventpb.Attribute{Key: key, Value: value})
 	return b
@@ -142,7 +142,7 @@ func (b *EventBuilder) Build() (*eventpb.Event, error) {
 		return nil, fmt.Errorf("ajarconnector: too many metadata entries: %d (max %d)", len(b.metadata), MaxMetadata)
 	}
 
-	// Canonical rule: attributes sorted by key, unique.
+	// Canonical attributes are sorted by key and unique; so is metadata.
 	attrs := make([]*eventpb.Attribute, len(b.attributes))
 	copy(attrs, b.attributes)
 	sort.SliceStable(attrs, func(i, j int) bool { return attrs[i].Key < attrs[j].Key })
@@ -152,7 +152,6 @@ func (b *EventBuilder) Build() (*eventpb.Event, error) {
 		}
 	}
 
-	// Metadata follows the identical canonical rule: sorted by key, unique.
 	meta := make([]*eventpb.Attribute, len(b.metadata))
 	copy(meta, b.metadata)
 	sort.SliceStable(meta, func(i, j int) bool { return meta[i].Key < meta[j].Key })
@@ -168,7 +167,7 @@ func (b *EventBuilder) Build() (*eventpb.Event, error) {
 		SourceId:      b.sourceID,
 		EntityType:    b.entityType,
 		Timestamp:     b.timestamp,
-		ReceivedAt:    "", // Ajar stamps its own clock.
+		ReceivedAt:    "",
 		Location:      b.location,
 		Payload:       b.payload,
 		PolicyTags:    b.policyTags,

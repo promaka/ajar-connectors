@@ -1,13 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-// THE gate (embedded / nanopb): the no-heap encode path must reproduce the same
-// canonicalSha256 + sealedSha256 as the Rust, Go, and desktop-C++ SDKs, from the
-// SAME vendor/contract/vectors.json. This harness links ONLY nanopb + the
-// vendored crypto — no libprotobuf — and encodes into a fixed stack buffer with
-// fully static message structs. Exit 0 iff all 12 hashes match.
-//
-// (The fixture reader uses std::string for convenience; the encode path under
-// test — pb_encode into a stack buffer — allocates nothing on the heap.)
+// Checks that the no-heap nanopb encode path reproduces the canonicalSha256 and
+// sealedSha256 of every fixture in vendor/contract/vectors.json. It links only
+// nanopb and the vendored crypto, without libprotobuf, and encodes static
+// message structs into a stack buffer. Exits 0 iff all match. The fixture
+// reader uses std::string; pb_encode itself allocates nothing on the heap.
 
 #include <array>
 #include <cstdint>
@@ -204,7 +201,7 @@ int main() {
 
       const std::string got_canon = sha256_hex(buf, len);
 
-      // Seal: 64-byte detached signature ++ canonical bytes.
+      // sealed = detached signature ++ canonical bytes.
       std::uint8_t sealed[64 + 512];
       crypto_ed25519_sign(sealed, secret_key.data(), buf, len);
       std::memcpy(sealed + 64, buf, len);

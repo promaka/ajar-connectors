@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-// The consumer handler against the same adversarial scenario the Python, Go
-// and Rust SDKs gate on: five messages — valid, tampered, the consumer's own,
-// derived, valid — must land as exactly two deliveries, one rejection and two
-// skips, with the tampered envelope never reaching the callback.
+// The consumer handler against the scenario the other SDKs also test: valid,
+// tampered, the consumer's own, derived and valid messages land as two
+// deliveries, one rejection and two skips.
 
 #include <ajar/connector.hpp>
 
@@ -57,21 +56,21 @@ int main() {
       egress.verifying_key(), guards, &stats,
       [&got](ajar::Delivery d) { got.push_back(std::move(d)); });
 
-  // 1. Valid: delivered.
+  // Valid: delivered.
   on_message(sealed_event(egress, "acme-radar-1", "evt-1"), "ajar.egress");
 
-  // 2. Tampered: one flipped payload byte, refused before decode.
+  // Tampered: one flipped payload byte, refused before decode.
   auto tampered = sealed_event(egress, "acme-radar-1", "evt-2");
   tampered.back() ^= 0x01;
   on_message(tampered, "ajar.egress");
 
-  // 3. The consumer's own event: skipped by the self-consume guard.
+  // The consumer's own event: skipped by the self-consume guard.
   on_message(sealed_event(egress, "acme-fuser-1", "evt-3"), "ajar.egress");
 
-  // 4. Derived (carries the model attribute): skipped by skip_derived.
+  // Derived (carries the model attribute): skipped by skip_derived.
   on_message(sealed_event(egress, "acme-radar-1", "evt-4", true), "ajar.egress");
 
-  // 5. Valid: delivered.
+  // Valid again: delivered.
   on_message(sealed_event(egress, "acme-radar-2", "evt-5"), "ajar.egress");
 
   check(stats.accepted == 2, "accepted == 2");

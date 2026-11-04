@@ -1,8 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! The 4586 decoder walks attacker-influenced message-length and checksum fields
-//! across a datagram that may pack several messages, so its one absolute obligation
-//! is to never panic: random bytes and wrapper-shaped input with random lengths and
-//! bodies must all return `Ok` or a typed error.
+//! Arbitrary and wrapper-shaped input never panics the parser.
 
 use ajar_connector_common::Enrichment;
 use ajar_stanag4586::S4586Parser;
@@ -20,9 +17,6 @@ proptest! {
         let _ = parser().to_events(&bytes);
     }
 
-    /// A well-formed wrapper with an attacker-chosen message type, declared length,
-    /// and body — exercises the multi-message walk, the length-overflow guard, the
-    /// checksum path, and the #101 fixed-layout decode. Must never panic.
     #[test]
     fn wrapper_shaped_input_never_panics(
         message_type in prop::sample::select(vec![20u32, 101, 200, 3000, 0xFFFF_FFFF]),
@@ -34,7 +28,7 @@ proptest! {
         m.extend_from_slice(b"8\0\0\0\0\0\0\0\0\0");
         m.extend_from_slice(&1u32.to_be_bytes());
         m.extend_from_slice(&message_type.to_be_bytes());
-        m.extend_from_slice(&declared_len.to_be_bytes()); // may lie about the body
+        m.extend_from_slice(&declared_len.to_be_bytes());
         m.extend_from_slice(&0u32.to_be_bytes());
         m.extend_from_slice(&0xFFFF_FFFFu32.to_be_bytes());
         m.extend_from_slice(&body);

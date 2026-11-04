@@ -1,48 +1,28 @@
 # SPDX-License-Identifier: Apache-2.0
 #
-# Example STANAG 4607 (NATO GMTI) ingress config. Copy, adjust, and run:
-#   ajar-gmti ./gmti.toml
-#
-# Consumes GMTI packets from a ground moving-target radar. The connector decodes
-# the Dwell segment (sensor geometry, dwell area, and each target report's
-# position + radial velocity) and emits one event per moving-target detection.
-# The entire raw dwell segment is sealed into every target event's Event.payload,
-# so any field it does not map — and any other segment type — is preserved.
-#
-# GMTI target reports are un-associated DETECTIONS (the format carries no
-# persistent track id), so source_uid is unique per detection, not a track:
-#   <platform>:<job_id>:<dwell_index>:<mti_report_index>
-# Downstream fusion/tracking associates detections across dwells.
-#
-# Framing: one GMTI packet per frame. Point a datagram transport (each UDP packet
-# is one GMTI packet) or a length-delimited stream at the radar's output.
+# STANAG 4607 (NATO GMTI) ingress, one event per target report.
+# Run: ajar-gmti ./gmti.toml
 
 source_id = "gmti-radar-1"
 nats_url = "nats://127.0.0.1:4222"
 subject_prefix = "ajar.ingest"
 signing_key_path = "/etc/ajar/gmti-radar-1.seed"
 
-# GMTI carries no hostility of its own; stamp one for the COP (moving-target
-# detections are often "unknown" or "suspect" pending correlation).
+# GMTI carries no hostility; set the one the picture should show.
 default_hostility = "Unknown"
 
-# The security marking every event carries, stamped inside its signature.
-# Every field is optional; see README section 7f.
+# Security marking stamped into every event; all fields optional.
 # [marking]
 # classification = "restricted"
 # releasable_to = ["GBR", "ITA"]
 # caveats = ["EXERCISE"]
 
-# NOTE: the emitted entity type is `mim:object`. If your Core ontology names
-# ground moving-target detections differently, change the one `entity_type`
-# constant in src/gmti.rs to match.
-
 [transport]
-# A GMTI feed commonly forwards each packet as one UDP datagram.
+# One GMTI packet per UDP datagram.
 kind = "udp"
 bind = "0.0.0.0:15005"
 
-# ...or read length-delimited packets pushed over TCP:
+# Or read length-delimited packets pushed over TCP:
 #   kind = "tcp-server"
 #   bind = "0.0.0.0:15005"
 #   framing = "length-delimited"

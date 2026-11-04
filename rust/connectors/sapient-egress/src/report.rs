@@ -1,17 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
-//! What this node says to the fusion node: its registration, its status
-//! reports, its refusals of tasks, and a detection report for each governed
-//! event.
-//!
-//! The registration declares exactly what a fusion node needs to accept a
-//! sensor under BSI Flex 335: a node definition, the ICD version, a
-//! capability, a status definition with the heartbeat interval, one
-//! permanent mode whose detection definition states the coordinate and
-//! velocity units every report uses, a task definition, and the node's make
-//! and model. A fusion node product may ask for more; the fields are in one
-//! place so that is a small change.
+//! What this node says to the fusion node: its registration, status reports,
+//! task refusals, and a detection report per governed event. The registration
+//! declares what BSI Flex 335 requires for a fusion node to accept a sensor.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 
 use ajar_connector::Event;
 use ajar_sapient_wire::v2::sapient_message::Content;
@@ -20,7 +12,6 @@ use ajar_sapient_wire::v2::{self, detection_report, registration, status_report}
 use crate::config::{EgressConfig, Site};
 use crate::ulid;
 
-/// How this node presents itself.
 #[derive(Debug, Clone)]
 pub struct Node {
     pub node_id: String,
@@ -183,17 +174,8 @@ impl Node {
     }
 }
 
-/// Why an event produced no report.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Skip {
-    /// A SAPIENT detection report must place its object; the event had no
-    /// position.
-    NoLocation,
-}
-
-/// Objects remembered at once, so an object keeps its identifier across
-/// reports. Beyond this the least recently added is forgotten and the
-/// object gets a new identifier, which a fusion node treats as a new track.
+/// Objects whose identifier is remembered. Beyond this the oldest is
+/// forgotten, and a fusion node sees its next report as a new track.
 const MAX_OBJECTS: usize = 10_000;
 
 /// Turns governed events into detection reports.
@@ -201,7 +183,7 @@ pub struct Mapper {
     classification: HashMap<String, String>,
     default_classification: String,
     objects: HashMap<String, String>,
-    order: std::collections::VecDeque<String>,
+    order: VecDeque<String>,
 }
 
 impl Mapper {
@@ -229,7 +211,7 @@ impl Mapper {
             classification,
             default_classification: cfg.sapient.default_classification.clone(),
             objects: HashMap::new(),
-            order: std::collections::VecDeque::new(),
+            order: VecDeque::new(),
         }
     }
 
@@ -249,17 +231,10 @@ impl Mapper {
         id
     }
 
-    fn classification_for(&self, event: &Event) -> String {
-        attribute(event, "sapient_classification")
-            .or_else(|| attribute(event, "object_class"))
-            .map(str::to_string)
-            .or_else(|| self.classification.get(&event.entity_type).cloned())
-            .unwrap_or_else(|| self.default_classification.clone())
-    }
-
-    /// One detection report for a governed event, or why there is none.
-    pub fn detection(&mut self, node: &Node, event: &Event) -> Result<v2::SapientMessage, Skip> {
-        let loc = event.location.as_ref().ok_or(Skip::NoLocation)?;
+    /// One detection report for a governed event; `None` for an event without
+    /// a position, which a detection report must carry.
+    pub fn detection(&mut self, node: &Node, event: &Event) -> Option<v2::SapientMessage> {
+        let loc = event.location.as_ref()?;
         let native = metadata(event, "source_uid")
             .map(str::to_string)
             .unwrap_or_else(|| event.id.clone());
@@ -284,7 +259,11 @@ impl Mapper {
             _ => None,
         };
 
-        let classification = self.classification_for(event);
+        let classification = attribute(event, "sapient_classification")
+            .or_else(|| attribute(event, "object_class"))
+            .map(str::to_string)
+            .or_else(|| self.classification.get(&event.entity_type).cloned())
+            .unwrap_or_else(|| self.default_classification.clone());
         let class_confidence = number(attribute(event, "sapient_classification_confidence"))
             .filter(|c| (0.0..=1.0).contains(c))
             .map(|c| c as f32);
@@ -307,12 +286,9 @@ impl Mapper {
                 x: Some(loc.longitude),
                 y: Some(loc.latitude),
                 z: Some(loc.altitude_m),
-                x_error: None,
-                y_error: None,
-                z_error: None,
                 coordinate_system: Some(v2::LocationCoordinateSystem::LatLngDegM as i32),
                 datum: Some(v2::LocationDatum::Wgs84E as i32),
-                utm_zone: None,
+                ..Default::default()
             })),
             detection_confidence,
             classification: vec![detection_report::DetectionReportClassification {
@@ -328,7 +304,7 @@ impl Mapper {
 
         let mut m = node.envelope(Content::DetectionReport(report));
         m.timestamp = parse_rfc3339(&event.timestamp).or(m.timestamp);
-        Ok(m)
+        Some(m)
     }
 }
 
@@ -361,7 +337,6 @@ fn number(s: Option<&str>) -> Option<f64> {
         .filter(|v| v.is_finite())
 }
 
-/// An event's RFC 3339 time as a protobuf timestamp.
 pub fn parse_rfc3339(s: &str) -> Option<prost_types::Timestamp> {
     let t = time::OffsetDateTime::parse(s, &time::format_description::well_known::Rfc3339).ok()?;
     Some(prost_types::Timestamp {
@@ -375,13 +350,18 @@ mod tests {
     use super::*;
     use ajar_connector::EventBuilder;
 
-    const KEY: &str = "e28a89f1c0d2b3a4958677665544332211ffeeddccbbaa99887766554433221100";
+    const NODE_ID: &str = "7d2e0b1c-1111-4222-8333-444455556666";
+    const TASK_ID: &str = "01J9A0TASK00000000000000001";
 
     fn config(extra: &str) -> EgressConfig {
-        toml::from_str(&format!(
-            "nats_url = \"nats://127.0.0.1:4222\"\negress_verifying_key = \"{KEY}\"\n[sapient]\nfusion_node = \"fusion:7777\"\nnode_id = \"7d2e0b1c-1111-4222-8333-444455556666\"\n{extra}"
-        ))
-        .unwrap()
+        crate::config::test_config(&format!("node_id = \"{NODE_ID}\"\n{extra}")).unwrap()
+    }
+
+    fn located(source_id: &str, entity_type: &str) -> EventBuilder {
+        EventBuilder::new(source_id, entity_type)
+            .new_id()
+            .now()
+            .location(1.0, 2.0, 0.0)
     }
 
     fn event() -> Event {
@@ -407,15 +387,12 @@ mod tests {
     }
 
     #[test]
-    fn a_governed_event_becomes_a_located_classified_detection() {
+    fn governed_event_becomes_a_detection() {
         let cfg = config("");
         let node = Node::from_config(&cfg);
         let mut mapper = Mapper::new(&cfg);
         let m = mapper.detection(&node, &event()).unwrap();
-        assert_eq!(
-            m.node_id.as_deref(),
-            Some("7d2e0b1c-1111-4222-8333-444455556666")
-        );
+        assert_eq!(m.node_id.as_deref(), Some(NODE_ID));
         assert_eq!(m.timestamp.as_ref().map(|t| t.seconds), Some(1_780_000_002));
         let r = report_of(&m);
         assert!(ulid::is_valid(r.report_id.as_deref().unwrap()));
@@ -456,7 +433,7 @@ mod tests {
     }
 
     #[test]
-    fn the_same_track_keeps_its_object_id_and_a_new_one_gets_another() {
+    fn object_id_is_stable_per_track() {
         let cfg = config("");
         let node = Node::from_config(&cfg);
         let mut mapper = Mapper::new(&cfg);
@@ -467,10 +444,7 @@ mod tests {
             .object_id
             .clone();
         assert_eq!(first, again);
-        let other = EventBuilder::new("mavlink-1", "mim:aircraft")
-            .new_id()
-            .now()
-            .location(1.0, 2.0, 3.0)
+        let other = located("mavlink-1", "mim:aircraft")
             .metadata("source_uid", "8")
             .build()
             .unwrap();
@@ -481,26 +455,18 @@ mod tests {
     }
 
     #[test]
-    fn classification_comes_from_the_event_then_the_table_then_the_default() {
+    fn classification_precedence() {
         let cfg = config("default_classification = \"Thing\"\n[sapient.classification]\n\"x:acme:drone\" = \"UAV\"");
         let node = Node::from_config(&cfg);
         let mut mapper = Mapper::new(&cfg);
-        let drone = EventBuilder::new("s", "x:acme:drone")
-            .new_id()
-            .now()
-            .location(1.0, 2.0, 0.0)
-            .build()
-            .unwrap();
+        let drone = located("s", "x:acme:drone").build().unwrap();
         assert_eq!(
             report_of(&mapper.detection(&node, &drone).unwrap()).classification[0]
                 .r#type
                 .as_deref(),
             Some("UAV")
         );
-        let labelled = EventBuilder::new("s", "x:acme:drone")
-            .new_id()
-            .now()
-            .location(1.0, 2.0, 0.0)
+        let labelled = located("s", "x:acme:drone")
             .attribute("object_class", "Quadcopter")
             .build()
             .unwrap();
@@ -510,12 +476,7 @@ mod tests {
                 .as_deref(),
             Some("Quadcopter")
         );
-        let unknown = EventBuilder::new("s", "x:acme:blob")
-            .new_id()
-            .now()
-            .location(1.0, 2.0, 0.0)
-            .build()
-            .unwrap();
+        let unknown = located("s", "x:acme:blob").build().unwrap();
         assert_eq!(
             report_of(&mapper.detection(&node, &unknown).unwrap()).classification[0]
                 .r#type
@@ -525,7 +486,7 @@ mod tests {
     }
 
     #[test]
-    fn an_event_without_a_position_is_skipped_not_invented() {
+    fn event_without_position_is_skipped() {
         let cfg = config("");
         let node = Node::from_config(&cfg);
         let mut mapper = Mapper::new(&cfg);
@@ -534,15 +495,12 @@ mod tests {
             .now()
             .build()
             .unwrap();
-        assert_eq!(mapper.detection(&node, &bare), Err(Skip::NoLocation));
+        assert_eq!(mapper.detection(&node, &bare), None);
     }
 
     #[test]
-    fn the_registration_declares_everything_a_fusion_node_requires() {
-        let cfg = config(
-            "status_interval_s = 2.5\n[sapient.location]\nlat = 51.0\nlon = 0.5\nalt_m = 30",
-        );
-        let node = Node::from_config(&cfg);
+    fn registration_declares_what_a_fusion_node_requires() {
+        let node = Node::from_config(&config("status_interval_s = 2.5"));
         let m = node.registration();
         let reg = match &m.content {
             Some(Content::Registration(r)) => r,
@@ -568,12 +526,20 @@ mod tests {
         assert!(mode.settle_time.is_some());
         assert!(mode.task.as_ref().unwrap().region_definition.is_some());
         assert!(!mode.detection_definition.is_empty());
-        // The bytes survive the wire.
         let bytes = ajar_sapient_wire::encode(&m);
-        assert_eq!(ajar_sapient_wire::decode(&bytes).unwrap(), m);
+        assert_eq!(
+            ajar_sapient_wire::decode(&bytes).unwrap(),
+            m,
+            "the registration survives the wire"
+        );
+    }
 
-        let s = node.status(true);
-        match &s.content {
+    #[test]
+    fn status_reports_the_site() {
+        let node = Node::from_config(&config(
+            "[sapient.location]\nlat = 51.0\nlon = 0.5\nalt_m = 30",
+        ));
+        match &node.status(true).content {
             Some(Content::StatusReport(r)) => {
                 assert_eq!(r.system, Some(status_report::System::Ok as i32));
                 assert_eq!(r.info, Some(status_report::Info::New as i32));
@@ -581,13 +547,18 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
-        let ack = node.task_rejected("01J9A0TASK00000000000000001", Some("fusion"));
+    }
+
+    #[test]
+    fn task_rejection_goes_to_the_sender() {
+        let node = Node::from_config(&config(""));
+        let ack = node.task_rejected(TASK_ID, Some("fusion"));
         assert_eq!(ack.destination_id.as_deref(), Some("fusion"));
         assert!(matches!(ack.content, Some(Content::TaskAck(_))));
     }
 
     #[test]
-    fn timestamps_parse_and_garbage_does_not() {
+    fn rfc3339_parses_to_a_timestamp() {
         assert_eq!(
             parse_rfc3339("2026-05-28T20:26:42Z").map(|t| t.seconds),
             Some(1_780_000_002)

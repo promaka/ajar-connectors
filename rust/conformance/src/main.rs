@@ -1,37 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0
-//! `ajar-conformance` — prove an implementation produces the bytes Ajar accepts.
-//!
-//! Any implementation, in any language, written by anyone. It runs offline, needs
-//! no credentials, and never contacts Ajar Core: the vendored golden vectors are
-//! the whole specification, so a partner can gate their own CI on this and stop
-//! asking us whether their output is right.
-//!
-//! ## What your implementation must do
-//!
-//! It is invoked once per fixture, in two modes, with the fixture JSON on stdin
-//! and **raw bytes** on stdout:
-//!
-//! ```text
-//! <impl> canonical  < fixture.json  > canonical bytes
-//! <impl> sealed     < fixture.json  > 64-byte signature ++ canonical bytes
-//! ```
-//!
-//! For `sealed`, the 32-byte TEST signing seed is passed as hex in the
-//! `AJAR_TEST_SIGNING_SEED` environment variable. It is a published test key and
-//! must never be a production one.
-//!
-//! Anything written to stderr is captured and shown on failure; only stdout is
-//! hashed. A non-zero exit, a timeout, or a hash mismatch fails that fixture.
+//! `ajar-conformance`: runs an implementation in any language against the golden
+//! vectors, offline. The implementation is invoked as `<impl> canonical` and
+//! `<impl> sealed` per fixture, with the fixture JSON on stdin and raw bytes on
+//! stdout; for `sealed` the test seed arrives as hex in `AJAR_TEST_SIGNING_SEED`.
+//! Only stdout is hashed; stderr is shown on failure.
 
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
-use conformance::{contract_dir, load_vectors};
 use sha2::{Digest, Sha256};
 
-/// Modes an implementation is asked for, and the vector field each is checked
-/// against.
 const MODES: [&str; 2] = ["canonical", "sealed"];
 
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -43,24 +22,24 @@ struct Outcome {
     fixture: String,
     mode: &'static str,
     expected: String,
-    actual: Option<String>,
-    detail: Option<String>,
+    /// SHA-256 of the implementation's stdout, or why there is none.
+    actual: Result<String, String>,
 }
 
 impl Outcome {
     fn passed(&self) -> bool {
-        self.actual.as_deref() == Some(self.expected.as_str())
+        self.actual.as_ref() == Ok(&self.expected)
     }
 }
 
-/// Run one fixture through the implementation in one mode.
+/// Runs one fixture through the implementation in one mode.
 fn run_one(
     impl_cmd: &[String],
     fixture: &str,
     body: &str,
     mode: &'static str,
     seed: &str,
-) -> (Option<String>, Option<String>) {
+) -> Result<String, String> {
     let mut cmd = Command::new(&impl_cmd[0]);
     cmd.args(&impl_cmd[1..])
         .arg(mode)
@@ -69,47 +48,39 @@ fn run_one(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
-    let mut child = match cmd.spawn() {
-        Ok(c) => c,
-        Err(e) => return (None, Some(format!("could not run implementation: {e}"))),
-    };
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("could not run implementation: {e}"))?;
     if let Some(mut stdin) = child.stdin.take() {
-        // A closed pipe means the implementation exited early; the status below
-        // reports why, so the write error itself is not the interesting failure.
+        // A closed pipe means the implementation exited early; the exit status
+        // below reports why.
         let _ = stdin.write_all(body.as_bytes());
     }
-    let out = match child.wait_with_output() {
-        Ok(o) => o,
-        Err(e) => return (None, Some(format!("implementation failed: {e}"))),
-    };
+    let out = child
+        .wait_with_output()
+        .map_err(|e| format!("implementation failed: {e}"))?;
     if !out.status.success() {
         let err = String::from_utf8_lossy(&out.stderr);
         let trimmed: String = err.lines().take(5).collect::<Vec<_>>().join("\n");
-        return (
-            None,
-            Some(format!(
-                "{fixture}/{mode}: implementation exited {}{}",
-                out.status
-                    .code()
-                    .map(|c| c.to_string())
-                    .unwrap_or_else(|| "signal".into()),
-                if trimmed.is_empty() {
-                    String::new()
-                } else {
-                    format!("\n{trimmed}")
-                }
-            )),
-        );
+        return Err(format!(
+            "{fixture}/{mode}: implementation exited {}{}",
+            out.status
+                .code()
+                .map(|c| c.to_string())
+                .unwrap_or_else(|| "signal".into()),
+            if trimmed.is_empty() {
+                String::new()
+            } else {
+                format!("\n{trimmed}")
+            }
+        ));
     }
     if out.stdout.is_empty() {
-        return (
-            None,
-            Some(format!(
-                "{fixture}/{mode}: implementation wrote no bytes to stdout"
-            )),
-        );
+        return Err(format!(
+            "{fixture}/{mode}: implementation wrote no bytes to stdout"
+        ));
     }
-    (Some(sha256_hex(&out.stdout)), None)
+    Ok(sha256_hex(&out.stdout))
 }
 
 fn usage() -> ! {
@@ -160,8 +131,8 @@ fn main() {
         usage();
     }
 
-    let vectors = load_vectors();
-    let corpus = contract_dir().join("corpus");
+    let vectors = conformance::load_vectors();
+    let corpus = conformance::contract_dir().join("corpus");
     let mut outcomes: Vec<Outcome> = Vec::new();
 
     for (fixture, expected) in &vectors.vectors {
@@ -177,14 +148,11 @@ fn main() {
                 "canonical" => expected.canonical_sha256.clone(),
                 _ => expected.sealed_sha256.clone(),
             };
-            let (actual, detail) =
-                run_one(&impl_cmd, fixture, &body, mode, &vectors.signing_seed_hex);
             outcomes.push(Outcome {
                 fixture: fixture.clone(),
                 mode,
                 expected: want,
-                actual,
-                detail,
+                actual: run_one(&impl_cmd, fixture, &body, mode, &vectors.signing_seed_hex),
             });
         }
     }
@@ -193,15 +161,12 @@ fn main() {
     for o in &outcomes {
         let mark = if o.passed() { "ok  " } else { "FAIL" };
         println!("{mark} {}/{}", o.fixture, o.mode);
-        if !o.passed() {
-            if let Some(d) = &o.detail {
-                println!("       {d}");
-            } else {
+        match &o.actual {
+            _ if o.passed() => {}
+            Err(detail) => println!("       {detail}"),
+            Ok(actual) => {
                 println!("       expected {}", o.expected);
-                println!(
-                    "       actual   {}",
-                    o.actual.clone().unwrap_or_else(|| "<none>".into())
-                );
+                println!("       actual   {actual}");
             }
         }
     }
@@ -220,7 +185,7 @@ fn main() {
                     o.mode,
                     o.passed(),
                     o.expected,
-                    o.actual.as_ref().map(|a| format!("\"{a}\"")).unwrap_or_else(|| "null".into())
+                    o.actual.as_ref().map(|a| format!("\"{a}\"")).unwrap_or_else(|_| "null".into())
                 ))
                 .collect::<Vec<_>>()
                 .join(",\n")

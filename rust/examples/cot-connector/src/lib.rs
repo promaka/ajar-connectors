@@ -1,49 +1,30 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Reference connector: **Cursor-on-Target (CoT)** XML <-> canonical Ajar event.
-//!
-//! This is a teaching example, not a production CoT stack. It shows the shape of
-//! an inbound [`Connector`] (CoT XML -> canonical [`Event`]) and a paired
-//! [`OutboundProfile`] (event -> CoT XML), and it carries a round-trip
-//! conformance test proving the modeled fields survive `canonical -> CoT ->
-//! canonical` unchanged.
-//!
-//! The XML handling is deliberately minimal (no XML dependency) so the data flow
-//! stays readable; real connectors should use a hardened parser.
+//! Reference connector: Cursor-on-Target XML to a canonical event as a
+//! [`Connector`], and back as an [`OutboundProfile`], with a round-trip test.
+//! The XML handling is minimal and dependency-free for readability; a real
+//! connector uses a hardened parser.
 
 use std::collections::HashMap;
 
-use ajar_connector::{Connector, Event, EventBuilder, OutboundProfile};
+use ajar_connector::{BuildError, Connector, Event, EventBuilder, OutboundProfile};
+use thiserror::Error;
 
-/// A CoT connector bound to one source identity.
-///
-/// CoT messages do not carry an Ajar source identity, so it comes from the
-/// connector's configuration (and matches the connector's signing-key profile).
+/// A CoT connector bound to one source identity, which comes from config
+/// because CoT messages don't carry one.
 #[derive(Debug, Clone)]
 pub struct CotConnector {
     source_id: String,
 }
 
-/// Failure modes when normalizing a CoT message.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Error, PartialEq)]
 pub enum CotError {
-    /// No `<event>` element, or it was missing a required attribute.
+    #[error("malformed CoT: {0}")]
     Malformed(&'static str),
-    /// The canonical event failed to build (propagated invariant violation).
-    Build(String),
+    #[error("event build failed: {0}")]
+    Build(#[from] BuildError),
 }
-
-impl std::fmt::Display for CotError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            CotError::Malformed(what) => write!(f, "malformed CoT: {what}"),
-            CotError::Build(e) => write!(f, "event build failed: {e}"),
-        }
-    }
-}
-impl std::error::Error for CotError {}
 
 impl CotConnector {
-    /// Creates a connector that signs as `source_id`.
     pub fn new(source_id: impl Into<String>) -> Self {
         Self {
             source_id: source_id.into(),
@@ -81,7 +62,7 @@ impl Connector for CotConnector {
             }
         }
 
-        builder.build().map_err(|e| CotError::Build(e.to_string()))
+        Ok(builder.build()?)
     }
 }
 
@@ -138,7 +119,7 @@ fn cot_type_to_entity(cot_type: &str) -> String {
     }
 }
 
-/// Inverse of [`cot_type_to_entity`] for the canonical mappings.
+/// Inverse of `cot_type_to_entity` for the canonical mappings.
 fn entity_to_cot(entity_type: &str) -> String {
     match entity_type {
         "mim:aircraft" => "a-f-A".to_string(),
@@ -157,8 +138,7 @@ fn tag_attrs(xml: &str, tag: &str) -> Option<HashMap<String, String>> {
     let open = format!("<{tag}");
     let start = xml.find(&open)?;
     let after = &xml[start + open.len()..];
-    // The next char after the tag name must be whitespace or the close, so we
-    // don't match e.g. <eventfoo when looking for <event.
+    // Reject a longer tag name, e.g. <eventfoo when looking for <event.
     let first = after.chars().next()?;
     if !first.is_whitespace() && first != '>' && first != '/' {
         return None;
@@ -207,7 +187,6 @@ fn parse_attrs(s: &str) -> HashMap<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ajar_connector::canonical_bytes;
 
     const SAMPLE: &str = r#"<event version="2.0" uid="0191e7b0-3c2d-7e3f-8a9b-0c1d2e3f4a5d" type="a-f-A" time="2026-06-04T02:00:00Z" start="2026-06-04T02:00:00Z" stale="2026-06-04T02:00:30Z"><point lat="26.4" lon="50.9" hae="1200.0" ce="10.0" le="10.0"/></event>"#;
 
@@ -222,8 +201,6 @@ mod tests {
         assert_eq!(loc.altitude_m, 1200.0);
     }
 
-    /// Round-trip conformance: canonical -> CoT -> canonical is identity over the
-    /// modeled fields (lossy fields left at defaults so full bytes match).
     #[test]
     fn round_trip_preserves_modeled_fields() {
         let conn = CotConnector::new("ad-radar-7");
@@ -238,9 +215,9 @@ mod tests {
         let back = conn.normalize(&rendered).unwrap();
 
         assert_eq!(
-            canonical_bytes(&original),
-            canonical_bytes(&back),
-            "modeled fields must survive the CoT round trip"
+            ajar_connector::canonical_bytes(&original),
+            ajar_connector::canonical_bytes(&back),
+            "modeled fields must survive the CoT round trip; lossy fields stay default"
         );
     }
 }

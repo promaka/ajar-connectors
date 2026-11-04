@@ -2,7 +2,7 @@
 [package]
 name = "ajar-sapient"
 description = "Ajar ingress connector for SAPIENT (BSI Flex 335): detections, tracks, sensor status and alerts from edge nodes or a fusion node, as signed events."
-version = "0.6.6"
+version = "0.6.7"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -15,8 +15,7 @@ name = "ajar-sapient"
 path = "src/main.rs"
 
 [features]
-# DDS is compiled in so the shipped binary can read a topic on a ship's or a
-# ROS 2 platform's bus; it is inert unless a config says kind = "dds".
+# Inert unless a config sets kind = "dds"; --no-default-features drops it.
 default = ["dds"]
 dds = ["ajar-connector-common/dds"]
 
@@ -32,14 +31,15 @@ tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 anyhow.workspace = true
-async-trait = "0.1"
-uuid = { version = "1", features = ["v4"] }
+thiserror.workspace = true
+async-trait.workspace = true
+uuid = { workspace = true, features = ["v4"] }
 
 [dev-dependencies]
 ed25519-dalek.workspace = true
 hex.workspace = true
-serde_json = "1"
-proptest = "1"
+serde_json.workspace = true
+proptest.workspace = true
 
 # See CONTRIBUTING.md, "Releases".
 [package.metadata.ajar]

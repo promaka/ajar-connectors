@@ -1,51 +1,111 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
-# ajar-klv — STANAG 4609 / MISB ST 0601 (KLV) connector
+# ajar-klv: STANAG 4609 / MISB ST 0601 (KLV) ingress
 
-Ingests the **UAS Datalink Local Set** that full-motion-imagery platforms (UAS,
-ISR pods, gimbals) emit as **KLV** (Key-Length-Value, SMPTE 336M) metadata, and
-turns each set into a signed canonical Ajar event.
+Ingress for the MISB ST 0601 **UAS Datalink Local Set**, the KLV
+(Key-Length-Value, SMPTE 336M) metadata that full-motion-imagery platforms
+such as UAS, ISR pods and gimbals emit under STANAG 4609. Each set with a
+sensor position becomes one signed canonical Ajar event. It is the worked
+example of a tag-length-value binary format (see
+[`AGENTS.md`](../../../AGENTS.md)).
 
-This is also the repo's **reference binary-STANAG connector** — the worked
-example an operator or an agent follows to add a connector for any bit/byte
-format (see the top-level [`AGENTS.md`](../../../AGENTS.md)).
+## Input
 
-## What it decodes
+One UAS Local Set per frame: the 16-byte ST 0601 Universal Label, a BER
+length, then BER-OID tagged items. The last two bytes of the set are the
+ST 0601 16-bit checksum (tag 1), computed over every byte before them. Bytes
+after the set's declared length are ignored.
 
-The common ST 0601 platform tags:
+Decoded tags:
 
-| Tag | Field | Canonical mapping |
-|----:|-------|-------------------|
-| 2 | Precision Time Stamp | event `timestamp` |
-| 4 | Platform Tail Number | `source_uid` + `tail_number` metadata |
-| 5 | Platform Heading | `heading` attribute (deg) |
-| 6 / 7 | Platform Pitch / Roll | `pitch` / `roll` attributes (deg) |
-| 10 | Platform Designation | `platform_designation` attribute |
-| 13 / 14 | Sensor Latitude / Longitude | event location |
-| 15 | Sensor True Altitude | event location altitude (m) |
-| 65 | UAS LS version | `uas_ls_version` metadata |
-| 1 | Checksum | validated (fail-closed on mismatch) |
+| Tag | Field |
+|----:|-------|
+| 2 | Precision Time Stamp |
+| 3 | Mission ID |
+| 4 | Platform Tail Number |
+| 5 | Platform Heading Angle |
+| 6 | Platform Pitch Angle |
+| 7 | Platform Roll Angle |
+| 10 | Platform Designation |
+| 13, 14 | Sensor Latitude, Longitude |
+| 15 | Sensor True Altitude |
+| 65 | UAS LS Version Number |
 
-## What it does *not* decode — and why that's safe
+Every other tag is skipped and stays in the payload.
 
-ST 0601 defines ~100 tags. This connector maps the platform subset above; **every
-other tag is preserved verbatim in `Event.payload`** (the whole raw KLV set is
-sealed into the signed event). Nothing is dropped at the connector: a later
-ontology, or a generated extension of this parser, can re-extract any tag from
-the stored raw. This is the connector-suite's core rule — *a connector must not
-decide what is valuable.*
+Transports: `udp` with one set per datagram, as in the example config, or a
+stream transport such as `tcp-server` with `framing = "length-delimited"`.
 
-## Units
+The input is extracted KLV, not an MPEG-TS stream. See
+[CONNECTORS.md](../../../CONNECTORS.md#ajar-klv-stanag-4609--misb-st-0601) for
+how to extract it.
 
-`heading`/`pitch`/`roll` are degrees; altitude is metres (per ST 0601 scaling).
-Angles use the ST 0601 signed-integer mapping, and the `i32::MIN`/`i16::MIN`
-"error" indicators decode to *absent*, never a fabricated value.
+## Output
 
-## Run it
+Entity type `mim:aircraft`, one event per set that carries both sensor
+latitude and longitude.
+
+**Identity.** `source_uid` is the tail number (tag 4), else the platform
+designation (tag 10), so each platform is its own track. A set with neither
+has no `source_uid`.
+
+**Location.** Sensor latitude and longitude (tags 13, 14) in degrees, and
+sensor true altitude (tag 15) in metres.
+
+**Time.** The Precision Time Stamp (microseconds since the Unix epoch), else
+receipt time.
+
+| Attribute | Unit | Source |
+|---|---|---|
+| `heading` | degrees, one decimal, 0 to 360 | tag 5 |
+| `pitch` | degrees, one decimal, -20 to 20 | tag 6 |
+| `roll` | degrees, one decimal, -50 to 50 | tag 7 |
+| `platform_designation` | text | tag 10 |
+| `hostility` | MIM `HostilityCodeType` | `default_hostility`, only when configured |
+
+In the vendored ontology, `heading` is governed on `mim:aircraft`, and `pitch`,
+`roll` and `platform_designation` are not. See
+[ATTRIBUTES.md](../ATTRIBUTES.md) for what a graceful or a strict site does with
+an undeclared key.
+
+| Metadata | Content |
+|---|---|
+| `source_uid` | as above |
+| `tail_number` | tag 4 |
+| `mission_id` | tag 3 |
+| `uas_ls_version` | tag 65 |
+
+Text tags are trimmed; an empty one is absent.
+
+**Payload.** The whole Local Set, from the Universal Label to the checksum,
+verbatim.
+
+## Configuration
+
+Start from [`klv.example.toml`](klv.example.toml). The connector has no
+`[options]`. `default_hostility` sets the `hostility` attribute; KLV carries
+none of its own, and with it unset none is emitted.
+
+## Behaviour
+
+- Sets are independent; nothing is correlated across frames.
+- The ST 0601 error indicators (`i32::MIN` for latitude and longitude,
+  `i16::MIN` for pitch and roll) decode as absent. A value of the wrong length
+  for its tag is also absent.
+- The frame is rejected when the Universal Label is wrong, a BER length is in
+  indefinite form or wider than 4 bytes, a length runs past the set, or the
+  checksum does not match.
+
+## Limits
+
+- Of the roughly 100 ST 0601 tags, only those above are decoded. Platform
+  speeds, sensor pointing, frame centre and target data are payload only.
+- Only the ST 0601 UAS Local Set is accepted. Other MISB local sets, and
+  several sets in one frame, are not decoded.
+
+## Run
 
 ```sh
-cp klv.example.toml klv.toml   # edit source_id, key path, and [transport]
+cp klv.example.toml klv.toml   # edit source_id, key path and [transport]
 ajar-klv ./klv.toml
+ajar-klv --profile ./klv.toml  # print the profile the operator registers
 ```
-
-Each platform is its own track (tail number → stable `source_uid`), so Core never
-collapses multiple airframes onto the connector `source_id`.

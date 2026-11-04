@@ -1,24 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Contract conformance for the MAVLink connector.
-//!
-//! Two things Core relies on, checked here without importing Core (its rules are
-//! mirrored, not linked):
-//!  1. the produced event satisfies Core's **content** contract — the id is a
-//!     UUIDv7 and the timestamp is RFC 3339 (the two rules the encoding vectors do
-//!     not cover, and the ones that rejected real events in the field);
-//!  2. the seal verifies under the published contract key.
-//!
-//! Plus a mapping check: the native system id is preserved as an attribute, never
-//! used as the id.
+//! Events meet Core's content contract and seal under the published contract key.
 
-use ajar_connector::{canonical_bytes, seal, SEAL_SIGNATURE_LEN};
+use ajar_connector::SEAL_SIGNATURE_LEN;
 use ajar_connector_common::Enrichment;
 use ajar_mavlink::MavParser;
 use ed25519_dalek::{Signature, SigningKey, Verifier, VerifyingKey};
 use uuid::Uuid;
 
-// Ground-truth GLOBAL_POSITION_INT frame (CRC-correct), sysid 1: 47.397742 N,
-// 8.545594 E, 500.0 m, heading 90.0.
+// GLOBAL_POSITION_INT, sysid 1: 47.397742 N 8.545594 E, 500.0 m, heading 90.0.
 const V1: &str = "fe1c00010121e80300004c52401c44f4170520a10700000000000000000000002823bb57";
 const OBSERVED: &str = "2026-06-10T08:00:00Z";
 
@@ -38,7 +27,6 @@ fn hex32(v: &serde_json::Value, key: &str) -> [u8; 32] {
 }
 
 fn parser() -> MavParser {
-    // Governed mode: a deployment that declared its ontology.
     MavParser::new(
         "uav-flight-1",
         Enrichment::default().with_hostility("Friend"),
@@ -52,7 +40,7 @@ fn connector_event() -> ajar_connector::Event {
         .parse_frame(&frame)
         .expect("frame parses")
         .expect("is a position message");
-    p.to_event_at(&pos, OBSERVED).expect("builds")
+    p.to_event_at(pos, OBSERVED).expect("builds")
 }
 
 #[test]
@@ -70,8 +58,6 @@ fn native_sysid_is_preserved_as_metadata_not_id() {
     let ev = connector_event();
     assert_eq!(ev.entity_type, "mim:aircraft");
     assert_ne!(ev.id, "mav:1");
-    // The native key name stays in metadata and never becomes the id; the
-    // system id is also governed, as alt_id under the MAVLink standard code.
     assert!(
         ev.metadata
             .iter()
@@ -94,8 +80,8 @@ fn seal_verifies_under_the_published_contract_key() {
     let vk = VerifyingKey::from_bytes(&hex32(&contract, "verifyingKeyHex"))
         .expect("published verifying key is valid");
 
-    let canonical = canonical_bytes(&connector_event());
-    let sealed = seal(&canonical, &SigningKey::from_bytes(&seed));
+    let canonical = ajar_connector::canonical_bytes(&connector_event());
+    let sealed = ajar_connector::seal(&canonical, &SigningKey::from_bytes(&seed));
 
     assert_eq!(sealed.len(), SEAL_SIGNATURE_LEN + canonical.len());
     let (sig, body) = sealed.split_at(SEAL_SIGNATURE_LEN);
@@ -105,13 +91,12 @@ fn seal_verifies_under_the_published_contract_key() {
         .expect("seal signature must verify under the contract key");
 }
 
-/// Canonical repeated `Attribute`: keys strictly increasing (sorted + unique).
+/// Keys strictly increasing: sorted and unique.
 fn is_canonical(entries: &[ajar_connector::Attribute]) -> bool {
     entries.windows(2).all(|w| w[0].key < w[1].key)
 }
 
-/// Mirror Core's timestamp rule without importing it: RFC 3339, `Z` or numeric
-/// offset, optional fractional seconds.
+/// Core's timestamp rule: RFC 3339 with `Z` or a numeric offset.
 fn is_rfc3339(s: &str) -> bool {
     let b = s.as_bytes();
     if b.len() < 20 {

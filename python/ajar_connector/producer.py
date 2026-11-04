@@ -1,26 +1,22 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Publish derived events (AI assessments) back into Ajar, ready to embed.
+"""Seal and publish derived events (assessments) back into Ajar.
 
-An analytics or AI platform that consumes governed events and produces
-assessments publishes those assessments back through the same front door as
-any sensor: built with the SDK, sealed with the platform's own key, one event
-per assessment. This module is the drop-in producer half: import it, call
-:func:`connect` once, then :func:`publish_assessment` from your existing
+An analytics or AI platform publishes its assessments through the same front door as
+any sensor: built with the SDK, sealed with the platform's own key, one event per
+assessment. Call :func:`connect` once, then :func:`publish_assessment` from your
 pipeline.
 
-Lineage is not optional. A derived event must say what it was derived from
-(``derived_from``: the ids of the events you reasoned over) and what derived
-it (``model``, e.g. ``"assessment-engine@1.4"``); the boundary refuses
-derived events without them, so this module refuses them client-side first,
-with a clearer message than the wire will give you.
+A derived event must carry lineage: ``derived_from`` (the ids of the events you
+reasoned over) and ``model`` (``name@version``, e.g. ``"assessment-engine@1.4"``). The
+boundary refuses derived events without them, so this module refuses them client-side
+first, with a clearer message.
 
 Requires the ``producer`` extra for the transport::
 
     pip install "ajar-connector[producer]"
 
-The sealed envelope is the SDK's :func:`~ajar_connector.seal` output,
-byte-identical to any connector's, and every publish carries the
-``Nats-Msg-Id`` header so broker-side deduplication works.
+The sealed envelope is byte-identical to any connector's, and every publish carries
+the ``Nats-Msg-Id`` header so broker-side deduplication works.
 """
 
 from __future__ import annotations
@@ -34,7 +30,7 @@ from . import EventBuilder, SigningKey, canonical_bytes, ingest_headers, seal
 
 @dataclass
 class Producer:
-    """A connected producer: the NATS client plus the platform's identity."""
+    """A connected producer: the NATS client and the platform's signing identity."""
 
     nc: object
     key: SigningKey
@@ -52,17 +48,14 @@ async def connect(
     key: str | None = None,
     subject_prefix: str = "ajar.ingest",
 ) -> Producer:
-    """Connect to the operator's endpoint and return a producer handle.
+    """Connect to NATS and return a producer handle.
 
-    ``signing_seed`` is the path to your registered 32-byte Ed25519 seed
-    (raw bytes or 64-char hex), or the raw 32 bytes themselves. ``ca``,
-    ``cert`` and ``key`` are the mTLS PEM paths from your operator; pass all
-    three or none (a partial TLS setup is refused rather than guessed at,
-    matching the connectors' fail-closed policy).
+    ``signing_seed`` is the raw 32-byte Ed25519 seed or a path to a file holding
+    it raw or as hex. ``ca``, ``cert`` and ``key`` are mTLS PEM paths: all or none.
     """
     try:
-        import nats  # transport dep: pip install "ajar-connector[producer]"
-    except ImportError as e:  # pragma: no cover - import guidance only
+        import nats
+    except ImportError as e:  # pragma: no cover
         raise ImportError(
             'the producer needs the NATS client: pip install "ajar-connector[producer]"'
         ) from e
@@ -110,13 +103,12 @@ async def publish_assessment(
     confidence: float | None = None,
     metadata: Mapping[str, str] | None = None,
 ) -> str:
-    """Seal and publish one assessment; returns the new event's id.
+    """Seal and publish one assessment and return its event id.
 
-    ``derived_from`` must name at least one source event id (the events your
-    model reasoned over) and ``model`` identifies what produced the
-    assessment, ``name@version``. Both are required: the boundary refuses
-    derived events without lineage, so forgetting them is an error here, not
-    a silent drop there.
+    ``derived_from`` names at least one source event id, the events your model reasoned
+    over, and ``model`` identifies what produced the assessment, ``name@version``. The
+    boundary refuses derived events without lineage, so forgetting them raises
+    ``ValueError`` here rather than being a silent drop there.
     """
     if not model or not model.strip():
         raise ValueError("model is required: name the system that produced this, e.g. 'engine@1.0'")
@@ -156,19 +148,13 @@ async def publish_assessment(
 
 
 async def close(handle: Producer) -> None:
-    """Flush and close the connection (call on your platform's shutdown)."""
+    """Flush and close the connection."""
     await handle.nc.flush()
     await handle.nc.close()
 
 
 def _lineage_entries(model: str, parents: Sequence[str]) -> list[tuple[str, str]]:
-    """The wire encoding of lineage, in one place, per the boundary contract.
-
-    Lineage rides as ATTRIBUTES (not metadata): a derived_from entry with the
-    parent ids comma-separated (the boundary splits on ','), and a model
-    entry. The builder keeps attributes sorted and unique, as the canonical
-    encoding requires.
-    """
+    """Return lineage as attributes; the boundary splits ``derived_from`` on commas."""
     return [
         ("derived_from", ",".join(parents)),
         ("model", model.strip()),

@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-// The seal envelope in reverse: verify() must accept exactly what seal()
-// produces and refuse a change to any byte, under either direction's key —
-// there is only one envelope, so this one suite covers ingress and egress.
+// verify() accepts what seal() produces and refuses a change to any byte. The
+// envelope is the same for ingress and egress, so this covers both.
 
 #include <ajar/connector.hpp>
 

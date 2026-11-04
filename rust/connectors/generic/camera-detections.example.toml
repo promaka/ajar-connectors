@@ -1,18 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 #
-# Example: an EO/IR CAMERA object-detection feed, mapped with NO new code —
-# the generic connector turns a detector's JSON output into canonical Ajar
-# events. Run:
-#   ajar-generic ./camera-detections.toml
+# EO/IR camera detections as newline JSON, one geolocated object per line.
+# Run: ajar-generic ./camera-detections.toml
 #
-# This is the cheap path to closing the camera/EO-IR gap: a CV pipeline (edge
-# box, NVR, or the camera itself) emits one JSON detection per line over TCP,
-# and this mapping carries the geolocated detection — class, confidence,
-# bearing — plus the image bounding box as passthrough metadata. Full ONVIF
-# discovery + RTSP video is a separate, heavier connector; a georeferenced
-# detection stream is what a COP actually consumes.
-#
-# Expected record (one JSON object per line):
+# Expected record:
 #   {"ts":"2026-06-10T08:00:00Z","track_id":"cam1-42","class":"person",
 #    "confidence":0.92,"lat":51.5019,"lon":-0.1425,"bearing":47.0,
 #    "bbox_x":312,"bbox_y":118,"bbox_w":64,"bbox_h":140,"camera_id":"north-gate"}
@@ -22,49 +13,40 @@ nats_url = "nats://127.0.0.1:4222"
 subject_prefix = "ajar.ingest"
 signing_key_path = "/etc/ajar/camera-north-gate.seed"
 
-# Camera detections carry no hostility; stamp one for the COP.
+# Detections carry no hostility; set the one the picture should show.
 default_hostility = "Unknown"
 
-# The security marking every event carries, stamped inside its signature.
-# Every field is optional; see README section 7f.
+# Security marking stamped into every event; all fields optional.
 # [marking]
 # classification = "restricted"
 # releasable_to = ["GBR", "ITA"]
 # caveats = ["EXERCISE"]
 
 [transport]
-# The detector pushes newline-delimited JSON; listen for it (or dial it with
-# tcp-client, or watch a drop directory of detection files with dir).
+# The detector pushes newline JSON; tcp-client or dir also work.
 kind = "tcp-server"
 bind = "0.0.0.0:9200"
 framing = "line"
 
 [mapping]
 format = "json"
-# Governed by the vendored ontology as shipped; a vendor extension type
-# (x:<vendor>:<type>) works once your operator registers it.
+# Governed by the vendored ontology; an x:<vendor>:<type> needs registering first.
 entity_type = "mim:object"
 timestamp_field = "ts"
 timestamp_format = "rfc3339"
-# The detector must geolocate the object (pixel->world) for a map track.
+# The detector geolocates the object.
 lat_field = "lat"
 lon_field = "lon"
-# The detector's score lands in the event's first-class confidence field
-# (mapping it as an attribute would leave it ungoverned: quarantined into metadata).
+# The event's own confidence field; as an attribute it would be quarantined.
 confidence_field = "confidence"
 
-# Governed: ontology-validated tactical facts.
-# Direction is `<record field> = "<ajar key>"` — the JSON key on the left, the
-# Ajar attribute name on the right.
+# Record field = Ajar attribute key.
 [mapping.attributes]
 bearing = "course"
 
-# Ungoverned passthrough (same direction: record field -> ajar key). The
-# detector's own track id becomes source_uid, so Core keeps each tracked object
-# its own symbol (never a merged blob); the image bounding box rides through
-# verbatim for the console to overlay on the video.
+# Record field = metadata key. track_id keeps each object its own track.
 [mapping.metadata]
-# The detector's class label is vendor vocabulary: ungoverned, always kept.
+# Vendor vocabulary, so metadata.
 class = "object_class"
 track_id = "source_uid"
 camera_id = "camera_id"

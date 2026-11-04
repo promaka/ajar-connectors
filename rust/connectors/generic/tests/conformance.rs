@@ -1,9 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Contract conformance for the generic connector — same bar as the hand-written
-//! ones: content contract (UUIDv7 id + RFC 3339 timestamp), native id in metadata,
-//! canonical metadata, and the seal verifies under the published contract key.
+//! Events meet Core's content contract and seal under the published contract key.
 
-use ajar_connector::{canonical_bytes, seal, SEAL_SIGNATURE_LEN};
+use ajar_connector::SEAL_SIGNATURE_LEN;
 use ajar_connector_common::Enrichment;
 use ajar_generic::{GenericParser, Mapping};
 use ed25519_dalek::{Signature, SigningKey, Verifier, VerifyingKey};
@@ -12,28 +10,18 @@ use uuid::Uuid;
 const FRAME: &[u8] =
     br#"{"device":"acme-77","observed_at":"2026-06-10T08:00:00Z","lat":26.4,"lon":50.9,"heading":225}"#;
 
-fn mapping() -> Mapping {
-    #[derive(serde::Deserialize)]
-    struct W {
-        mapping: Mapping,
-    }
-    toml::from_str::<W>(
-        r#"
-        [mapping]
-        format = "json"
-        entity_type = "x:acme:sensor"
-        timestamp_field = "observed_at"
-        lat_field = "lat"
-        lon_field = "lon"
-        [mapping.attributes]
-        heading = "heading"
-        [mapping.metadata]
-        device = "device_id"
-        "#,
-    )
-    .unwrap()
-    .mapping
-}
+const MAPPING: &str = r#"
+[mapping]
+format = "json"
+entity_type = "x:acme:sensor"
+timestamp_field = "observed_at"
+lat_field = "lat"
+lon_field = "lon"
+[mapping.attributes]
+heading = "heading"
+[mapping.metadata]
+device = "device_id"
+"#;
 
 fn contract() -> serde_json::Value {
     let path = concat!(
@@ -51,7 +39,12 @@ fn hex32(v: &serde_json::Value, key: &str) -> [u8; 32] {
 }
 
 fn connector_event() -> ajar_connector::Event {
-    GenericParser::new("acme-sensor-1", mapping(), Enrichment::default())
+    #[derive(serde::Deserialize)]
+    struct W {
+        mapping: Mapping,
+    }
+    let w: W = toml::from_str(MAPPING).unwrap();
+    GenericParser::new("acme-sensor-1", w.mapping, Enrichment::default())
         .to_event(FRAME)
         .expect("maps")
 }
@@ -71,7 +64,6 @@ fn native_id_is_preserved_as_metadata_not_id() {
     let ev = connector_event();
     assert_eq!(ev.entity_type, "x:acme:sensor");
     assert_ne!(ev.id, "acme-77");
-    // Native id in metadata; governed value in attributes.
     assert!(ev
         .metadata
         .iter()
@@ -92,8 +84,8 @@ fn seal_verifies_under_the_published_contract_key() {
     let vk = VerifyingKey::from_bytes(&hex32(&contract, "verifyingKeyHex"))
         .expect("published verifying key is valid");
 
-    let canonical = canonical_bytes(&connector_event());
-    let sealed = seal(&canonical, &SigningKey::from_bytes(&seed));
+    let canonical = ajar_connector::canonical_bytes(&connector_event());
+    let sealed = ajar_connector::seal(&canonical, &SigningKey::from_bytes(&seed));
 
     assert_eq!(sealed.len(), SEAL_SIGNATURE_LEN + canonical.len());
     let (sig, body) = sealed.split_at(SEAL_SIGNATURE_LEN);
@@ -103,13 +95,12 @@ fn seal_verifies_under_the_published_contract_key() {
         .expect("seal signature must verify under the contract key");
 }
 
-/// Canonical repeated `Attribute`: keys strictly increasing (sorted + unique).
+/// Keys strictly increasing: sorted and unique.
 fn is_canonical(entries: &[ajar_connector::Attribute]) -> bool {
     entries.windows(2).all(|w| w[0].key < w[1].key)
 }
 
-/// Mirror Core's timestamp rule without importing it: RFC 3339, `Z` or numeric
-/// offset, optional fractional seconds.
+/// Core's timestamp rule: RFC 3339 with `Z` or a numeric offset.
 fn is_rfc3339(s: &str) -> bool {
     let b = s.as_bytes();
     if b.len() < 20 {

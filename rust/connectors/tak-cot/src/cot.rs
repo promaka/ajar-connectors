@@ -1,57 +1,39 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Cursor-on-Target (CoT) XML -> canonical Ajar event.
-//!
-//! This is the untrusted edge: field CoT can be malformed, truncated, or hostile,
-//! so parsing uses a real XML reader and every failure is a typed error — it never
-//! panics and never fabricates a field. The canonical invariants then hold by
-//! construction via [`EventBuilder`].
+//! Cursor-on-Target (CoT) XML to canonical Ajar events: one `<event>` per frame,
+//! hostility from the type's affiliation code, entity type from its battle
+//! dimension or the configured overrides.
 
 use std::collections::HashMap;
 
-use ajar_connector::{Event, EventBuilder};
+use ajar_connector::{BuildError, Event, EventBuilder};
 use ajar_connector_common::GovernedIdentity;
 use ajar_connector_common::{Enrichment, FrameParser, ParseError};
 use quick_xml::events::Event as XmlEvent;
 use quick_xml::Reader;
 
-/// Why a CoT frame could not be normalized. Dropped frames are counted and logged
-/// with the reason (operator observability), never silently swallowed.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, thiserror::Error)]
 pub enum CotError {
-    /// The bytes were not well-formed XML.
+    #[error("malformed CoT XML: {0}")]
     Xml(String),
-    /// A required element/attribute was absent.
+    #[error("CoT missing {0}")]
     Missing(&'static str),
-    /// A numeric attribute (lat/lon/hae) was present but unparseable.
+    #[error("CoT bad number in {0}")]
     BadNumber(&'static str),
-    /// The canonical event failed to build (a propagated invariant violation).
-    Build(String),
+    #[error("event build failed: {0}")]
+    Build(#[from] BuildError),
 }
 
-impl std::fmt::Display for CotError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            CotError::Xml(e) => write!(f, "malformed CoT XML: {e}"),
-            CotError::Missing(what) => write!(f, "CoT missing {what}"),
-            CotError::BadNumber(what) => write!(f, "CoT bad number in {what}"),
-            CotError::Build(e) => write!(f, "event build failed: {e}"),
-        }
-    }
-}
-impl std::error::Error for CotError {}
-
-/// Normalizes CoT for one connector identity, with optional CoT-type overrides.
 pub struct CotParser {
     source_id: String,
     overrides: HashMap<String, String>,
 }
 
 impl CotParser {
+    /// CoT carries its own hostility, so `_enrichment` is unused; it keeps the
+    /// constructor shape of the other connectors.
     pub fn new(
         source_id: impl Into<String>,
         overrides: HashMap<String, String>,
-        // CoT encodes hostility in the event type, so this connector derives it
-        // from the wire and needs no enrichment; the arg is kept for API uniformity.
         _enrichment: Enrichment,
     ) -> Self {
         Self {
@@ -60,35 +42,32 @@ impl CotParser {
         }
     }
 
-    /// Parse one CoT `<event>` (with optional `<point>`) into a canonical event.
     pub fn to_event(&self, native: &[u8]) -> Result<Event, CotError> {
         let mut reader = Reader::from_reader(native);
-        let mut buf = Vec::new();
 
         let mut uid: Option<String> = None;
         let mut cot_type: Option<String> = None;
         let mut time: Option<String> = None;
         let mut lat: Option<f64> = None;
         let mut lon: Option<f64> = None;
-        let mut hae: f64 = 0.0;
+        let mut hae_m: f64 = 0.0;
         let mut callsign: Option<String> = None;
-        let mut course: Option<f64> = None;
-        let mut speed: Option<f64> = None;
+        let mut course_deg: Option<f64> = None;
+        let mut speed_mps: Option<f64> = None;
         let mut confidence: Option<f64> = None;
         let mut in_confidence = false;
         let mut saw_event = false;
 
         loop {
-            match reader.read_event_into(&mut buf) {
+            match reader.read_event() {
                 Ok(XmlEvent::Start(e)) | Ok(XmlEvent::Empty(e)) => match e.name().as_ref() {
                     "event" => {
                         saw_event = true;
                         for a in e.attributes().flatten() {
-                            let val = a.value.into_owned();
                             match a.key.as_ref() {
-                                "uid" => uid = Some(val),
-                                "type" => cot_type = Some(val),
-                                "time" => time = Some(val),
+                                "uid" => uid = Some(a.value.into_owned()),
+                                "type" => cot_type = Some(a.value.into_owned()),
+                                "time" => time = Some(a.value.into_owned()),
                                 _ => {}
                             }
                         }
@@ -107,12 +86,11 @@ impl CotParser {
                                         s.parse().map_err(|_| CotError::BadNumber("point/@lon"))?,
                                     )
                                 }
-                                "hae" => hae = s.parse().unwrap_or(0.0),
+                                "hae" => hae_m = s.parse().unwrap_or(0.0),
                                 _ => {}
                             }
                         }
                     }
-                    // <detail><contact callsign="EAGLE01"/></detail>
                     "contact" => {
                         for a in e.attributes().flatten() {
                             if a.key.as_ref() == "callsign" {
@@ -120,25 +98,20 @@ impl CotParser {
                             }
                         }
                     }
-                    // <detail><track course="128.4" speed="12.3"/></detail>:
-                    // CoT states course in degrees clockwise from true north and
-                    // speed in metres per second, which is exactly what the
-                    // governed `course` and `speed` attributes want, so there is
-                    // no conversion and no unit trap. A value that is not a
-                    // number is dropped rather than failing the whole track: a
-                    // stationary or unknown-heading contact is still a contact.
+                    // CoT course is degrees from true north and speed is m/s, the
+                    // governed units. A non-numeric value is skipped and the
+                    // track kept.
                     "track" => {
                         for a in e.attributes().flatten() {
                             match a.key.as_ref() {
-                                "course" => course = parse_finite(&a.value),
-                                "speed" => speed = parse_finite(&a.value),
+                                "course" => course_deg = parse_finite(&a.value),
+                                "speed" => speed_mps = parse_finite(&a.value),
                                 _ => {}
                             }
                         }
                     }
-                    // Confidence has no standard CoT home; accept either a
-                    // <confidence value="0.87"/> attribute or <confidence>0.87</confidence>
-                    // element text.
+                    // Not standard CoT: accepted as <confidence value="0.87"/> or
+                    // <confidence>0.87</confidence>.
                     "confidence" => {
                         in_confidence = true;
                         for a in e.attributes().flatten() {
@@ -160,7 +133,6 @@ impl CotParser {
                 Err(e) => return Err(CotError::Xml(e.to_string())),
                 _ => {}
             }
-            buf.clear();
         }
 
         if !saw_event {
@@ -170,80 +142,62 @@ impl CotParser {
         let cot_type = cot_type.ok_or(CotError::Missing("event/@type"))?;
         let time = time.ok_or(CotError::Missing("event/@time"))?;
 
-        // Core requires the event id to be a fresh UUIDv7. The native CoT uid is
-        // never the id: it goes to source_uid metadata and, governed, to alt_id
-        // under the CoT standard code.
-        //
-        // The tactical attributes a COP needs: hostility, callsign, confidence.
-        // Affiliation and callsign are routed per the connector's attribute mode
-        // (governed when the ontology declares them, else metadata — always safe);
-        // Hostility is always set (defaulting to Unknown), so a track is never
-        // blank. Confidence is the event's first-class field.
         let mut builder = EventBuilder::new(self.source_id.clone(), self.map_type(&cot_type))
             .new_id()
             .payload(native.to_vec())
             .timestamp(time)
             .metadata("source_uid", uid.clone())
-            // Governed identity: the CoT uid under its standard code. An empty
-            // or oversized uid is not an identity and sets nothing.
             .identity("CoT", uid)
             .attribute("hostility", hostility(&cot_type));
         if let Some(callsign) = callsign {
             builder = builder.attribute("callsign", callsign);
         }
-        // A negative speed is not a slower speed, and a course outside a circle
-        // is not a direction: both are a malformed track, and a governed value
-        // outside the ontology's bounds would be quarantined downstream, or reject
-        // the event on a strict site.
-        if let Some(course) = course.filter(|c| (0.0..=360.0).contains(c)) {
-            builder = builder.attribute("course", format!("{course:.1}"));
+        // A negative speed or a course outside the circle is out of the governed
+        // bounds and is dropped.
+        if let Some(course_deg) = course_deg.filter(|c| (0.0..=360.0).contains(c)) {
+            builder = builder.attribute("course", format!("{course_deg:.1}"));
         }
-        if let Some(speed) = speed.filter(|s| *s >= 0.0) {
-            builder = builder.attribute("speed", format!("{speed:.2}"));
+        if let Some(speed_mps) = speed_mps.filter(|s| *s >= 0.0) {
+            builder = builder.attribute("speed", format!("{speed_mps:.2}"));
         }
         if let Some(confidence) = confidence {
             builder = builder.confidence(confidence);
         }
         if let (Some(lat), Some(lon)) = (lat, lon) {
-            builder = builder.location(lat, lon, hae);
+            builder = builder.location(lat, lon, hae_m);
         }
-        builder.build().map_err(|e| CotError::Build(e.to_string()))
+        Ok(builder.build()?)
     }
 
-    /// Map a CoT type code to an Ajar entity type. Config overrides win; otherwise a
-    /// conservative default by battle dimension (air/sea); anything else falls back
-    /// to a vendor namespace so nothing is silently dropped (the sovereign's ontology
-    /// + the connector's allowed namespaces decide what Core then accepts).
+    /// Config overrides first, then the battle dimension (third type field);
+    /// anything else goes to the `x:cot:` namespace.
     fn map_type(&self, cot_type: &str) -> String {
         if let Some(mapped) = self.overrides.get(cot_type) {
             return mapped.clone();
         }
         match cot_type.split('-').nth(2) {
-            Some("A") => "mim:aircraft".to_string(),          // air
-            Some("S") => "mim:vessel".to_string(),            // sea surface
-            Some("U") => "mim:subsurface-vessel".to_string(), // subsurface (revision 2)
+            Some("A") => "mim:aircraft".to_string(),
+            Some("S") => "mim:vessel".to_string(),
+            // Subsurface, CoT revision 2.
+            Some("U") => "mim:subsurface-vessel".to_string(),
             _ => format!("x:cot:{}", cot_type.replace('-', "_")),
         }
     }
 }
 
-/// A finite number from an attribute value, or `None`. CoT is a field format:
-/// an empty attribute, a `NaN`, or a word where a number belongs is a producer's
-/// mistake to skip, not a reason to drop the whole track.
+impl FrameParser for CotParser {
+    fn parse(&self, frame: &[u8]) -> Result<Vec<Event>, ParseError> {
+        Ok(vec![self.to_event(frame)?])
+    }
+}
+
 fn parse_finite(raw: &str) -> Option<f64> {
     raw.trim().parse::<f64>().ok().filter(|v| v.is_finite())
 }
 
-/// Hostility from the CoT type's second field (`a-f-…` → `Friend`).
-///
-/// CoT and MIM 5.3 line up almost exactly here, so every code the wire carries
-/// now survives: previously only friend, hostile, neutral and unknown had
-/// anywhere to go and the rest collapsed to `unknown`. `j` and `k` are the
-/// exercise codes, a friendly playing hostile and a track playing suspect, and
-/// are carried through rather than being reported as a real threat.
-///
-/// Anything unrecognised, including a missing field, reads as `Unknown` so a COP
-/// never shows a blank where a hostility belongs.
+/// Hostility from the type's affiliation code (second field). `j` and `k` are
+/// the exercise codes Joker and Faker. Anything else, or no second field, is
+/// `Unknown`.
 fn hostility(cot_type: &str) -> &'static str {
     match cot_type.split('-').nth(1) {
         Some("f") => "Friend",
@@ -258,23 +212,11 @@ fn hostility(cot_type: &str) -> &'static str {
     }
 }
 
-/// Parse a confidence value into `[0.0, 1.0]`. A value above 1 is treated as a
-/// percentage (e.g. `87` → `0.87`); the result is clamped. Returns `None` if the
-/// text is not a number.
+/// Confidence clamped to [0, 1]; a value above 1 is a percentage.
 fn normalize_confidence(raw: &str) -> Option<f64> {
     let v: f64 = raw.parse().ok()?;
     let v = if v > 1.0 { v / 100.0 } else { v };
     Some(v.clamp(0.0, 1.0))
-}
-
-/// The one piece of glue that plugs this format into the shared runtime. Every CoT
-/// frame we accept maps to exactly one event.
-impl FrameParser for CotParser {
-    fn parse(&self, frame: &[u8]) -> Result<Vec<Event>, ParseError> {
-        self.to_event(frame)
-            .map(|e| vec![e])
-            .map_err(|e| Box::new(e) as ParseError)
-    }
 }
 
 #[cfg(test)]
@@ -283,53 +225,37 @@ mod tests {
 
     const SAMPLE: &str = r#"<event version="2.0" uid="AD-7741" type="a-f-A-M-F-Q" time="2026-06-10T08:00:00Z" start="2026-06-10T08:00:00Z" stale="2026-06-10T08:00:30Z"><point lat="26.4" lon="50.9" hae="1200.0" ce="10" le="10"/></event>"#;
 
-    /// A track carrying the kinematics a COP needs, as ATAK sends them.
+    // As ATAK sends it: contact callsign and track kinematics in <detail>.
     const WITH_TRACK: &str = r#"<event version="2.0" uid="EAGLE-1" type="a-f-A" time="2026-06-10T08:00:00Z"><point lat="51.5" lon="-0.12" hae="9100.0"/><detail><contact callsign="EAGLE01"/><track course="128.4" speed="221.5"/></detail></event>"#;
 
-    /// Default parser: safe metadata mode.
     fn parser() -> CotParser {
         CotParser::new("tak-field-1", HashMap::new(), Enrichment::default())
     }
 
-    /// Parser for a deployment that declared its ontology: governed mode.
-    fn governed() -> CotParser {
-        CotParser::new("tak-field-1", HashMap::new(), Enrichment::default())
-    }
-
-    /// Find a tactical value in whichever place the mode put it.
-    fn tactical<'a>(ev: &'a Event, key: &str) -> Option<&'a str> {
+    fn attr<'a>(ev: &'a Event, key: &str) -> Option<&'a str> {
         ev.attributes
             .iter()
-            .chain(ev.metadata.iter())
             .find(|a| a.key == key)
             .map(|a| a.value.as_str())
     }
 
     #[test]
-    fn the_track_element_becomes_governed_course_and_speed() {
-        // CoT states course in degrees from true north and speed in metres per
-        // second, which is what the contract wants, so the values pass through
-        // unconverted.
+    fn track_element_becomes_course_and_speed() {
         let ev = parser().to_event(WITH_TRACK.as_bytes()).unwrap();
-        assert_eq!(tactical(&ev, "course"), Some("128.4"));
-        assert_eq!(tactical(&ev, "speed"), Some("221.50"));
-        assert_eq!(tactical(&ev, "callsign"), Some("EAGLE01"));
+        assert_eq!(attr(&ev, "course"), Some("128.4"));
+        assert_eq!(attr(&ev, "speed"), Some("221.50"));
+        assert_eq!(attr(&ev, "callsign"), Some("EAGLE01"));
     }
 
     #[test]
-    fn a_track_without_kinematics_is_still_a_track() {
-        // Most CoT has no track element at all; absence sets nothing rather
-        // than claiming a stationary contact.
+    fn no_track_element_sets_no_kinematics() {
         let ev = parser().to_event(SAMPLE.as_bytes()).unwrap();
-        assert_eq!(tactical(&ev, "course"), None);
-        assert_eq!(tactical(&ev, "speed"), None);
+        assert_eq!(attr(&ev, "course"), None);
+        assert_eq!(attr(&ev, "speed"), None);
     }
 
     #[test]
-    fn malformed_kinematics_are_skipped_not_published_as_numbers() {
-        // A field format sends junk: an empty attribute, a word, a negative
-        // speed, a course outside a circle. None of it is a number a consumer
-        // should gate on, and none of it should lose the rest of the track.
+    fn malformed_kinematics_are_skipped() {
         for (course, speed) in [
             ("", "12.0"),
             ("north", "12.0"),
@@ -349,10 +275,10 @@ mod tests {
                 .ok()
                 .is_none_or(|c| !(0.0..=360.0).contains(&c));
             if bad_course {
-                assert_eq!(tactical(&ev, "course"), None, "course {course:?}");
+                assert_eq!(attr(&ev, "course"), None, "course {course:?}");
             }
             if speed.starts_with('-') {
-                assert_eq!(tactical(&ev, "speed"), None, "speed {speed:?}");
+                assert_eq!(attr(&ev, "speed"), None, "speed {speed:?}");
             }
             assert!(ev.location.is_some(), "the position survives regardless");
         }
@@ -361,50 +287,37 @@ mod tests {
     #[test]
     fn parses_a_valid_cot_track() {
         let ev = parser().to_event(SAMPLE.as_bytes()).unwrap();
-        // The id is a fresh UUIDv7, not the native uid; the uid is preserved as
-        // ungoverned metadata.
         assert_ne!(ev.id, "AD-7741");
         assert!(ev
             .metadata
             .iter()
             .any(|m| m.key == "source_uid" && m.value == "AD-7741"));
-        assert!(ev
-            .attributes
-            .iter()
-            .any(|a| a.key == "alt_id" && a.value == "AD-7741"));
-        assert!(ev
-            .attributes
-            .iter()
-            .any(|a| a.key == "alt_id_standard" && a.value == "CoT"));
-        assert_eq!(ev.entity_type, "mim:aircraft"); // battle dimension A -> air
+        assert_eq!(attr(&ev, "alt_id"), Some("AD-7741"));
+        assert_eq!(attr(&ev, "alt_id_standard"), Some("CoT"));
+        assert_eq!(ev.entity_type, "mim:aircraft");
         let loc = ev.location.as_ref().unwrap();
         assert_eq!(loc.latitude, 26.4);
         assert_eq!(loc.altitude_m, 1200.0);
-        // Affiliation is always set from the type's 2nd field (a-f-… -> friendly).
-        assert_eq!(tactical(&ev, "hostility"), Some("Friend"));
+        assert_eq!(attr(&ev, "hostility"), Some("Friend"));
     }
 
     #[test]
-    fn fields_are_attributes_and_raw_frame_is_preserved() {
-        // Affiliation is derived from the CoT type (real data, not a default) and
-        // rides as an attribute; Core demotes it if the ontology hasn't declared it.
+    fn hostility_is_attribute_and_raw_kept() {
         let ev = parser().to_event(SAMPLE.as_bytes()).unwrap();
         assert!(ev.attributes.iter().any(|a| a.key == "hostility"));
         assert!(!ev.metadata.iter().any(|m| m.key == "hostility"));
-        // The raw CoT frame is preserved verbatim in the signed payload.
         assert_eq!(ev.payload.as_slice(), SAMPLE.as_bytes());
     }
 
     #[test]
-    fn extracts_tactical_attributes_a_cop_needs() {
-        // Hostile ground unit with a callsign and confidence in <detail>.
+    fn extracts_hostility_callsign_and_confidence() {
         let cot = r#"<event version="2.0" uid="X-1" type="a-h-G-U-C-I" time="2026-06-10T08:00:00Z" start="2026-06-10T08:00:00Z" stale="2026-06-10T08:00:30Z">
             <point lat="1.0" lon="2.0" hae="0"/>
             <detail><contact callsign="EAGLE01"/><confidence>0.87</confidence></detail>
         </event>"#;
-        let ev = governed().to_event(cot.as_bytes()).unwrap();
-        assert_eq!(tactical(&ev, "hostility"), Some("Hostile"));
-        assert_eq!(tactical(&ev, "callsign"), Some("EAGLE01"));
+        let ev = parser().to_event(cot.as_bytes()).unwrap();
+        assert_eq!(attr(&ev, "hostility"), Some("Hostile"));
+        assert_eq!(attr(&ev, "callsign"), Some("EAGLE01"));
         assert!((ev.confidence - 0.87).abs() < 1e-9);
     }
 
@@ -413,22 +326,18 @@ mod tests {
         let cot = r#"<event uid="X" type="a-n-A" time="2026-06-10T08:00:00Z"><detail><confidence value="87"/></detail></event>"#;
         let ev = parser().to_event(cot.as_bytes()).unwrap();
         assert!((ev.confidence - 0.87).abs() < 1e-9);
-        assert_eq!(tactical(&ev, "hostility"), Some("Neutral"));
+        assert_eq!(attr(&ev, "hostility"), Some("Neutral"));
     }
 
     #[test]
-    fn unknown_hostility_never_blank() {
-        // No 2nd field / unmapped code -> Unknown, never missing.
+    fn missing_affiliation_is_unknown_hostility() {
         let cot = r#"<event uid="X" type="a" time="2026-06-10T08:00:00Z"/>"#;
         let ev = parser().to_event(cot.as_bytes()).unwrap();
-        assert_eq!(tactical(&ev, "hostility"), Some("Unknown"));
+        assert_eq!(attr(&ev, "hostility"), Some("Unknown"));
     }
 
     #[test]
-    fn every_cot_hostility_code_survives() {
-        // Each of these previously collapsed to "unknown" because there was
-        // nowhere for it to go. `j` and `k` are the exercise codes and must not
-        // reach a COP as a real threat.
+    fn every_affiliation_code_maps() {
         for (code, expected) in [
             ("f", "Friend"),
             ("a", "AssumedFriend"),
@@ -443,7 +352,7 @@ mod tests {
             let cot = format!(r#"<event uid="X" type="a-{code}-A" time="2026-06-10T08:00:00Z"/>"#);
             let ev = parser().to_event(cot.as_bytes()).unwrap();
             assert_eq!(
-                tactical(&ev, "hostility"),
+                attr(&ev, "hostility"),
                 Some(expected),
                 "CoT affiliation code {code:?}"
             );
@@ -471,7 +380,7 @@ mod tests {
     }
 
     #[test]
-    fn malformed_xml_is_rejected_not_panicked() {
+    fn malformed_xml_is_rejected() {
         assert!(matches!(
             parser().to_event(b"<event uid=\"x\" type=\"a-f-A\" <<<garbage"),
             Err(CotError::Xml(_)) | Err(CotError::Missing(_))

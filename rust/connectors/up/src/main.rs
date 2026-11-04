@@ -3,6 +3,8 @@
 
 use std::path::PathBuf;
 
+use ajar_up::packet::Role;
+
 fn usage() -> ! {
     eprintln!(
         "usage: ajar-up <packet.tar> [--dir <workdir>] [--signing-key <seed>]\n\
@@ -72,15 +74,13 @@ async fn main() {
 
     let result = async {
         let packet = ajar_up::packet::open(&packet_path, &dir)?;
-        match packet.role() {
-            "producer" => {
+        match packet.role()? {
+            Role::Producer => {
                 let r = ajar_up::producer::run(
                     &packet,
                     &ajar_up::producer::Options {
                         signing_key,
-                        // --check is verify+place+configure+preflight, then exit:
-                        // exactly what --no-exec does, minus printing the command
-                        // as the point.
+                        // --check stops where --no-exec does.
                         no_exec: no_exec || check,
                         timeout_secs,
                     },
@@ -94,7 +94,7 @@ async fn main() {
                 }
                 r
             }
-            "consumer" => {
+            Role::Consumer => {
                 if check {
                     let r = ajar_up::consumer::check(&packet);
                     if r.is_ok() {
@@ -109,10 +109,6 @@ async fn main() {
                         .await
                 }
             }
-            other => anyhow::bail!(
-                "this packet\'s role is {other:?}, which this ajar-up does not know; \
-                 update ajar-up"
-            ),
         }
     }
     .await;

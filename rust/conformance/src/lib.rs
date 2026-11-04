@@ -1,7 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Shared loaders for the golden-vector conformance gate. The actual assertions
-//! live in `tests/golden_vectors.rs`; this module just turns the vendored JSON
-//! fixtures into canonical [`Event`]s so the test can hash them.
+//! Loaders for the golden vectors and corpus fixtures in `vendor/contract`.
 
 use ajar_connector::{Attribute, Event, GeoPoint};
 use base64::Engine;
@@ -9,9 +7,8 @@ use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-/// Absolute path to the vendored contract directory.
+/// Absolute path to `vendor/contract`.
 pub fn contract_dir() -> PathBuf {
-    // CARGO_MANIFEST_DIR = rust/conformance ; contract = ../../vendor/contract
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../vendor/contract")
         .canonicalize()
@@ -21,10 +18,10 @@ pub fn contract_dir() -> PathBuf {
 /// The parsed `vectors.json` golden file.
 #[derive(Debug, Deserialize)]
 pub struct Vectors {
-    /// TEST signing seed (32 bytes, hex). Never a production key.
+    /// Published test signing seed, 32 bytes as hex.
     #[serde(rename = "signingSeedHex")]
     pub signing_seed_hex: String,
-    /// Verifying key derived from the seed (hex), for cross-checking.
+    /// Verifying key derived from the seed, as hex.
     #[serde(rename = "verifyingKeyHex")]
     pub verifying_key_hex: String,
     /// Per-fixture expected hashes, keyed by corpus fixture name.
@@ -47,8 +44,7 @@ pub fn load_vectors() -> Vectors {
     serde_json::from_str(&raw).expect("parse vectors.json")
 }
 
-/// JSON projection of an [`Event`] as stored in `corpus/*.json` (camelCase, with
-/// `payload` base64-encoded). JSON is a debug projection only — never canonical.
+/// An [`Event`] as stored in `corpus/*.json`: camelCase, `payload` base64.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct FixtureEvent {
@@ -88,21 +84,14 @@ struct FixtureAttr {
     value: String,
 }
 
-/// Loads `corpus/<name>.json` and converts it to a canonical [`Event`].
-///
-/// The fixture is taken verbatim (including `received_at`, which a live
-/// connector would leave for Ajar to stamp) so the canonical bytes match what
-/// core hashed when it blessed these vectors.
+/// Loads `corpus/<name>.json` as an [`Event`], verbatim including `received_at`.
 pub fn load_fixture(name: &str) -> Event {
     let path = contract_dir().join("corpus").join(format!("{name}.json"));
     let raw = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {name}.json: {e}"));
     fixture_from_str(&raw).unwrap_or_else(|e| panic!("parse {name}.json: {e}"))
 }
 
-/// Converts fixture JSON to a canonical [`Event`].
-///
-/// Shared with the `ajar-conformance` reference adapter so the harness and the
-/// golden-vector gate cannot read the same fixture two different ways.
+/// Converts fixture JSON to an [`Event`].
 pub fn fixture_from_str(raw: &str) -> Result<Event, Box<dyn std::error::Error>> {
     let f: FixtureEvent = serde_json::from_str(raw)?;
 

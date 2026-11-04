@@ -1,47 +1,35 @@
 # SPDX-License-Identifier: Apache-2.0
-#
-# Dependency policy, enforced by cargo-deny in CI on every pull request.
-# Four gates: security advisories, licences, duplicate versions, and where
-# dependencies may come from at all.
+# cargo-deny policy: advisories, licences, duplicate versions and sources.
 
 [graph]
 all-features = true
 
 [advisories]
-# A RUSTSEC advisory against anything in the lockfiles fails the build. An
-# exception here must carry a reason and should be time-boxed, not permanent.
+# A RUSTSEC advisory against the lockfiles fails the build; each exception carries a reason and
+# should be time-boxed, not permanent.
 version = 2
 yanked = "deny"
 ignore = [
-  # rustls-pemfile is unmaintained; parsing moved into rustls-pki-types. Our
-  # direct use is migrated. This reaches the tree only through rumqttc's
-  # optional mqtt feature, unmaintained-not-vulnerable, parsing config the
-  # operator wrote. Drop when rumqttc releases without it.
+  # rustls-pemfile is unmaintained, not vulnerable; it arrives only through rumqttc's
+  # optional mqtt feature, parsing config the operator wrote. Drop when rumqttc releases without it.
   { id = "RUSTSEC-2025-0134", reason = "transitive via rumqttc (optional mqtt) only; direct use migrated" },
-  # rustls-webpki 0.102.x certificate-validation advisories, patched in 0.103.
-  # rumqttc, at its latest release, pins ^0.102.8, so cargo cannot lift it; the
-  # fix is upstream's. Exposure is bounded: mqtt is feature-gated and OFF in
-  # every shipped image and binary, so these reach only a consumer who builds
-  # --features mqtt and runs MQTT over TLS. Drop all five when rumqttc moves.
+  # rustls-webpki 0.102.x advisories, fixed in 0.103; rumqttc pins ^0.102.8. mqtt is off in
+  # every shipped image and binary, so only a --features mqtt build over TLS is exposed.
+  # Drop all five when rumqttc moves to 0.103.
   { id = "RUSTSEC-2026-0049", reason = "optional mqtt feature only; rumqttc pins 0.102; not in shipped artefacts" },
   { id = "RUSTSEC-2026-0098", reason = "optional mqtt feature only; rumqttc pins 0.102; not in shipped artefacts" },
   { id = "RUSTSEC-2026-0099", reason = "optional mqtt feature only; rumqttc pins 0.102; not in shipped artefacts" },
   { id = "RUSTSEC-2026-0104", reason = "optional mqtt feature only; rumqttc pins 0.102; not in shipped artefacts" },
   { id = "RUSTSEC-2026-0382", reason = "optional mqtt feature only; rumqttc pins 0.102; not in shipped artefacts; the 0.103 line every shipped binary uses is at the fixed version" },
-  # The DDS transport's stack (rustdds) still depends on mio 0.6, which pulls
-  # net2, and on netdev, which pulls the paste macro crate. Both advisories are
-  # unmaintained, not vulnerable: net2 is socket-option plumbing on a LAN
-  # socket, paste runs at compile time only. These DO reach shipped binaries,
-  # since every ingress connector ships dds. Drop both when rustdds releases
-  # without mio 0.6 (its mio 0.8 support exists behind a feature today).
+  # rustdds pulls net2 (via mio 0.6) and paste (via netdev) into shipped binaries through dds.
+  # Both are unmaintained, not vulnerable: net2 sets socket options, paste is compile-time.
+  # Drop net2 when rustdds leaves mio 0.6 (its mio_08 feature exists today), paste when netdev drops it.
   { id = "RUSTSEC-2020-0016", reason = "net2 via rustdds's mio 0.6; unmaintained, not vulnerable; drop when rustdds moves to mio 0.8" },
   { id = "RUSTSEC-2024-0436", reason = "paste via rustdds's netdev; compile-time macro crate; unmaintained, not vulnerable" },
 ]
 
 [licenses]
-# The repository is Apache-2.0; everything it pulls in must be compatible.
-# A copyleft licence arriving transitively fails the build rather than
-# arriving silently — this repo's provenance story depends on that.
+# Everything pulled in must be compatible with Apache-2.0; a transitive copyleft licence fails.
 version = 2
 allow = [
   "Apache-2.0",
@@ -54,8 +42,7 @@ allow = [
   "CC0-1.0",
   "BSL-1.0",
   "OpenSSL",
-  # MPL-2.0 is file-level copyleft: fine to depend on unmodified, which is the
-  # only way serialport (the optional serial transport) is used.
+  # File-level copyleft; serialport (optional serial transport) is used unmodified.
   "MPL-2.0",
   # The Mozilla root-store data licence, via the WebSocket transport's TLS
   # defaults. Permissive, data-only.
@@ -66,19 +53,16 @@ allow = [
 unused-allowed-license = "allow"
 
 [[licenses.clarify]]
-# ring carries its licence in a nonstandard file; this is the accepted
-# clarification from cargo-deny's own documentation.
+# ring's licence is in a nonstandard file; clarification from cargo-deny's documentation.
 crate = "ring"
 expression = "MIT AND ISC AND OpenSSL"
 license-files = [{ path = "LICENSE", hash = 0xbd0eed23 }]
 
 [bans]
-# Duplicate versions of one crate are a warning, not an error: transitive
-# graphs drift, and Dependabot consolidates them on its cadence.
+# Transitive graphs drift; Dependabot consolidates duplicates.
 multiple-versions = "warn"
 
 [sources]
-# crates.io only. A git or alternative-registry dependency appearing in the
-# graph is a supply-chain event that deserves a failed build and a review.
+# crates.io only.
 unknown-registry = "deny"
 unknown-git = "deny"

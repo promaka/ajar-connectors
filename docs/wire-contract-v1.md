@@ -89,6 +89,15 @@ sealed = ed25519_sign(signing_key, canonical_bytes) ++ canonical_bytes
 Split at 64 bytes: the prefix is the signature, the remainder is the canonical
 event. A verifier holding the publisher's registered public key can establish
 provenance with neither the connector, the broker, nor Ajar Core present.
+[`ajar-verify`](../rust/ajar-verify/) does this from the command line, and exits
+0 only when the seal verifies:
+
+```bash
+cargo run --manifest-path rust/Cargo.toml -p ajar-verify -- --key <64-hex-chars> event.sealed
+```
+
+A 64-byte envelope carries no canonical bytes. It is well-formed and can verify,
+so the caller decides whether an empty event means anything.
 
 The envelope is **bare** — no algorithm identifier, no key identifier, no signing
 time. The algorithm is fixed by this contract version; the key is identified by

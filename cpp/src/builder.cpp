@@ -145,7 +145,7 @@ Event EventBuilder::build() const {
     throw BuildError("too many metadata entries: " + std::to_string(metadata_.size()));
   }
 
-  // Canonical rule: attributes sorted by key, unique.
+  // Canonical attributes are sorted by key and unique; so is metadata.
   auto attrs = attributes_;
   std::stable_sort(attrs.begin(), attrs.end(),
                    [](const auto& a, const auto& b) { return a.first < b.first; });
@@ -155,7 +155,6 @@ Event EventBuilder::build() const {
     }
   }
 
-  // Metadata follows the identical canonical rule: sorted by key, unique.
   auto meta = metadata_;
   std::stable_sort(meta.begin(), meta.end(),
                    [](const auto& a, const auto& b) { return a.first < b.first; });
@@ -171,7 +170,7 @@ Event EventBuilder::build() const {
   e.set_source_id(source_id_);
   e.set_entity_type(entity_type_);
   e.set_timestamp(timestamp_);
-  // received_at intentionally left empty — Ajar stamps its own clock.
+  // received_at stays empty: Ajar stamps its own clock.
   if (has_location_) {
     GeoPoint* g = e.mutable_location();
     g->set_latitude(lat_);

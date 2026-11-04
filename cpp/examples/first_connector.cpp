@@ -22,8 +22,8 @@ int main() {
   cot::CotConnector connector("ad-radar-7");
   const ajar::Event event = connector.normalize(native);
 
-  // 2. Canonicalize and sign with this connector's own key. The demo seed is
-  //    illustration only — generate and persist a real per-connector key.
+  // 2. Canonicalize and sign with this connector's own key. This is a public demo
+  // key; never sign real events with it.
   std::array<std::uint8_t, 32> demo_seed = {
       0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x00,
       0x10, 0x20, 0x30, 0x40, 0x50, 0x60, 0x70, 0x80, 0x90, 0xa0, 0xb0, 0xc0, 0xd0, 0xe0, 0xf0, 0x01};

@@ -1,15 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! TAK / CoT ingress connector.
-//!
-//! All the moving parts — config, key, mTLS NATS, the UDP transport, the
-//! seal-and-publish loop, health, shutdown — live in `ajar_connector_common`.
-//! This binary is only the wiring: read config, build the CoT parser, open the
-//! transport, run. Another situational-awareness format is the same file with a
-//! different parser.
 
-use std::collections::HashMap;
-
-use ajar_connector_common::{open_source, run, Config};
+use ajar_connector_common::Config;
 use ajar_tak_cot::CotParser;
 use anyhow::Context;
 
@@ -23,8 +15,7 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let args: Vec<String> = std::env::args().collect();
-    // The first non-flag argument is the config path, so `--profile` may sit on
-    // either side of it.
+    // The config path is the first non-flag argument.
     let path = args
         .iter()
         .skip(1)
@@ -33,8 +24,7 @@ async fn main() -> anyhow::Result<()> {
         .unwrap_or_else(|| "tak-cot.toml".to_string());
     let cfg = Config::load(&path).with_context(|| format!("loading {path}"))?;
 
-    // `--profile` prints the document the operator registers and exits,
-    // before any transport is opened.
+    // Print the profile the operator registers, before any transport opens.
     if ajar_connector_common::profile::requested(&args) {
         println!(
             "{}",
@@ -43,11 +33,14 @@ async fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    let overrides: HashMap<String, String> = cfg.entity_map.clone();
-    let parser = CotParser::new(cfg.source_id.clone(), overrides, cfg.enrichment());
-    let source = open_source(&cfg.transport)
+    let parser = CotParser::new(
+        cfg.source_id.clone(),
+        cfg.entity_map.clone(),
+        cfg.enrichment(),
+    );
+    let source = ajar_connector_common::open_source(&cfg.transport)
         .await
         .context("opening transport")?;
 
-    run(cfg, source, parser).await
+    ajar_connector_common::run(cfg, source, parser).await
 }
