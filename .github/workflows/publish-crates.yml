@@ -17,7 +17,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Install the toolchain
+        run: rustup toolchain install
       - name: Check manifest versions
         run: ./scripts/check-versions.sh "${GITHUB_REF_NAME#v}"
       - name: Run golden vectors
@@ -37,7 +38,8 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Install the toolchain
+        run: rustup toolchain install
       - uses: rust-lang/crates-io-auth-action@v1
         id: auth
       - name: Publish to crates.io

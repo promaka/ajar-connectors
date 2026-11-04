@@ -24,7 +24,8 @@ jobs:
         run: ./scripts/check-versions.sh "${GITHUB_REF_NAME#v}"
       - name: Install the SDK
         run: pip install -e ./python
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Install the toolchain
+        run: rustup toolchain install
       - name: Run the conformance harness
         run: |
           set -euo pipefail
