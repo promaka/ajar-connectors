@@ -13,7 +13,7 @@ publish = false
 [dependencies]
 ajar-connector.workspace = true
 # `ring` re-adds the rustls crypto provider TLS to NATS needs.
-async-nats = { version = "0.50", default-features = false, features = ["ring"] }
+async-nats = { version = "0.51", default-features = false, features = ["ring"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "io-util", "io-std"] }
 bytes = "1"
 serde = { version = "1", features = ["derive"] }
