@@ -8,7 +8,7 @@
 # Build from the REPO ROOT:
 #   docker build -f deploy/docker/Dockerfile -t registry.you.mil/acme-radar:1.0.0 .
 
-FROM rust:1.96-bookworm AS build
+FROM rust:1.99.1-bookworm AS build
 WORKDIR /build
 COPY rust ./rust
 COPY vendor ./vendor

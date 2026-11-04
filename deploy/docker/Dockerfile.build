@@ -21,7 +21,7 @@ ARG PKG=tak-egress
 
 # $BUILDPLATFORM pins this stage to the runner's native arch; we cross-compile to
 # $TARGETARCH rather than running the compiler under emulation.
-FROM --platform=$BUILDPLATFORM rust:1.96-bookworm AS build
+FROM --platform=$BUILDPLATFORM rust:1.99.1-bookworm AS build
 ARG WSDIR
 ARG PKG
 ARG TARGETARCH

@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # The verifying sink for the development stack. Build from the REPO ROOT.
-FROM rust:1.96-bookworm AS build
+FROM rust:1.99.1-bookworm AS build
 WORKDIR /build
 COPY rust ./rust
 COPY vendor ./vendor

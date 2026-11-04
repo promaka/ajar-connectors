@@ -296,7 +296,7 @@ async fn run(
     let mut link = mavlink::Link::default();
     let mut last_static: Option<Instant> = None;
     let mut n: u64 = 0;
-    while ticks.map_or(true, |t| n < t) {
+    while ticks.is_none_or(|t| n < t) {
         interval.tick().await;
         n += 1;
         let secs = start.elapsed().as_secs_f64();
@@ -306,7 +306,7 @@ async fn run(
                 let v = Vessel::at(secs);
                 let second = time::OffsetDateTime::from(observed).second();
                 sink.send(ais::position_report(&v, second).as_bytes()).await;
-                if last_static.map_or(true, |t| t.elapsed() >= ais_static_every) {
+                if last_static.is_none_or(|t| t.elapsed() >= ais_static_every) {
                     let seq = (n / 10 % 10) as u8;
                     sink.send(ais::static_report(seq).as_bytes()).await;
                     last_static = Some(Instant::now());
