@@ -37,7 +37,7 @@ authors = ["Ajar connectors contributors"]
 ajar-connector = { path = "../ajar-connector" }
 ajar-connector-common = { path = "common" }
 # jetstream: the spool drain advances only on a PubAck. No default features: they clash on `time`.
-async-nats = { version = "0.50", default-features = false, features = ["ring", "jetstream"] }
+async-nats = { version = "0.51", default-features = false, features = ["ring", "jetstream"] }
 ed25519-dalek = "3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "time", "signal", "io-util", "io-std", "fs", "process"] }
 bytes = "1"
