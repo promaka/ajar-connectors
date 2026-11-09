@@ -192,7 +192,7 @@ pub async fn probe(
                     ),
                     fix: "This is usually the wrong port or the wrong environment (a dev broker \
                           instead of the operator's ingest endpoint). Check nats_url against the \
-                          endpoint the operator sent you in registration step 3."
+                          one in the operator's invite."
                         .into(),
                 }),
             });

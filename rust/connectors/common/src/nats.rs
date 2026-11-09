@@ -103,7 +103,8 @@ fn unreachable_message(urls: &str, err: &str) -> String {
     format!(
         "cannot reach NATS at {urls}: {err}. Retrying; sealed events spool meanwhile when \
          a spool is configured. Check the URL and port, and that a firewall allows this \
-         outbound connection; `ajar-doctor <config>` tests the endpoint and names the fix"
+         outbound connection; `ajar-connectors check <connector-id>` tests the endpoint and \
+         names the fix"
     )
 }
 
@@ -164,7 +165,7 @@ mod tests {
         let m = unreachable_message("nats://10.0.0.5:4222", "connection refused");
         assert!(m.contains("nats://10.0.0.5:4222"));
         assert!(m.contains("connection refused"));
-        assert!(m.contains("firewall") && m.contains("ajar-doctor"));
+        assert!(m.contains("firewall") && m.contains("ajar-connectors check"));
     }
 
     #[test]

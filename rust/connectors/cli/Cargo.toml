@@ -34,3 +34,8 @@ x509-parser.workspace = true
 ed25519-dalek.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
+
+# See CONTRIBUTING.md, "Releases".
+[package.metadata.ajar]
+release = false
+image = false

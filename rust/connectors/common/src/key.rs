@@ -8,10 +8,9 @@ pub fn load(path: &str) -> anyhow::Result<SigningKey> {
     let raw = std::fs::read(path).map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
             anyhow::anyhow!(
-                "signing key {path} not found. If your operator issued a packet, \
-                 `ajar-up <packet.tar>` places it there; a key you generated yourself \
-                 goes at this path as 32 raw bytes or 64 hex characters (onboarding \
-                 guide, Keys)"
+                "signing key {path} not found. `ajar-connectors join <invite>` places it \
+                 in the instance; a key you generated yourself goes at this path as 32 raw \
+                 bytes or 64 hex characters (onboarding guide, Keys)"
             )
         } else {
             anyhow::anyhow!("reading signing key {path}: {e}")
@@ -52,7 +51,7 @@ mod tests {
     fn missing_seed_says_where_it_comes_from() {
         let msg = load("/nonexistent/dir/x.seed").unwrap_err().to_string();
         assert!(msg.contains("not found"), "{msg}");
-        assert!(msg.contains("ajar-up <packet.tar>"), "{msg}");
+        assert!(msg.contains("ajar-connectors join"), "{msg}");
     }
 
     #[test]

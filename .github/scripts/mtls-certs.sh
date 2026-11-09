@@ -25,7 +25,7 @@ mint() { # <name> <subject> <ext>
 
 mint server "/CN=localhost" "subjectAltName=DNS:localhost,IP:127.0.0.1
 extendedKeyUsage=serverAuth"
-mint client "/CN=ajar-connector" "extendedKeyUsage=clientAuth"
+mint client "/CN=mtls-test" "extendedKeyUsage=clientAuth"
 
 head -1 client.key | grep -q "BEGIN PRIVATE KEY" \
   || { echo "client key is not PKCS#8"; exit 1; }

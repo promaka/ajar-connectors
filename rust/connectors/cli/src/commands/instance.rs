@@ -234,8 +234,7 @@ pub fn check(ctx: &Context, prompt: &mut Prompt, args: CheckArgs) -> anyhow::Res
                     Some(connector_id) => ajar_doctor::Role::Consumer { connector_id },
                     None => ajar_doctor::Role::Producer,
                 },
-                config_path: Some(config.to_string_lossy().into_owned()),
-                sources_dir: None,
+                config_path: config.to_string_lossy().into_owned(),
                 tls_files: None,
                 timeout: Duration::from_secs(5),
             };
