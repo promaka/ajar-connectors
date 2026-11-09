@@ -4,7 +4,7 @@
 
 use std::time::Duration;
 
-use ajar_doctor::{report, Options};
+use ajar_doctor::{report, Options, Role};
 
 fn usage() -> ! {
     eprintln!(
@@ -48,8 +48,10 @@ async fn main() {
         }
     }
     let opts = Options {
+        role: Role::Producer,
         config_path,
         sources_dir,
+        tls_files: None,
         timeout: Duration::from_secs(timeout_secs),
     };
 

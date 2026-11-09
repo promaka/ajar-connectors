@@ -133,6 +133,7 @@ dependencies = [
  "time",
  "tokio",
  "tokio-rustls",
+ "toml",
  "x509-parser 0.17.0",
 ]
 

@@ -75,4 +75,6 @@ semver = "1"
 # Blocking, for the command-line tools. No provider: ring is installed at run time, as for async-nats.
 reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "blocking", "json"] }
 quick-xml = "0.42"
+# Subject CN, SAN list, validity and public key, which rustls and rcgen do not expose.
+x509-parser = "0.17"
 rcgen = { version = "0.14", default-features = false, features = ["ring", "pem"] }

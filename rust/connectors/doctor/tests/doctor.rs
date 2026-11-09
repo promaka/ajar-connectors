@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use ajar_doctor::{net, report, tls, Options};
+use ajar_doctor::{net, report, tls, Options, Role};
 use tempfile::TempDir;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
@@ -209,8 +209,10 @@ fn config(dir: &TempDir, nats_url: &str) -> String {
 
 async fn doctor(config_path: Option<String>, sources_dir: Option<&Path>) -> (String, bool) {
     let findings = ajar_doctor::run(&Options {
+        role: Role::Producer,
         config_path,
         sources_dir: sources_dir.map(|d| d.to_str().unwrap().to_string()),
+        tls_files: None,
         timeout: Duration::from_secs(3),
     })
     .await;
@@ -730,4 +732,69 @@ async fn dead_tls_url_still_requires_tls() {
     let (text, healthy) = doctor(Some(config), None).await;
     assert!(!healthy);
     assert!(text.contains("TLS is required"), "{text}");
+}
+
+/// The findings for a consumer whose config delivers to `target`.
+async fn consumer_findings(target: &str) -> Vec<report::Finding> {
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = write(
+        &dir,
+        "consumer.toml",
+        &format!(
+            "nats_url = \"nats://127.0.0.1:1\"\n\
+             egress_subject = \"ajar.egress.cot.*\"\n\
+             egress_verifying_key = \"/instance/egress.pub\"\n\
+             target = \"{target}\"\n"
+        ),
+    );
+    ajar_doctor::run(&Options {
+        role: Role::Consumer {
+            connector_id: "ally-feed".into(),
+        },
+        config_path: Some(config_path),
+        sources_dir: None,
+        tls_files: None,
+        timeout: Duration::from_secs(3),
+    })
+    .await
+}
+
+fn finding<'a>(findings: &'a [report::Finding], step: &str) -> &'a report::Finding {
+    findings.iter().find(|f| f.step == step).unwrap()
+}
+
+#[tokio::test]
+async fn consumer_target_that_answers_passes() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let findings = consumer_findings(&format!("tls://{addr}")).await;
+    let target = finding(&findings, "target");
+    assert_eq!(target.status, report::Status::Ok, "{}", target.detail);
+    assert_eq!(
+        finding(&findings, "signing key").status,
+        report::Status::Skip
+    );
+}
+
+#[tokio::test]
+async fn consumer_target_nobody_answers_fails() {
+    let addr = TcpListener::bind("127.0.0.1:0")
+        .await
+        .unwrap()
+        .local_addr()
+        .unwrap();
+    let findings = consumer_findings(&format!("{addr}")).await;
+    let target = finding(&findings, "target");
+    assert_eq!(target.status, report::Status::Fail);
+    assert!(
+        target.detail.contains("nothing answers"),
+        "{}",
+        target.detail
+    );
+}
+
+#[tokio::test]
+async fn consumer_datagram_target_is_skipped() {
+    let findings = consumer_findings("udp://239.2.3.1:6969").await;
+    assert_eq!(finding(&findings, "target").status, report::Status::Skip);
 }

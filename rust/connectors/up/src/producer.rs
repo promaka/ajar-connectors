@@ -97,8 +97,10 @@ pub async fn run(packet: &Packet, opts: &Options) -> anyhow::Result<()> {
     );
 
     let findings = ajar_doctor::run(&ajar_doctor::Options {
+        role: ajar_doctor::Role::Producer,
         config_path: Some(config_path.to_str().unwrap().to_string()),
         sources_dir: None,
+        tls_files: None,
         timeout: std::time::Duration::from_secs(opts.timeout_secs),
     })
     .await;
