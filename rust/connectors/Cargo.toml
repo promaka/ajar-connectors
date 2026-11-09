@@ -5,6 +5,7 @@ resolver = "2"
 members = [
     "common",
     "doctor",
+    "tooling",
     "up",
     "tak-cot",
     "ais-nmea",
@@ -67,5 +68,11 @@ futures-util = "0.3"
 proptest = "1"
 uuid = "1"
 sha2 = "0.11"
+tar = "0.4"
+getrandom = "0.4"
+regex = "1"
+semver = "1"
+# Blocking, for the command-line tools. No provider: ring is installed at run time, as for async-nats.
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "blocking", "json"] }
 quick-xml = "0.42"
 rcgen = { version = "0.14", default-features = false, features = ["ring", "pem"] }

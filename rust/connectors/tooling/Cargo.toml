@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: Apache-2.0
+[package]
+name = "ajar-tooling"
+description = "Files and prompts shared by the ajar and ajar-connectors commands: invites, requests, connector releases."
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+ed25519-dalek.workspace = true
+getrandom.workspace = true
+hex.workspace = true
+# x509-parser: reading and checking a certificate signing request.
+rcgen = { workspace = true, features = ["x509-parser"] }
+regex.workspace = true
+reqwest.workspace = true
+rustls.workspace = true
+semver.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tar.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
