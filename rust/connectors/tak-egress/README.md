@@ -10,7 +10,7 @@ or filter it.
 
 ## Input
 
-NATS subject `egress_subject`, default `ajar.egress.cot.*` (`*` is the
+NATS subject `egress_subject`, usually `ajar.egress.cot.*` (`*` is the
 per-source token). Every message on the subject is accepted and relayed; the
 relay does not check that the payload is CoT.
 
@@ -20,9 +20,9 @@ egress subject, with no publish rights.
 
 ## Output
 
-The NATS payload, unchanged, to one of two targets chosen by `tak.url`:
+The NATS payload, unchanged, to one of two kinds of `target`:
 
-| `tak.url` | Delivery |
+| `target` | Delivery |
 |-----------|----------|
 | `tls://host:port` | mutual TLS to a TAK Server's streaming input (standard port 8089). Events are written back to back on one stream, which TAK parses as concatenated CoT XML (TAK Protocol v0). |
 | `udp://ip:port` | one datagram per event. `udp://239.2.3.1:6969` is ATAK's mesh SA group, read by every ATAK, WinTAK and iTAK on the network with no server. A unicast address also works. |
@@ -36,17 +36,20 @@ The relay holds two certificates:
 
 ## Configuration
 
-Start from [`tak-egress.example.toml`](tak-egress.example.toml). The relay has
-its own config shape, with no signing key or transport table.
+`ajar-connectors join` writes the config: the first four keys come from the
+invite and from `join --target`, and the `[tak]` table from the instance's
+`settings.toml`. To run the relay by hand, start from
+[`tak-egress.example.toml`](tak-egress.example.toml).
 
 | Key | Default | Meaning |
 |-----|---------|---------|
 | `nats_url` | required | Ajar NATS, `tls://` in production |
-| `egress_subject` | `ajar.egress.cot.*` | subject to subscribe |
-| `[tak] url` | required | `tls://host:port` or `udp://ip:port` |
+| `egress_subject` | required | subject to subscribe, under `ajar.egress.` |
+| `egress_verifying_key` | required | Core's egress key file; not read, since the CoT channel is not signed |
+| `target` | required | `tls://host:port` or `udp://ip:port` |
 | `[tak] tls_ca` | none | CA that signed the TAK Server certificate; required for `tls://` |
 | `[tak] tls_cert`, `tls_key` | none | the relay's enrolled client certificate and key, PEM; required for `tls://` |
-| `[tak] server_name` | host in `url` | name verified on the server certificate (SNI) |
+| `[tak] server_name` | host in `target` | name verified on the server certificate (SNI) |
 | `[tak] interface` | default route | multicast only: IPv4 address of the interface the TAK clients share |
 | `[tak] multicast_ttl` | `1` | multicast only: hop limit; 1 keeps the datagrams on the local network |
 | `[tak] buffer_max` | `1000` | events held while TAK is unreachable; must be at least 1 |
@@ -54,8 +57,9 @@ its own config shape, with no signing key or transport table.
 For ATAK's mesh with no TAK Server:
 
 ```toml
+target = "udp://239.2.3.1:6969"
+
 [tak]
-url = "udp://239.2.3.1:6969"
 # interface = "192.168.1.20"
 ```
 

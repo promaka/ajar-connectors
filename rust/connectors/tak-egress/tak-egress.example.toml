@@ -1,22 +1,25 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # TAK egress relay: governed CoT from Ajar's NATS egress to TAK, verbatim.
-# Run: ajar-tak-egress ./tak-egress.toml
+# `ajar-connectors join` writes the first four keys from the invite and --target, and [tak]
+# from the instance's settings.toml. Run by hand: ajar-tak-egress ./tak-egress.toml
 
 # tls:// in production, with this relay's subscribe-only identity in AJAR_TLS_*.
 nats_url = "tls://nats.ajar.svc:4222"
 # * is the per-source token.
 egress_subject = "ajar.egress.cot.*"
+# Required by the shared egress config; the CoT channel is not signed, so it is not read.
+egress_verifying_key = "/etc/ajar/egress.pub"
+# A TAK Server's streaming input, or udp://239.2.3.1:6969 for ATAK's mesh (no certificates).
+target = "tls://takserver.mil:8089"
 
 [tak]
-# A TAK Server's streaming input, or udp://239.2.3.1:6969 for ATAK's mesh (no certificates).
-url = "tls://takserver.mil:8089"
 # CA that signed the TAK Server's certificate.
 tls_ca = "/etc/tak/ca.crt"
 # This relay's client certificate enrolled with the TAK Server, and its key.
 tls_cert = "/etc/tak/client.crt"
 tls_key = "/etc/tak/client.key"
-# Name to verify on the server certificate; defaults to the host in url.
+# Name to verify on the server certificate; defaults to the host in target.
 server_name = "takserver.mil"
 # Multicast only: IPv4 address of the interface the TAK clients share.
 # interface = "192.168.1.20"

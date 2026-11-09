@@ -7,7 +7,6 @@
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
-use ajar_generic_egress::config::Config;
 use ajar_generic_egress::{map, Dedupe, EgressMetrics, DEDUPE_WINDOW};
 use anyhow::Context;
 use futures_util::StreamExt;
@@ -29,7 +28,8 @@ async fn main() -> anyhow::Result<()> {
         .find(|a| !a.starts_with("--"))
         .cloned()
         .unwrap_or_else(|| "generic-egress.toml".to_string());
-    let cfg = Config::load(&path).with_context(|| format!("loading {path}"))?;
+    let cfg =
+        ajar_generic_egress::config::load(&path).with_context(|| format!("loading {path}"))?;
 
     let key = match cfg.verifying_key() {
         Ok(k) => Some(k),
@@ -42,10 +42,10 @@ async fn main() -> anyhow::Result<()> {
 
     let metrics = EgressMetrics::default();
     let client = ajar_connector_common::nats::connect(&cfg.nats_url).await?;
-    let mut sub = client.subscribe(cfg.subject.clone()).await?;
+    let mut sub = client.subscribe(cfg.egress_subject.clone()).await?;
     tracing::info!(
-        subject = %cfg.subject,
-        deliver = %cfg.deliver.url,
+        subject = %cfg.egress_subject,
+        deliver = %cfg.target,
         dry_run,
         "egress ready"
     );
@@ -85,9 +85,9 @@ async fn main() -> anyhow::Result<()> {
                 }
                 let Some(body) = map::render(
                     &event,
-                    &cfg.mapping.fields,
-                    cfg.unmapped,
-                    cfg.confidentiality_label.as_ref(),
+                    &cfg.connector.mapping.fields,
+                    cfg.connector.unmapped,
+                    cfg.connector.confidentiality_label.as_ref(),
                 ) else {
                     metrics.gap_dropped.fetch_add(1, Ordering::Relaxed);
                     tracing::warn!(id = %event.id, "unmapped content refused");
@@ -101,9 +101,9 @@ async fn main() -> anyhow::Result<()> {
                 }
 
                 let mut delivered = false;
-                for attempt in 0..cfg.deliver.attempts {
-                    let mut req = http.post(&cfg.deliver.url).json(&body);
-                    for (k, v) in &cfg.deliver.headers {
+                for attempt in 0..cfg.connector.deliver.attempts {
+                    let mut req = http.post(&cfg.target).json(&body);
+                    for (k, v) in &cfg.connector.deliver.headers {
                         req = req.header(k, v);
                     }
                     match req.send().await {

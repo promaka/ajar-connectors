@@ -9,6 +9,13 @@ CONTRIBUTING.md, "Releases").
 
 ## [Unreleased]
 
+### Changed
+
+- Breaking: the config uses the shape every egress connector shares, which
+  `ajar-connectors join` writes. `[tak] url` moves to the top-level `target`,
+  `egress_subject` is required, and `egress_verifying_key` is required but not
+  read. Unknown keys in `[tak]` are refused.
+
 ## [0.6.7] - 2026-11-02
 
 ### Changed

@@ -17,7 +17,7 @@ use ajar_connector_common::{health, nats};
 use anyhow::Context;
 use futures_util::StreamExt;
 
-pub use config::{EgressConfig, TakConfig};
+pub use config::{EgressConfig, TakConfig, TakSettings};
 pub use tak::TakLink;
 
 /// Relay counters, exposed on `/metrics`.
@@ -72,8 +72,9 @@ impl Relay {
 
 /// Run the relay until the NATS subscription ends or a shutdown signal arrives.
 pub async fn run(cfg: EgressConfig) -> anyhow::Result<()> {
-    let mut link = TakLink::new(&cfg.tak)?;
-    let mut relay = Relay::new(cfg.tak.buffer_max);
+    let tak = &cfg.connector.tak;
+    let mut link = TakLink::new(&cfg.target, tak)?;
+    let mut relay = Relay::new(tak.buffer_max);
 
     health::spawn_counters(vec![
         ("egress_delivered_total", relay.metrics.delivered.clone()),
@@ -95,8 +96,8 @@ pub async fn run(cfg: EgressConfig) -> anyhow::Result<()> {
 
     tracing::info!(
         subject = %cfg.egress_subject,
-        tak = %cfg.tak.endpoint(),
-        buffer_max = cfg.tak.buffer_max,
+        tak = %config::endpoint(&cfg.target),
+        buffer_max = tak.buffer_max,
         "egress relay starting"
     );
 

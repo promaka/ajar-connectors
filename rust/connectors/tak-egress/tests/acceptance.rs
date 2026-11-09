@@ -107,17 +107,15 @@ async fn bind_sink(pki: &Pki, addr: &str) -> Sink {
     Sink { addr, rx, task }
 }
 
-fn link_config(pki: &Pki, addr: &str) -> TakConfig {
+fn link_config(pki: &Pki) -> TakConfig {
     toml::from_str(&format!(
         r#"
-        url = "tls://{addr}"
         tls_ca = "{dir}/ca.crt"
         tls_cert = "{dir}/client.crt"
         tls_key = "{dir}/client.key"
         server_name = "localhost"
         buffer_max = 8
         "#,
-        addr = addr,
         dir = pki.dir.path().display(),
     ))
     .unwrap()
@@ -138,7 +136,7 @@ async fn recv_exactly(sink: &mut Sink, n: usize) -> Vec<u8> {
 async fn governed_cot_arrives_byte_identical() {
     let pki = mint_pki();
     let mut sink = bind_sink(&pki, "127.0.0.1:0").await;
-    let mut link = TakLink::new(&link_config(&pki, &sink.addr)).unwrap();
+    let mut link = TakLink::new(&format!("tls://{}", sink.addr), &link_config(&pki)).unwrap();
 
     link.send(EVENT).await.unwrap();
 
@@ -156,7 +154,7 @@ async fn link_reconnects_after_outage() {
     let addr = bind_sink(&pki, "127.0.0.1:0").await.stop();
 
     let mut relay = Relay::new(8);
-    let mut link = TakLink::new(&link_config(&pki, &addr)).unwrap();
+    let mut link = TakLink::new(&format!("tls://{addr}"), &link_config(&pki)).unwrap();
 
     relay.push(bytes::Bytes::from_static(EVENT));
     relay.drain(&mut link).await;
@@ -194,12 +192,13 @@ async fn nats_to_tak_full_loop() {
     };
     let pki = mint_pki();
     let mut sink = bind_sink(&pki, "127.0.0.1:0").await;
-    let cfg: ajar_tak_egress::EgressConfig = toml::from_str(&format!(
+    let cfg = ajar_tak_egress::EgressConfig::parse(&format!(
         r#"
         nats_url = "{nats_url}"
         egress_subject = "ajar.egress.cot.test"
+        egress_verifying_key = "unused"
+        target = "tls://{addr}"
         [tak]
-        url = "tls://{addr}"
         tls_ca = "{dir}/ca.crt"
         tls_cert = "{dir}/client.crt"
         tls_key = "{dir}/client.key"

@@ -14,7 +14,7 @@ NATS ajar.egress.signed.> ──▶ ajar-sapient-egress ──TCP──▶ fusio
 
 ## Input
 
-The connector subscribes to `subject` on Ajar's NATS, by default the signed
+The connector subscribes to `egress_subject` on Ajar's NATS, usually the signed
 egress channel `ajar.egress.signed.>`. There Core publishes each event its
 policy released, sealed under the egress key. A subject outside
 `ajar.egress.` is refused at load. The rendering subjects (`cot`, `geojson`)
@@ -31,7 +31,7 @@ Each envelope is verified under Core's egress key and decoded:
 
 ## Output
 
-BSI Flex 335 v2.0 protobuf over TCP to `fusion_node`, each message framed by
+BSI Flex 335 v2.0 protobuf over TCP to `target`, each message framed by
 a 4-byte little-endian length prefix.
 
 | When | Message |
@@ -92,16 +92,19 @@ The match is on the exact entity type, not its parents.
 
 ## Configuration
 
-Start from [`sapient-egress.example.toml`](sapient-egress.example.toml) and
-run `ajar-sapient-egress ./sapient-egress.toml` (the default path). Unknown
-keys are refused.
+`ajar-connectors join` writes the config: the first four keys come from the
+invite and from `join --target`, and the `[sapient]` table from the instance's
+`settings.toml`. To run the connector by hand, start from
+[`sapient-egress.example.toml`](sapient-egress.example.toml) and run
+`ajar-sapient-egress ./sapient-egress.toml` (the default path). Unknown keys
+are refused.
 
 | Key | Default | Meaning |
 |---|---|---|
 | `nats_url` | required | `tls://<host>:443` in production, with `AJAR_TLS_CA`, `AJAR_TLS_CERT` and `AJAR_TLS_KEY` set to the subscribe-only certificate |
-| `subject` | `ajar.egress.signed.>` | must start with `ajar.egress.`; narrow with `ajar.egress.signed.<source_id>` |
-| `egress_verifying_key` | required | Core's egress key: 64 hex characters, or a path to a file holding them |
-| `[sapient] fusion_node` | required | `host:port` |
+| `egress_subject` | required | must start with `ajar.egress.`; `ajar.egress.signed.>`, or narrowed with `ajar.egress.signed.<source_id>` |
+| `egress_verifying_key` | required | a file holding Core's egress key as 64 hex characters |
+| `target` | required | the fusion node's `host:port` |
 | `[sapient] node_id` | a fresh UUID each start | set it so a restart re-registers as the same node |
 | `[sapient] name` | `Ajar` | node name |
 | `[sapient] short_name` | `AJAR` | node short name |
@@ -111,14 +114,15 @@ keys are refused.
 | `[sapient.location]` | none | `lat`, `lon`, `alt_m` (default 0): this node's position in status reports |
 | `[sapient.classification]` | empty | entity type to classification, over the built-in table |
 
-**Onboarding.** The operator issues a consumer identity with a subscribe-only
-certificate, as for the TAK egress:
+**Onboarding.** The operator invites a consumer with a subscribe-only
+certificate on the signed channel, and the machine running the connector joins
+with the fusion node as its target:
 
 ```sh
-ajar onboard sapient-out-1 --consumer --egress-scope signed ...
+ajar invite sapient-out-1 --consumer --connector sapient-egress
+ajar-connectors join sapient-out-1.invite --target fusion-node.example:7777
 ```
 
-The packet's `egress_verifying_key_hex` and `nats_url` go into the config.
 Core publishes the signed channel from release 0.1.28.
 
 ## Behaviour

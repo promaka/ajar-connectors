@@ -24,11 +24,11 @@ pub struct Node {
 impl Node {
     pub fn from_config(cfg: &EgressConfig) -> Node {
         Node {
-            node_id: cfg.node_id(),
-            name: cfg.sapient.name.clone(),
-            short_name: cfg.sapient.short_name.clone(),
-            status_interval_s: cfg.sapient.status_interval_s,
-            location: cfg.sapient.location,
+            node_id: cfg.connector.sapient.node_id(),
+            name: cfg.connector.sapient.name.clone(),
+            short_name: cfg.connector.sapient.short_name.clone(),
+            status_interval_s: cfg.connector.sapient.status_interval_s,
+            location: cfg.connector.sapient.location,
         }
     }
 
@@ -204,12 +204,12 @@ impl Mapper {
         .into_iter()
         .map(|(k, v)| (k.to_string(), v.to_string()))
         .collect();
-        for (k, v) in &cfg.sapient.classification {
+        for (k, v) in &cfg.connector.sapient.classification {
             classification.insert(k.clone(), v.clone());
         }
         Mapper {
             classification,
-            default_classification: cfg.sapient.default_classification.clone(),
+            default_classification: cfg.connector.sapient.default_classification.clone(),
             objects: HashMap::new(),
             order: VecDeque::new(),
         }

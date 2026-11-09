@@ -431,9 +431,118 @@ fn edit_distance(a: &str, b: &str) -> usize {
     prev[b.len()]
 }
 
+/// The config every egress connector shares. `ajar-connectors` writes these fields from the
+/// invite and `join`; `connector` is the connector's own settings from the same file.
+#[derive(Debug, Clone)]
+pub struct EgressConfig<T> {
+    pub nats_url: String,
+    pub egress_subject: String,
+    /// A file holding Core's egress public key as 64 hex characters.
+    pub egress_verifying_key: String,
+    /// The delivery target: a URL or `host:port`, as the connector reads it.
+    pub target: String,
+    pub connector: T,
+}
+
+impl<T: serde::de::DeserializeOwned> EgressConfig<T> {
+    pub fn load(path: &str) -> anyhow::Result<Self> {
+        let text =
+            std::fs::read_to_string(path).with_context(|| format!("reading config {path}"))?;
+        EgressConfig::parse(&text).with_context(|| format!("parsing config {path}"))
+    }
+
+    /// The shared fields are taken out first, so the rest goes to the connector's own settings,
+    /// whose `deny_unknown_fields` then refuses typos. Serde's `flatten` would accept them.
+    pub fn parse(text: &str) -> anyhow::Result<Self> {
+        let mut table: toml::Table = toml::from_str(text)?;
+        let mut take = |key: &str| match table.remove(key) {
+            Some(toml::Value::String(value)) => Ok(value),
+            Some(_) => Err(anyhow::anyhow!("{key} must be a string")),
+            None => Err(anyhow::anyhow!("missing field `{key}`")),
+        };
+        let cfg = EgressConfig {
+            nats_url: take("nats_url")?,
+            egress_subject: take("egress_subject")?,
+            egress_verifying_key: take("egress_verifying_key")?,
+            target: take("target")?,
+            connector: table.try_into()?,
+        };
+        // Every egress subject sits under this prefix, which keeps the effector cue channel
+        // (`ajar.cue.>`) out of reach.
+        if !cfg.egress_subject.starts_with("ajar.egress.") {
+            anyhow::bail!(
+                "egress_subject {:?} must start with \"ajar.egress.\": egress connectors read \
+                 governed output only",
+                cfg.egress_subject
+            );
+        }
+        Ok(cfg)
+    }
+
+    pub fn verifying_key(&self) -> anyhow::Result<ed25519_dalek::VerifyingKey> {
+        let path = &self.egress_verifying_key;
+        let text = std::fs::read_to_string(path)
+            .with_context(|| format!("reading egress_verifying_key {path}"))?;
+        let bytes: [u8; 32] = hex::decode(text.trim())
+            .ok()
+            .and_then(|bytes| bytes.try_into().ok())
+            .with_context(|| format!("{path} does not hold a key as 64 hex characters"))?;
+        ed25519_dalek::VerifyingKey::from_bytes(&bytes)
+            .with_context(|| format!("{path} does not hold a valid Ed25519 key"))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(Debug, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct OwnSettings {
+        #[serde(default)]
+        buffer_max: Option<usize>,
+    }
+
+    fn egress_config(subject: &str, extra: &str) -> anyhow::Result<EgressConfig<OwnSettings>> {
+        EgressConfig::parse(&format!(
+            "nats_url = \"tls://core:4222\"\n\
+             egress_subject = \"{subject}\"\n\
+             egress_verifying_key = \"/instance/egress.pub\"\n\
+             target = \"tls://tak:8089\"\n{extra}"
+        ))
+    }
+
+    #[test]
+    fn egress_config_reads_the_shared_fields_and_the_connectors_own() {
+        let cfg = egress_config("ajar.egress.cot.*", "buffer_max = 10\n").unwrap();
+        assert_eq!(cfg.target, "tls://tak:8089");
+        assert_eq!(cfg.connector.buffer_max, Some(10));
+    }
+
+    #[test]
+    fn egress_config_refuses_a_key_neither_side_knows() {
+        let err = egress_config("ajar.egress.cot.*", "bufer_max = 10\n").unwrap_err();
+        assert!(format!("{err:#}").contains("bufer_max"), "{err:#}");
+    }
+
+    #[test]
+    fn egress_config_refuses_a_subject_outside_egress() {
+        let err = egress_config("ajar.cue.>", "").unwrap_err();
+        assert!(err.to_string().contains("ajar.egress."), "{err}");
+    }
+
+    #[test]
+    fn egress_key_is_read_from_its_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let key_path = tmp.path().join("egress.pub");
+        std::fs::write(&key_path, format!("{}\n", hex::encode([0x11; 32]))).unwrap();
+        let mut cfg = egress_config("ajar.egress.cot.*", "").unwrap();
+        cfg.egress_verifying_key = key_path.to_str().unwrap().to_owned();
+        assert_eq!(
+            cfg.verifying_key().unwrap(),
+            ed25519_dalek::VerifyingKey::from_bytes(&[0x11; 32]).unwrap()
+        );
+    }
 
     const BASE: &str =
         "source_id = \"x\"\nnats_url = \"nats://h:4222\"\nsigning_key_path = \"k\"\n\

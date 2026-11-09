@@ -159,17 +159,18 @@ fn write_tak_config(packet: &Packet, tak_url: &str) -> anyhow::Result<()> {
     let text = format!(
         "nats_url = \"{}\"\n\
          # The CoT egress slug: only rendered CoT, not every format.\n\
-         subject = \"ajar.egress.cot.>\"\n\
-         egress_verifying_key = \"{}\"\n\n\
+         egress_subject = \"ajar.egress.cot.>\"\n\
+         # Not read: the CoT channel is not signed.\n\
+         egress_verifying_key = \"{}\"\n\
+         target = \"{}\"\n\n\
          [tak]\n\
-         url = \"{}\"\n\
          # Enrolled with YOUR TAK Server (its owner issues these two):\n\
          tls_cert = \"FILL-ME.client.pem\"\n\
          tls_key = \"FILL-ME.client.key\"\n\
          # CA that signed the TAK Server's certificate (often your own PKI's):\n\
          tls_ca = \"{}\"\n",
         m.nats_url,
-        m.egress_verifying_key_hex.as_deref().unwrap_or_default(),
+        packet.path("egress.pub").display(),
         tak_url,
         packet.path(ca).display(),
     );
@@ -188,16 +189,15 @@ fn write_http_config(packet: &Packet, url: &str, format: &str) -> anyhow::Result
     let path = packet.path(&format!("{}-http-egress.toml", m.source_id));
     let text = format!(
         "nats_url = \"{}\"\n\
-         subject = \"ajar.egress.{format}.>\"\n\
+         egress_subject = \"ajar.egress.{format}.>\"\n\
          egress_verifying_key = \"{}\"\n\
+         target = \"{}\"\n\
          unmapped = \"include\"\n\n\
-         [deliver]\n\
-         url = \"{}\"\n\n\
          # Consumer-shaped field names go here; unmapped governed content is\n\
          # delivered under `unmapped` either way (markings cannot be mapped away).\n\
          [mapping]\n",
         m.nats_url,
-        m.egress_verifying_key_hex.as_deref().unwrap_or_default(),
+        packet.path("egress.pub").display(),
         url,
     );
     std::fs::write(&path, text).with_context(|| format!("writing {}", path.display()))?;

@@ -9,6 +9,13 @@ CONTRIBUTING.md, "Releases").
 
 ## [Unreleased]
 
+### Changed
+
+- Breaking: the config uses the shape every egress connector shares, which
+  `ajar-connectors join` writes. `subject` is renamed `egress_subject`,
+  `[deliver] url` moves to the top-level `target`, and `egress_verifying_key`
+  is a path to a file of hex only, no longer the key inline or as raw bytes.
+
 ## [0.6.7] - 2026-11-02
 
 ### Changed

@@ -1,27 +1,20 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Egress config: the governed subject, Core's egress key, the consumer's
-//! field mapping and the delivery endpoint.
+//! Egress config: the shared egress fields, whose `target` is the URL events are posted to,
+//! and the consumer's field mapping and delivery settings.
 
 use std::collections::BTreeMap;
 
-use ajar_connector::VerifyingKey;
-use anyhow::Context;
 use serde::Deserialize;
 
 use crate::label::LabelConfig;
 use crate::map::Unmapped;
 
-/// Every egress subscription lives under this prefix, which keeps the
-/// effector cue channel (`ajar.cue.>`) out of reach.
-pub const EGRESS_PREFIX: &str = "ajar.egress.";
+pub type Config = ajar_connector_common::EgressConfig<GenericSettings>;
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct Config {
-    pub nats_url: String,
-    pub subject: String,
-    /// 64-char hex, or a path to a file of 32 raw bytes or hex.
-    pub egress_verifying_key: String,
+pub struct GenericSettings {
+    #[serde(default)]
     pub deliver: Deliver,
     pub mapping: Mapping,
     #[serde(default)]
@@ -33,14 +26,20 @@ pub struct Config {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(default, deny_unknown_fields)]
 pub struct Deliver {
-    pub url: String,
-    #[serde(default)]
     pub headers: BTreeMap<String, String>,
     /// Attempts per event before it is counted as dropped.
-    #[serde(default = "default_attempts")]
     pub attempts: u32,
+}
+
+impl Default for Deliver {
+    fn default() -> Self {
+        Deliver {
+            headers: BTreeMap::new(),
+            attempts: 2,
+        }
+    }
 }
 
 /// Consumer field name to event path.
@@ -55,111 +54,60 @@ fn default_buffer_max() -> usize {
     1000
 }
 
-fn default_attempts() -> u32 {
-    2
+pub fn load(path: &str) -> anyhow::Result<Config> {
+    let cfg = Config::load(path)?;
+    validate(&cfg)?;
+    Ok(cfg)
 }
 
-impl Config {
-    pub fn load(path: &str) -> anyhow::Result<Config> {
-        let text =
-            std::fs::read_to_string(path).with_context(|| format!("reading config {path}"))?;
-        let cfg: Config =
-            toml::from_str(&text).with_context(|| format!("parsing config {path}"))?;
-        cfg.validate()?;
-        Ok(cfg)
+fn validate(cfg: &Config) -> anyhow::Result<()> {
+    let settings = &cfg.connector;
+    if settings.mapping.fields.is_empty() {
+        anyhow::bail!("[mapping] is empty: nothing would be delivered");
     }
-
-    fn validate(&self) -> anyhow::Result<()> {
-        let s = self.subject.trim();
-        if !s.starts_with(EGRESS_PREFIX) {
-            anyhow::bail!(
-                "subject {s:?} must start with {EGRESS_PREFIX:?}: egress consumes governed \
-                 output only, and the effector cue channel is out of reach"
-            );
-        }
-        // The prefix rule excludes these today; this keeps the cue channel blocked if
-        // EGRESS_PREFIX is ever widened.
-        if s.starts_with("ajar.cue.") || s == "ajar.>" || s == ">" {
-            anyhow::bail!("subject {s:?} would reach the effector cue channel: refused");
-        }
-        if self.mapping.fields.is_empty() {
-            anyhow::bail!("[mapping] is empty: nothing would be delivered");
-        }
-        if self.deliver.attempts == 0 {
-            anyhow::bail!("deliver.attempts must be at least 1");
-        }
-        for path in self.mapping.fields.values() {
-            crate::map::validate_path(path)?;
-        }
-        Ok(())
+    if settings.deliver.attempts == 0 {
+        anyhow::bail!("deliver.attempts must be at least 1");
     }
-
-    pub fn verifying_key(&self) -> anyhow::Result<VerifyingKey> {
-        let v = self.egress_verifying_key.trim();
-        let bytes = match hex::decode(v) {
-            Ok(inline) if v.len() == 64 => inline,
-            _ => {
-                let raw = std::fs::read(v)
-                    .with_context(|| format!("reading egress_verifying_key {v}"))?;
-                if raw.len() == 32 {
-                    raw
-                } else {
-                    hex::decode(String::from_utf8_lossy(&raw).trim()).map_err(|_| {
-                        anyhow::anyhow!("egress key {v}: neither 32 raw bytes nor hex")
-                    })?
-                }
-            }
-        };
-        let arr: [u8; 32] = bytes
-            .as_slice()
-            .try_into()
-            .map_err(|_| anyhow::anyhow!("egress key must be 32 bytes"))?;
-        VerifyingKey::from_bytes(&arr).context("egress key invalid")
+    for path in settings.mapping.fields.values() {
+        crate::map::validate_path(path)?;
     }
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn cfg(subject: &str) -> Result<Config, anyhow::Error> {
-        let text = format!(
+    fn cfg(settings: &str) -> anyhow::Result<Config> {
+        let cfg = Config::parse(&format!(
             r#"
             nats_url = "nats://127.0.0.1:4222"
-            subject = "{subject}"
-            egress_verifying_key = "{}"
-            [deliver]
-            url = "http://127.0.0.1:9000/events"
-            [mapping]
-            track_id = "meta:source_uid"
-            "#,
-            "ab".repeat(32)
-        );
-        let cfg: Config = toml::from_str(&text)?;
-        cfg.validate()?;
+            egress_subject = "ajar.egress.signed.>"
+            egress_verifying_key = "/instance/egress.pub"
+            target = "http://127.0.0.1:9000/events"
+            {settings}
+            "#
+        ))?;
+        validate(&cfg)?;
         Ok(cfg)
     }
 
     #[test]
-    fn egress_subject_is_accepted() {
-        assert!(cfg("ajar.egress.json.>").is_ok());
-        assert!(cfg("ajar.egress.cot.coastal-radar").is_ok());
+    fn delivery_defaults_apply_without_a_deliver_table() {
+        let cfg = cfg("[mapping]\ntrack_id = \"meta:source_uid\"").unwrap();
+        assert_eq!(cfg.connector.deliver.attempts, 2);
+        assert!(cfg.connector.deliver.headers.is_empty());
     }
 
     #[test]
-    fn cue_channel_is_unreachable() {
-        for s in [
-            "ajar.cue.fire",
-            "ajar.cue.>",
-            "ajar.>",
-            ">",
-            "ajar.ingest.>",
-        ] {
-            let err = cfg(s).unwrap_err().to_string();
-            assert!(
-                err.contains("must start with") || err.contains("refused"),
-                "{s}: {err}"
-            );
-        }
+    fn empty_mapping_is_refused() {
+        let err = cfg("[mapping]").unwrap_err().to_string();
+        assert!(err.contains("[mapping] is empty"), "{err}");
+    }
+
+    #[test]
+    fn unknown_deliver_key_is_refused() {
+        let err = cfg("[deliver]\nurl = \"http://elsewhere\"\n[mapping]\nid = \"id\"").unwrap_err();
+        assert!(format!("{err:#}").contains("url"), "{err:#}");
     }
 }

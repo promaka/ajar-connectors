@@ -1,18 +1,19 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Governed events out of Ajar, delivered as consumer-shaped JSON over HTTP.
-# Run: ajar-generic-egress ./generic-egress.toml
+# `ajar-connectors join` writes the first four keys from the invite and --target, the rest
+# from the instance's settings.toml. Run by hand: ajar-generic-egress ./generic-egress.toml
 
 # tls:// in production, with this consumer's subscribe-only identity in AJAR_TLS_*.
 nats_url = "tls://ajar.example.mil:4222"
 # Must start with ajar.egress.; the certificate decides what is actually seen.
-subject = "ajar.egress.signed.>"
-# Core's egress verifying key from the handover pack: 64-char hex or a key file path.
-egress_verifying_key = "<64-char hex from the handover pack>"
+egress_subject = "ajar.egress.signed.>"
+# A file holding Core's egress verifying key as 64 hex characters: the invite's egress.pub.
+egress_verifying_key = "/etc/ajar/egress.pub"
+# One HTTP POST of one JSON object per event.
+target = "https://consumer.example.com/ajar/events"
 
 [deliver]
-# One HTTP POST of one JSON object per event.
-url = "https://consumer.example.com/ajar/events"
 # Attempts per event before it is counted as dropped.
 # attempts = 2
 [deliver.headers]
