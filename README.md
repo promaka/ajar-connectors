@@ -77,7 +77,7 @@ database and `audit` names the exact record that is missing.
    This writes `acme-radar-1.seed` (keep secret) and prints the public key.
 4. **The NATS endpoint and credentials**, which come from whoever runs Core
    when you register in [section 9](#9-register-with-core). If that is you,
-   one command on the Core host produces all four items as a packet.
+   one command on the Core host produces all four items as an invite.
 
 You can build and test everything without items 1 and 4. You only need them to
 send real events.
@@ -243,21 +243,22 @@ argument; the one call you add is shown in
 
 ## 4. Set up: run a prebuilt connector
 
-**The one-command path**: if your operator handed you a packet
-(`<your-id>.packet.tar`), everything below collapses into:
+**The short path**: if your operator handed you an invite
+(`<your-id>.invite`), everything below collapses into:
 
 ```bash
-./ajar-up your-id.packet.tar
+sudo ajar-connectors install <connector>
+sudo ajar-connectors join your-id.invite
 ```
 
-Download `ajar-up` once from the
-[releases page](https://github.com/promaka/ajar-connectors/releases), and put
-the connector your packet names beside it (step 2), or on `PATH`. `ajar-up`
-verifies the packet's signature and checksums, places your credentials, writes
-the config, runs the doctor preflight, and starts the right connector (producer
-packets) or a verified tap on governed egress (consumer packets: add
-`--to-tak host:8089` or `--to-http <url>` for a real delivery target). The
-manual steps below remain for operators who prefer them.
+Without `sudo` when `ajar-connectors` is set up for your user only. Download
+`ajar-connectors` once from the
+[releases page](https://github.com/promaka/ajar-connectors/releases) and run
+its `setup`. `join` checks the invite, places your credentials, writes the
+config, runs the preflight and starts the connector, for a producer or an
+egress connector alike. See the
+[`ajar-connectors` README](rust/connectors/cli/README.md). The manual steps
+below remain for operators who prefer them.
 
 **Step 1. Pick your connector** from the [table in section 10](#reference-connectors).
 
@@ -270,10 +271,10 @@ cp rust/connectors/asterix/asterix.example.toml ./asterix.toml
 No repo checkout needed: each connector's release on the
 [releases page](https://github.com/promaka/ajar-connectors/releases) carries a
 tarball for your platform, `ajar-<name>-<version>-<target>.tar.gz`, with the
-binary, its example config, README and changelog; `ajar-doctor` and `ajar-up`
-are released the same way. Verify it against the `.sha256` beside it, then
-start from the config inside. Releases up to 0.6.5 shipped every connector in
-one `ajar-connectors-<version>-<target>.tar.gz`.
+binary, its example config, README and changelog. Verify it against the
+`.sha256` beside it, then start from the config inside. From 0.7.0,
+`ajar-connectors-<version>-<target>.tar.gz` is the `ajar-connectors` command;
+releases up to 0.6.5 used that name for one tarball with every connector.
 
 **Step 3. Edit four values.**
 
@@ -414,10 +415,10 @@ The example config reads newline-delimited frames pushed over TCP; change
 `[transport]` to whatever your equipment does, as in section 4, step 3.
 
 **Step 4.** Go to [section 7](#7-deploy-it). For a container, section 7b
-builds your crate by name. To have `ajar-up` start it from a packet, the
-Core operator names it with `--protocol acme-legacy` when registering it,
-as [section 9](#9-register-with-core) shows; the binary only has to sit
-beside `ajar-up` or on `PATH`.
+builds your crate by name. To run it with `ajar-connectors`, put the binary
+in the current folder as `ajar-acme-legacy` and run
+`ajar-connectors install acme-legacy`; the Core operator invites it with
+`--connector acme-legacy`, as [section 9](#9-register-with-core) shows.
 
 ### 6b. A standalone program
 
@@ -566,8 +567,8 @@ drain_rate = 50.0              # events/sec on replay: 70-80% of your registered
 
 In a container, mount the directory as a volume (a PVC on Kubernetes): events
 spooled to the container filesystem survive the link outage but not a
-restart. `ajar-doctor` checks the directory is writable and reports any
-backlog waiting to drain.
+restart. `ajar-connectors check` checks the directory is writable and reports
+any backlog waiting to drain.
 
 Without a spool configured the behavior is unchanged: a stalled publish sheds the event
 and counts it. Spool activity appears on `/metrics`: spooled, drained,
@@ -615,19 +616,19 @@ Any one field is enough: a synthetic or training feed marks itself
 ceiling: a marking the feed carries stays beside it, and Core takes the
 higher level. A level outside the five refuses to start, because Core
 would ignore the tag and the events would ship unclassified.
-`ajar-doctor` prints the exact tags a config will stamp before any event
-flows.
+`ajar-connectors check` prints the exact tags a config will stamp before any
+event flows.
 
 ### 7g. When nothing flows
 
-`ajar-doctor connector.toml` checks the setup step by step (config, signing
-key, spool, marking, transport, registration, endpoint, TLS, clock) and says which onboarding step is
-broken and what to do, reading the same config and `AJAR_TLS_*` environment
-the connector uses. With no config file it reads `NATS_URL`, `AJAR_SOURCE_ID`
-and `AJAR_SIGNING_SEED` instead, so a connector embedded in your own code
-(option A) is diagnosed with zero files. Read-only on the wire, so it is safe
-against a production endpoint. Ships in the release binaries next to the
-connectors.
+`ajar-connectors check <connector-id>` checks an instance step by step
+(config, signing key, spool, marking, transport, registration, endpoint, TLS,
+clock) and says which onboarding step is broken and what to do.
+`ajar-connectors check --config connector.toml` does the same for a config
+file, with the `AJAR_TLS_*` environment the connector uses. A connector
+embedded in your own code (option A) is checked with a small config holding
+its `source_id`, `nats_url` and `signing_key_path`, and `[transport] kind =
+"stdin"`. Read-only on the wire, so it is safe against a production endpoint.
 
 The transport step joins the multicast group, opens the serial device, probes
 the DDS domain or parses the pcap capture the config names. With a failover
@@ -698,61 +699,39 @@ Ajar accepts events only from a registered identity. Registration is done by
 whoever runs the Core you are connecting to. Nobody else is involved, and
 nothing in this repository phones home.
 
-**If you run Core yourself,** skip the exchange below. On the Core host, in
-its material directory, one command registers the connector, mints its
-credentials and writes a packet:
+**If you run Core yourself,** skip the exchange below. On the Core host, one
+command registers the connector, issues its credentials, adds its policy line
+and writes an invite:
 
 ```bash
-ajar onboard acme-radar-1 --mint --types mim: --protocol asterix \
-  --nats tls://<core-host>:4222 --sign sovereign.key --policy policy.rego \
-  --activate-policy --policy-version v<N> --material-dir . \
-  --control-url http://127.0.0.1:9092 --idp-key idp.key --sub <operator>
+ajar invite acme-radar-1 --connector asterix --entities mim:
 ```
 
-It mints the signing key and the mTLS client certificate, registers the
-public key with Core without a restart, writes and activates the policy
-line, and produces `acme-radar-1.packet.tar`. Carry that file to the
-connector host and run `./ajar-up acme-radar-1.packet.tar`, as in
+It asks for anything not given as a flag, and shows its plan before changing
+anything. Carry `acme-radar-1.invite` to the connector host and run
+`ajar-connectors join acme-radar-1.invite`, as in
 [section 4](#4-set-up-run-a-prebuilt-connector).
 
-`--protocol` names the connector `ajar-up` starts: it runs `ajar-<protocol>`
-from beside itself or from `PATH`. A connector you built in
+`--connector` names the connector type `join` runs. A connector you built in
 [section 6a](#6a-a-parser-on-the-shared-runtime) is therefore
-`--protocol acme-legacy`, with no change on Core. A key you generated
-yourself goes in as `--pubkey <64 hex characters>` instead of `--mint`, and
-the packet then omits the signing key. A consumer is `ajar onboard <id>
---consumer`.
+`--connector acme-legacy`, with no change on Core. When the keys must be made
+on the connector's machine, `ajar-connectors request` writes a request file
+there, and `ajar invite <file>.request` answers it with an invite that holds no
+private keys. A consumer is `ajar invite <id> --consumer`. `ajar invite --help`
+lists every flag.
 
-The command's own help lists every flag, and the Core bundle's runbook,
-`deploy/site/RUNBOOK.md` section 4, has the connector commands; a fuller
-connector onboarding guide joins the bundle's `docs/` from Core 0.1.28.
-
-**If someone else runs Core,** one exchange, no account:
-
-**Step 1. Produce your profile.** Any connector here derives it from your config:
+**If someone else runs Core,** one exchange, no account: tell the operator a
+name for the connector and what it sends, and they send back an invite. When
+the keys must stay on your machine, send a request instead:
 
 ```bash
-ajar-asterix --profile ./asterix.toml
+ajar-connectors request asterix acme-radar-1   # writes acme-radar-1.request
 ```
 
-```json
-{ "contract": "v1",
-  "source_id": "acme-radar-1",
-  "allowed_entity_types": ["mim:"],
-  "max_payload_bytes": 65536,
-  "verifying_key_hex": "e28a89…" }
-```
-
-Writing your own connector instead? Build the same document with
-`ConnectorProfile` in your language.
-
-**Step 2. Send it to your operator.** It contains your public key only. Your
-private seed and your source code stay with you.
-
-**Step 3. Receive** confirmation that your key and entity types are registered,
-plus the NATS endpoint and credentials.
-
-**Step 4. Put the endpoint in your config** (`nats_url`) and run.
+It holds the public halves only. Your private keys and your source code stay
+with you. The invite that comes back holds no private keys, and
+`ajar-connectors join acme-radar-1.invite` takes them from where `request` left
+them.
 
 ---
 
@@ -803,7 +782,7 @@ writes both, and [AGENTS.md](AGENTS.md) is the specification the parser follows.
 | [generic-egress](rust/connectors/generic-egress) | any JSON consumer (**egress**) | governed events OUT by field mapping, markings unmappable-away | NATS → HTTP |
 | [sapient-egress](rust/connectors/sapient-egress) | SAPIENT (BSI Flex 335) (**egress**) | governed events OUT as detection reports from a registered sensor node, to a counter-UAS fusion node | NATS → TCP |
 | [sink](rust/connectors/sink) | — (**development sink**) | verifies, persists and audit-chains events; runs the whole path without Core | NATS → SQLite |
-| [doctor](rust/connectors/doctor) | — (**diagnostics**) | names the broken onboarding step when nothing flows | read-only probes |
+| [ajar-connectors](rust/connectors/cli) | — (**the command**) | installs, enrols, runs and checks connectors; its `check` names the broken step when nothing flows | — |
 | [feed-synthetic](rust/connectors/feed-synthetic) | — (**conformance source**) | one fixture on seven real wire formats, for building against and commissioning before equipment arrives | multicast / TCP / UDP |
 
 Each maps a standard's position reports, and where present its identity and
@@ -899,7 +878,7 @@ connector never listens for Core; the bus is the only path in either direction.
 | `scripts/new-connector.sh` to passing tests, clean clone | 20 s |
 | First release build of one connector, clean clone | 50 s |
 | First container build with `Dockerfile.build`, nothing cached | about 12 min; rebuilds reuse the cached stages |
-| `--profile`, `ajar-doctor`, `ajar-up` from a packet | seconds |
+| `--profile`, `ajar-connectors check`, `join` from an invite | seconds |
 
 Clean-clone figures assume the Rust toolchain and crate cache are present;
 the first `cargo build` on a new machine also downloads dependencies.

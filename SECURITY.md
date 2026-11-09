@@ -74,6 +74,6 @@ throwaway per run, and production seeds are operator-generated.
 The allowlist in `.gitleaks.toml` names exactly what is permitted and the
 reason each entry exists.
 
-An onboarding packet is verified with the `egress.pub` it carries. The signature
+An invite is verified with the `egress.pub` it carries. The signature
 detects a change made after signing, and the first handover rests on the
 operator channel, the same as `ca.crt`. See [ONBOARDING.md](ONBOARDING.md#keys).

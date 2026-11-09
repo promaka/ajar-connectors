@@ -358,7 +358,7 @@ Accepted events land in Postgres and an audit log, ordered by Core's
 `received_at` + ingest sequence.
 
 This is why the onboarding guide's advice to
-[agree the data contract first](ONBOARDING.md#2-you-do-not-have-a-packet-yet) matters: if your `entity_type` or an attribute isn't in Core's
+[agree the data contract first](ONBOARDING.md#2-you-do-not-have-an-invite-yet) matters: if your `entity_type` or an attribute isn't in Core's
 ontology yet, gate 3 rejects you — and that's a change on the *operator's* side,
 not something you can fix in the connector.
 

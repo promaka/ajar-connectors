@@ -19,114 +19,106 @@ If your software creates or processes the data itself, use the library.
 
 | | Our program next to your system | Our library inside your code |
 |---|---|---|
-| **Producing** | [Section 1](#1-you-were-given-a-packet): one command | [Section 3](#3-sending-from-your-own-code): one call per event |
-| **Consuming** | [Section 1](#1-you-were-given-a-packet): one command | [Section 4](#4-receiving-in-your-own-code): one call per stream |
+| **Producing** | [Section 1](#1-you-were-given-an-invite): one command | [Section 3](#3-sending-from-your-own-code): one call per event |
+| **Consuming** | [Section 1](#1-you-were-given-an-invite): one command | [Section 4](#4-receiving-in-your-own-code): one call per stream |
 
-Whichever box you are in, the first thing you need is a packet.
+Whichever box you are in, the first thing you need is an invite.
 
-## 1. You were given a packet
+## 1. You were given an invite
 
 Your operator (whoever runs Ajar for you) ran one command on their side and
-sent you a single file, `<your-id>.packet.tar`. If you run Core yourself, you
-are the operator: the command is `ajar onboard <your-id> --mint …` on the Core
-host, and the packet it writes is this file. A connector whose types are its
-own fragment rather than MIM's, such as SAPIENT, adds
-`--type-spec <fragment>.json` with the file shipped beside its binary, for
-example `ajar onboard sapient-fusion-1 --mint --types sapient: --protocol sapient
---type-spec sapient.types.json …`. The packet contains everything you
-need, and nothing you have to create yourself:
+sent you a single file, `<your-id>.invite`. If you run Core yourself, you are
+the operator: the command is `ajar invite <your-id> --connector <type>` on the
+Core host, with `--consumer` for an egress connector. A connector whose types
+are its own fragment rather than MIM's, such as SAPIENT, adds
+`--entity-file <fragment>.json` with the file shipped beside its binary. The
+invite contains everything you need, and nothing you have to create yourself:
 
 | File | What it is |
 |---|---|
-| `manifest.json` | your name, your role, the broker address, the data format, the subject |
+| `manifest.json` | your connector ID, your role, the connector type, the broker address, the subject |
 | `manifest.sig` | the operator's signature over the manifest. See [Keys](#keys) for what it proves |
 | `egress.pub` | the public half of the operator's egress key, which verifies that signature |
-| `<your-id>.signing.key` | your private signing key (producers only) |
-| `<your-id>.mtls.crt`, `<your-id>.mtls.key` | your certificate and key for connecting to the broker |
+| `signing.key` | your private signing key (producers only) |
+| `mtls.crt`, `mtls.key` | your certificate and key for connecting to the broker |
 | `ca.crt` | the operator's certificate authority, so you know you are talking to the real broker |
 
 ### Three steps
 
 1. From [GitHub releases](https://github.com/promaka/ajar-connectors/releases),
-   download for your platform `ajar-up` (once) and the connector your packet
-   names (your data format, or the egress connector you deliver to). Unpack
-   both and put the connector beside `ajar-up`:
+   download `ajar-connectors` for your platform, unpack it and set it up once:
    ```bash
-   tar xzf ajar-up-<version>-<platform>.tar.gz
-   tar xzf ajar-adsb-<version>-<platform>.tar.gz
-   cp ajar-adsb-*/ajar-adsb ajar-up-*/ && cd ajar-up-*/
+   tar xzf ajar-connectors-<version>-<platform>.tar.gz
+   sudo ./ajar-connectors-*/ajar-connectors setup
    ```
-2. Run one command:
+2. Install the connector type your invite names:
    ```bash
-   ./ajar-up <your-id>.packet.tar
+   sudo ajar-connectors install adsb
    ```
-3. That is it. `ajar-up` checks the packet's signature and file checksums,
-   places your keys with locked-down permissions, writes the config, runs the
-   health checks, and starts.
+3. Join:
+   ```bash
+   sudo ajar-connectors join <your-id>.invite
+   ```
+
+A setup with `sudo` is for all users and belongs to root, so every command runs
+with `sudo`. A setup without it (`~/.ajar-connectors`) is yours, and needs none.
+
+`join` checks the invite is intact, places your keys with locked-down
+permissions, writes the config, runs the preflight, shows what it will do and
+starts the connector. `ajar-connectors status` shows it running. See the
+[`ajar-connectors` README](rust/connectors/cli/README.md) for every command.
 
 **If you are a producer**, the connector for your data format starts and
 begins reading your equipment's feed. Your equipment is not touched.
 
-**If you are a consumer**, verified events start streaming to your terminal.
-To deliver them somewhere useful instead, ask `ajar-up` for a ready egress
-config and run the matching egress connector with it:
-
-```bash
-./ajar-up <your-id>.packet.tar --to-tak host:8089    # writes <your-id>-tak-egress.toml
-./ajar-tak-egress <your-id>-tak-egress.toml          # delivers into the TAK server
-
-./ajar-up <your-id>.packet.tar --to-http <url>       # writes <your-id>-http-egress.toml
-./ajar-generic-egress <your-id>-http-egress.toml     # delivers into the web endpoint
-```
-
-A SAPIENT fusion node is a consumer too: copy
-`rust/connectors/sapient-egress/sapient-egress.example.toml`, put the packet's
-`nats_url` and `egress_verifying_key_hex` in it with the fusion node's
-address, and run `ajar-sapient-egress` with it. Ajar then registers on the
-fusion node as a sensor node and carries released events as detection reports.
-
-The TAK config has two lines to fill before it runs, `tls_cert` and
-`tls_key`: the client certificate and key your TAK server enrolled for this
-connector. `ajar-up` says so when it writes the file. Each flag also needs
-the packet to name the matching format, `cot` for TAK and `geojson` or
-`json` for HTTP; `ajar-up` refuses otherwise and says so.
+**If you are a consumer**, `join` asks where to deliver, or takes `--target`:
+`tls://<tak-server>:8089` for a TAK server, the URL to post to for HTTP, or
+the fusion node's `host:port` for SAPIENT. The egress connector's own settings
+go in a file passed with `--settings`: the TLS files your TAK server enrolled
+for this connector under `[tak]`, or the field mapping under `[mapping]` for
+HTTP. Each egress connector's README lists them.
 
 ### Useful options
 
 | Option | When |
 |---|---|
-| `--no-exec` | producer packets: verify, place the key, write the config and run the preflight, then print the run command instead of starting. Use it when your own code or service manager will start the connector, or when embedding (section 3). A consumer packet's credentials are its files as unpacked; section 4's code loads them directly, so no placement step is needed. |
-| `--check` | verify the packet's signature and checksums and exit 0. For a producer packet this also places the key and runs the doctor preflight against the broker, so it needs the seed and a route to the endpoint; for a consumer packet it checks the manifest and files only. |
-| `--signing-key <file>` | you generated your own key and only gave the operator the public half. See [Keys](#keys). |
-| `--dir <dir>` | where to unpack. Default is next to the packet. |
+| `--check` | check the invite, this machine and the connection, and change nothing. |
+| `--no-start` | create the instance without starting it, for example when the broker is not reachable yet. Only failed network checks are let through. |
+| `--settings <file>` | local settings for the connector, such as `marking`, `spool`, or an egress connector's own tables. |
+| `--version <version>` | run another installed version than the newest. |
+| `--yes` | skip the confirmation, for scripts. |
 
 ### If it does not start
 
-`ajar-up` stops before starting anything and prints what is wrong and how to
-fix it. The three common ones:
+When the preflight fails, `join` stops before creating anything and prints what
+is wrong and how to fix it. When the connector then fails to start, the
+instance stays, and `logs` and `start` take it from there. The three common
+ones:
 
-- **"does not verify under the packet's egress key"**: the file changed after
-  the operator signed it. Ask the operator to resend it.
+- **The invite is not intact**: the file changed after the operator made it.
+  Ask the operator to send it again.
 - **Broker unreachable**: your firewall must allow one outbound connection to
-  the broker address in the manifest. Nothing connects back to you.
-- **No data on the local port**: your equipment broadcasts on a different
-  port than the format's standard one. Edit that one line in the generated
-  config.
+  the broker address in the invite. Nothing connects back to you.
+- **No data on the local port**: your equipment broadcasts on a different port
+  than the format's standard one. Ask the operator for an invite with the
+  right transport.
 
-Delete the packet file once you are running. Your keys are already placed.
+When the invite held private keys, `join` offers to delete it once the instance
+exists. Your keys are already placed.
 
-## 2. You do not have a packet yet
+## 2. You do not have an invite yet
 
-Ask your operator for one. They need three things from you:
+Ask your operator for one. They need two things from you:
 
 1. A name for your connector, such as `acme-radar-1`.
 2. What you will send: the data format if your equipment speaks a standard
    (see [CONNECTORS.md](CONNECTORS.md)), or the entity types and attributes
    if you are writing code (see [docs/mapping-to-mim.md](docs/mapping-to-mim.md)).
-3. If you insist on generating your own signing key, its public half. See
-   [Keys](#keys). Most people skip this and let the operator generate it.
 
-While you wait, everything can be built and tested with no packet and no
+If your policy says private keys must be made on your own machine, send a
+request instead of waiting: see [Keys](#keys).
+
+While you wait, everything can be built and tested with no invite and no
 broker. The templates run with `--dry-run` and need no key; a shipped
 connector proves its config and key with `--profile`, which opens no transport
 and publishes nothing:
@@ -254,13 +246,24 @@ cmake -S cpp -B cpp/build && cmake --build cpp/build && ctest --test-dir cpp/bui
 
 Each line runs on its own from the repository root.
 
-**When nothing flows**, run the doctor. It checks your setup in onboarding
+**When nothing flows**, run the check. It walks your setup in onboarding
 order and names the first broken step in plain words. It never publishes an
 event, so it is safe against a production broker:
 
 ```bash
-ajar-doctor connector.toml
-ajar-doctor    # no file: reads NATS_URL, AJAR_SOURCE_ID, AJAR_SIGNING_SEED
+ajar-connectors check --config connector.toml
+```
+
+From your own code there is no connector config, so write a small one with the
+values your code runs with, and the `AJAR_TLS_*` variables set as usual:
+
+```toml
+source_id = "acme-radar-1"
+nats_url = "tls://broker.example:4222"
+signing_key_path = "connector.seed"
+
+[transport]
+kind = "stdin"
 ```
 
 **Once running**, set `AJAR_HEALTH_ADDR=0.0.0.0:9090` for `GET /healthz` and
@@ -271,40 +274,35 @@ these by default.
 
 ### Keys
 
-Three kinds of key material exist. All of them arrive in the packet.
+Three kinds of key material exist. All of them arrive in the invite, unless
+you made a request.
 
 1. **Your signing key.** An Ed25519 keypair. The private half signs every
    event you send; the operator registered the public half when they made
-   your packet. Consumers do not have one.
+   your invite. Consumers do not have one.
 2. **The operator's egress key.** Only its public half travels. It signed your
-   packet, and it signs every event that passed governance, so consumers
+   invite, and it signs every event that passed governance, so consumers
    verify everything with this one key.
 3. **Transport credentials.** A client certificate and key for the broker
    connection, plus the operator's CA certificate. These protect the pipe;
    the signing key protects the data.
 
-`ajar-up` verifies `manifest.sig` with the `egress.pub` in the packet, then
+`join` verifies `manifest.sig` with the `egress.pub` in the invite, then
 checks each file the manifest lists against its sha256. That detects a change
-made after the operator signed the packet. Someone who also replaces
-`egress.pub` can re-sign it, so the first handover rests on the channel the
-operator sends the packet over, the same as `ca.crt`.
+made after the operator made the invite. Someone who also replaces
+`egress.pub` can sign it again, so the first handover rests on the channel the
+operator sends the invite over, the same as `ca.crt`.
 
-If your policy says a private key must be born on your own hardware, generate
-it yourself and send the operator only the public half:
+If your policy says private keys must be made on your own machine, make them
+there and send the operator only the public halves:
 
 ```bash
-scripts/gen-connector-key.sh connector    # writes connector.seed and prints the public half; or:
-openssl genpkey -algorithm ed25519 -out connector.key
-openssl pkey -in connector.key -outform DER | tail -c 32 > connector.seed              # the 32-byte seed the connector loads
-openssl pkey -in connector.key -pubout -outform DER | tail -c 32 | xxd -p -c 64        # the public half, for the operator
+ajar-connectors request adsb acme-radar-1    # writes acme-radar-1.request
 ```
 
-The operator registers that public half with `--pubkey` in place of
-`--mint`, and the packet then carries no signing key. Run
-`ajar-up <packet> --signing-key connector.seed`. The file must be the
-32-byte seed, or its 64 hex characters, not the PEM. Everything else is
-identical. Keep the private half in a secrets manager or a file with
-locked-down permissions, never in source control.
+The operator answers with `ajar invite acme-radar-1.request`. That invite holds
+no private keys, and `join` takes them from where `request` left them, on this
+machine only.
 
 The only key published in this repository is the golden-vector test seed,
 which byte-exact conformance requires. Never sign production events with it.
@@ -344,9 +342,16 @@ Built into every connector, nothing to add:
 - A malformed record is logged and skipped. One bad record cannot take the
   connector down.
 - A broker blip is logged and retried. The connection reconnects on its own.
-- The broker authenticates connectors with a client certificate. `ajar-up`
-  configures it from the packet. By hand, set `AJAR_TLS_CA`, `AJAR_TLS_CERT`
+- The broker authenticates connectors with a client certificate. `join`
+  configures it from the invite. By hand, set `AJAR_TLS_CA`, `AJAR_TLS_CERT`
   and `AJAR_TLS_KEY` and use a `tls://` broker address.
+
+### Installing without a network
+
+On a connected machine, download `ajar-<type>-<version>-<platform>.tar.gz` and
+its `.sha256` from the releases page. Copy both into `packages/` in the
+ajar-connectors folder on the air-gapped machine; `ajar-connectors install
+<type>` then installs from there, checked against the `.sha256`.
 
 ### Building for an air-gapped network
 

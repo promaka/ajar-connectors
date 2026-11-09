@@ -120,7 +120,7 @@ baud = 38400            # the default; classic NMEA instruments run at 4800
 ```
 
 If the port opens with Permission denied, add the service user to the port's
-group (usually `dialout`). `ajar-doctor` checks the device.
+group (usually `dialout`). `ajar-connectors check` checks the device.
 
 ```bash
 ajar-ais-nmea ./ais-nmea.toml
