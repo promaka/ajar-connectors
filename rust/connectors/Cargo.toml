@@ -29,7 +29,7 @@ members = [
 # No shared version: each crate is versioned and released on its own.
 [workspace.package]
 edition = "2021"
-rust-version = "1.88"
+rust-version = "1.89"
 license = "Apache-2.0"
 repository = "https://github.com/promaka/ajar-connectors"
 authors = ["Ajar connectors contributors"]
