@@ -38,7 +38,7 @@ authors = ["Ajar connectors contributors"]
 ajar-connector = { path = "../ajar-connector" }
 ajar-connector-common = { path = "common" }
 # jetstream: the spool drain advances only on a PubAck. No default features: they clash on `time`.
-async-nats = { version = "0.50", default-features = false, features = ["ring", "jetstream"] }
+async-nats = { version = "0.50", default-features = false, features = ["aws-lc-rs", "jetstream"] }
 ed25519-dalek = "3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "time", "signal", "io-util", "io-std", "fs", "process"] }
 bytes = "1"
@@ -60,9 +60,10 @@ protoc-bin-vendored = "3"
 time = { version = "0.3", features = ["formatting", "parsing"] }
 serde_json = "1"
 async-trait = "0.1"
-# ring only: a second rustls crypto provider would clash with async-nats's.
-rustls = { version = "0.23", default-features = false, features = ["ring", "tls12", "logging"] }
-tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
+# aws-lc-rs only, for the post-quantum key exchange: a second rustls crypto provider would
+# clash with async-nats's.
+rustls = { version = "0.23", default-features = false, features = ["aws-lc-rs", "tls12", "logging"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["aws-lc-rs", "tls12", "logging"] }
 rustls-pki-types = { version = "1", features = ["std"] }
 futures-util = "0.3"
 proptest = "1"
@@ -72,9 +73,9 @@ tar = "0.4"
 getrandom = "0.4"
 regex = "1"
 semver = "1"
-# Blocking, for the command-line tools. No provider: ring is installed at run time, as for async-nats.
+# Blocking, for the command-line tools. No provider: aws-lc-rs is installed at run time, as for async-nats.
 reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "blocking", "json"] }
 quick-xml = "0.42"
 # Subject CN, SAN list, validity and public key, which rustls and rcgen do not expose.
 x509-parser = "0.17"
-rcgen = { version = "0.14", default-features = false, features = ["ring", "pem"] }
+rcgen = { version = "0.14", default-features = false, features = ["aws_lc_rs", "pem"] }

@@ -46,8 +46,8 @@ async fn clean_env() -> MutexGuard<'static, ()> {
     guard
 }
 
-fn install_ring() {
-    let _ = tokio_rustls::rustls::crypto::ring::default_provider().install_default();
+fn install_provider() {
+    let _ = tokio_rustls::rustls::crypto::aws_lc_rs::default_provider().install_default();
 }
 
 /// A CA and its PEM.
@@ -260,7 +260,7 @@ struct Mtls {
 
 impl Mtls {
     fn new() -> Self {
-        install_ring();
+        install_provider();
         let dir = tempfile::tempdir().unwrap();
         let (ca, ca_pem) = mint_ca();
         let (cert_pem, key_pem) = mint_client(&ca, SOURCE_ID);
@@ -289,7 +289,7 @@ impl Mtls {
 
 #[tokio::test]
 async fn probe_happy_path_reports_tls_established() {
-    install_ring();
+    install_provider();
     let (ca, ca_pem) = mint_ca();
     let (cert, key) = mint_server(&ca, &["localhost"], None);
     let addr = spawn_tls_server(server_config(&cert, &key, None), "PONG\r\n").await;
@@ -305,7 +305,7 @@ async fn probe_happy_path_reports_tls_established() {
 
 #[tokio::test]
 async fn probe_names_the_wrong_ca() {
-    install_ring();
+    install_provider();
     let (_, ca_a_pem) = mint_ca();
     let (ca_b, _) = mint_ca();
     let (cert, key) = mint_server(&ca_b, &["localhost"], None);
@@ -325,7 +325,7 @@ async fn probe_names_the_wrong_ca() {
 
 #[tokio::test]
 async fn probe_san_mismatch_lists_covered_names() {
-    install_ring();
+    install_provider();
     let (ca, ca_pem) = mint_ca();
     let (cert, key) = mint_server(&ca, &["somewhere.else"], None);
     let addr = spawn_tls_server(server_config(&cert, &key, None), "PONG\r\n").await;
@@ -345,7 +345,7 @@ async fn probe_san_mismatch_lists_covered_names() {
 
 #[tokio::test]
 async fn probe_expired_server_cert_points_at_clock() {
-    install_ring();
+    install_provider();
     let (ca, ca_pem) = mint_ca();
     let (cert, key) = mint_server(&ca, &["localhost"], Some((-30, -1)));
     let addr = spawn_tls_server(server_config(&cert, &key, None), "PONG\r\n").await;
@@ -360,7 +360,7 @@ async fn probe_expired_server_cert_points_at_clock() {
 
 #[tokio::test]
 async fn probe_postdated_server_cert_points_at_slow_clock() {
-    install_ring();
+    install_provider();
     let (ca, ca_pem) = mint_ca();
     let (cert, key) = mint_server(&ca, &["localhost"], Some((1, 30)));
     let addr = spawn_tls_server(server_config(&cert, &key, None), "PONG\r\n").await;
@@ -375,7 +375,7 @@ async fn probe_postdated_server_cert_points_at_slow_clock() {
 
 #[tokio::test]
 async fn probe_missing_client_cert_blames_client_cert() {
-    install_ring();
+    install_provider();
     let (ca, ca_pem) = mint_ca();
     let (cert, key) = mint_server(&ca, &["localhost"], None);
     let addr = spawn_tls_server(server_config(&cert, &key, Some(&ca)), "PONG\r\n").await;
@@ -403,7 +403,7 @@ async fn dial_tells_dead_port_from_bad_name() {
 
 #[tokio::test]
 async fn probe_flags_cleartext_server_under_mtls() {
-    install_ring();
+    install_provider();
     let (_, ca_pem) = mint_ca();
     let port = spawn_cleartext_nats().await;
 
@@ -417,7 +417,7 @@ async fn probe_flags_cleartext_server_under_mtls() {
 
 #[tokio::test]
 async fn probe_separates_authorization_refusal() {
-    install_ring();
+    install_provider();
     let (ca, ca_pem) = mint_ca();
     let (cert, key) = mint_server(&ca, &["localhost"], None);
     let addr = spawn_tls_server(

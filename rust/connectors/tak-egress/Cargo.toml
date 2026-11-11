@@ -30,7 +30,7 @@ tracing-subscriber.workspace = true
 anyhow.workspace = true
 
 [dev-dependencies]
-# ring only, so the process has one rustls crypto provider.
+# aws-lc-rs only, so the process has one rustls crypto provider.
 rcgen.workspace = true
 tempfile.workspace = true
 

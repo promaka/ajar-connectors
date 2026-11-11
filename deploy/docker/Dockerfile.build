@@ -26,7 +26,7 @@ ARG WSDIR
 ARG PKG
 ARG TARGETARCH
 
-# aarch64 cross toolchain: the linker and C compiler that ring / other -sys crates
+# aarch64 cross toolchain: the linker and C compiler that aws-lc-rs / other -sys crates
 # need to produce arm64 objects. Harmless for the amd64 target (host gcc is used).
 RUN apt-get update && apt-get install -y --no-install-recommends \
       gcc-aarch64-linux-gnu libc6-dev-arm64-cross \

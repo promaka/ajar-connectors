@@ -41,7 +41,7 @@ tokio-rustls.workspace = true
 rustls.workspace = true
 rustls-pki-types.workspace = true
 tokio-serial = { version = "5", optional = true }
-# The *-no-provider features keep ring the only rustls crypto provider.
+# The *-no-provider features keep aws-lc-rs the only rustls crypto provider.
 rumqttc = { version = "0.25", default-features = false, features = ["use-rustls-no-provider"], optional = true }
 rustdds = { version = "0.14", default-features = false, optional = true }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-no-provider"], optional = true }

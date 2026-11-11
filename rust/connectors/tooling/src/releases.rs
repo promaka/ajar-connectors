@@ -272,9 +272,9 @@ fn check_digest(tarball: &[u8], sha256_text: &str, file_name: &str) -> Result<()
 }
 
 fn client() -> Result<reqwest::blocking::Client, ReleaseError> {
-    // reqwest is built without a crypto provider, so the process needs ring installed. An
-    // already installed provider is kept.
-    let _ = rustls::crypto::ring::default_provider().install_default();
+    // reqwest is built without a crypto provider, so the process needs aws-lc-rs installed.
+    // An already installed provider is kept.
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
     Ok(reqwest::blocking::Client::builder()
         .user_agent(concat!("ajar-tooling/", env!("CARGO_PKG_VERSION")))
         .connect_timeout(Duration::from_secs(15))

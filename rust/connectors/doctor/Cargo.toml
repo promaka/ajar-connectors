@@ -34,7 +34,7 @@ hex.workspace = true
 x509-parser.workspace = true
 
 [dev-dependencies]
-# Throwaway PKI for the failure matrix; ring only, like the rest of the workspace.
+# Throwaway PKI for the failure matrix; aws-lc-rs only, like the rest of the workspace.
 rcgen.workspace = true
 # Shifts certificate validity windows for the expired and postdated cases.
 time.workspace = true
