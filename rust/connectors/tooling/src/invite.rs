@@ -11,7 +11,7 @@ use std::io::{Read, Write};
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 
-use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
+use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -387,17 +387,19 @@ impl CheckedInvite {
 }
 
 /// Writes a signed invite to `out`, which must not exist yet. `files` are the invite's files
-/// other than `egress.pub`, which comes from `egress_key`.
+/// other than `egress.pub`. `sign` signs with the egress key, so the key never has to be in
+/// memory here.
 pub fn write(
     invite: &Invite,
     files: &[(InviteFile, &Path)],
-    egress_key: &SigningKey,
+    egress_public_key: &VerifyingKey,
+    sign: impl FnOnce(&[u8]) -> Result<[u8; 64], String>,
     out: &Path,
 ) -> Result<(), InviteError> {
     let mut contents: BTreeMap<InviteFile, Vec<u8>> = BTreeMap::new();
     contents.insert(
         InviteFile::EgressPublicKey,
-        hex::encode(egress_key.verifying_key().as_bytes()).into_bytes(),
+        hex::encode(egress_public_key.as_bytes()).into_bytes(),
     );
     for &(file, path) in files {
         let bytes =
@@ -422,7 +424,11 @@ pub fn write(
             .collect(),
     };
     let manifest_json = serde_json::to_vec_pretty(&manifest)?;
-    let signature = egress_key.sign(&[SIGNATURE_DOMAIN, &manifest_json].concat());
+    let signed = [SIGNATURE_DOMAIN, &manifest_json].concat();
+    let signature = Signature::from_bytes(&sign(&signed).map_err(InviteError::Sign)?);
+    egress_public_key
+        .verify(&signed, &signature)
+        .map_err(|_| InviteError::SignedWithAnotherKey)?;
     let signature_hex = hex::encode(signature.to_bytes());
 
     let mut tar = tar::Builder::new(Vec::new());
@@ -503,6 +509,10 @@ pub enum InviteError {
     Unlisted(&'static str),
     #[error("{0}")]
     FileSet(&'static str),
+    #[error("signing the invite with the egress key: {0}")]
+    Sign(String),
+    #[error("the egress key's signature does not match egress.pub")]
+    SignedWithAnotherKey,
     #[error("{id:?} is not a valid connector ID: {reason}")]
     ConnectorId { id: String, reason: &'static str },
     #[error("{0:?} is not a valid connector type: use lowercase letters, digits and hyphens")]
@@ -518,6 +528,8 @@ impl InviteError {
 #[cfg(test)]
 mod tests {
     use std::os::unix::fs::PermissionsExt;
+
+    use ed25519_dalek::{Signer, SigningKey};
 
     use super::*;
 
@@ -560,10 +572,12 @@ mod tests {
         let borrowed: Vec<(InviteFile, &Path)> =
             sources.iter().map(|(f, p)| (*f, p.as_path())).collect();
         let out = dir.join("radar-1.invite");
+        let egress_key = SigningKey::from_bytes(&EGRESS_SEED);
         write(
             invite,
             &borrowed,
-            &SigningKey::from_bytes(&EGRESS_SEED),
+            &egress_key.verifying_key(),
+            |message| Ok(egress_key.sign(message).to_bytes()),
             &out,
         )
         .unwrap();
@@ -735,10 +749,12 @@ mod tests {
             (InviteFile::MtlsKey, mtls_key.as_path()),
         ];
         let out = tmp.path().join("radar-1.invite");
+        let egress_key = SigningKey::from_bytes(&EGRESS_SEED);
         let err = write(
             &producer(),
             &files,
-            &SigningKey::from_bytes(&EGRESS_SEED),
+            &egress_key.verifying_key(),
+            |message| Ok(egress_key.sign(message).to_bytes()),
             &out,
         )
         .unwrap_err();
@@ -747,6 +763,29 @@ mod tests {
             !out.exists(),
             "no invite is written when the file set is wrong"
         );
+    }
+
+    #[test]
+    fn invite_signed_by_another_key_is_not_written() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ca = tmp.path().join("ca.crt");
+        std::fs::write(&ca, "ca").unwrap();
+        let files = [
+            (InviteFile::CaCert, ca.as_path()),
+            (InviteFile::MtlsCert, ca.as_path()),
+        ];
+        let out = tmp.path().join("ally-feed.invite");
+        let other_key = SigningKey::from_bytes(&[8; 32]);
+        let err = write(
+            &consumer(),
+            &files,
+            &SigningKey::from_bytes(&EGRESS_SEED).verifying_key(),
+            |message| Ok(other_key.sign(message).to_bytes()),
+            &out,
+        )
+        .unwrap_err();
+        assert!(matches!(err, InviteError::SignedWithAnotherKey), "{err}");
+        assert!(!out.exists());
     }
 
     #[test]
