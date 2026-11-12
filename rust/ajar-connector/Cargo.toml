@@ -28,7 +28,7 @@ serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 
-async-nats = { version = "0.50", default-features = false, features = ["ring"], optional = true }
+async-nats = { version = "0.52", default-features = false, features = ["ring"], optional = true }
 futures-util = { version = "0.3", optional = true }
 tracing = { version = "0.1", optional = true }
 
