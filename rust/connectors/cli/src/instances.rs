@@ -396,10 +396,13 @@ impl Instance {
             .spawn()
             .with_context(|| format!("starting {}", binary.display()))?;
         let pid = child.id();
-        if let Err(e) = write_new(&self.dir.join(PID_FILE), pid.to_string().as_bytes(), 0o644) {
-            // Without a pid file nothing could find or stop it.
+        let pid_path = self.dir.join(PID_FILE);
+        if let Err(e) = write_new(&pid_path, pid.to_string().as_bytes(), 0o644) {
+            // Without a pid file nothing could find or stop it. A full disk can leave an
+            // empty one, which would block every later command.
             let _ = child.kill();
             let _ = child.wait();
+            let _ = std::fs::remove_file(&pid_path);
             return Err(e);
         }
 
