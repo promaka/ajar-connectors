@@ -9,6 +9,14 @@ CONTRIBUTING.md, "Releases").
 
 ## [Unreleased]
 
+### Changed
+
+- Breaking: the config uses the shape every egress connector shares, which
+  `ajar-connectors join` writes. `subject` is renamed `egress_subject` and is
+  required, `[sapient] fusion_node` moves to the top-level `target`,
+  `egress_verifying_key` is a path to a file of hex only, and `[sapient]` is
+  optional.
+
 ## [0.6.7] - 2026-11-02
 
 ### Changed

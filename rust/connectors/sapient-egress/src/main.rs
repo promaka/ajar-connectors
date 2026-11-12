@@ -2,7 +2,6 @@
 //! SAPIENT (BSI Flex 335) egress connector: Ajar as a sensor node on a
 //! fusion node. The wiring only; see `lib.rs`.
 
-use ajar_sapient_egress::EgressConfig;
 use anyhow::Context;
 
 #[tokio::main]
@@ -17,7 +16,8 @@ async fn main() -> anyhow::Result<()> {
     let path = std::env::args()
         .nth(1)
         .unwrap_or_else(|| "sapient-egress.toml".to_string());
-    let cfg = EgressConfig::load(&path).with_context(|| format!("loading {path}"))?;
+    let cfg =
+        ajar_sapient_egress::config::load(&path).with_context(|| format!("loading {path}"))?;
 
     ajar_sapient_egress::run(cfg).await
 }

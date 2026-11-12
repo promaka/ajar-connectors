@@ -12,14 +12,14 @@ Core ──▶ ajar.egress.<format>.<source> ──▶ verify egress signature �
 
 ## Input
 
-NATS subject `subject`, which must start with `ajar.egress.`. Any other subject
+NATS subject `egress_subject`, which must start with `ajar.egress.`. Any other subject
 is refused at startup. This prefix rule keeps the effector cue channel
 (`ajar.cue.>`) out of reach of the connector. The NATS connection uses the
 `AJAR_TLS_CA`, `AJAR_TLS_CERT` and `AJAR_TLS_KEY` environment; the consumer's
 subscribe-only certificate decides what it can see under the prefix.
 
 Each message is a sealed envelope. It is verified under Core's egress key
-(`egress_verifying_key`, from the operator's handover pack) and decoded as an
+(the `egress_verifying_key` file, which the invite carries) and decoded as an
 Ajar event. An envelope that fails verification or decoding is logged, counted
 as rejected and not delivered. Verification cannot be turned off.
 
@@ -31,7 +31,7 @@ envelope is in Ajar's audit chain.
 
 ## Output
 
-One HTTP POST per event, with one JSON object as body, to `deliver.url`. A 2xx
+One HTTP POST per event, with one JSON object as body, to `target`. A 2xx
 response is a delivery. The object holds:
 
 - each `[mapping]` field, `consumer_name = "path"`. A path absent from the event
@@ -80,14 +80,17 @@ Values are not reinterpreted: the deployment's policy owns the vocabulary.
 
 ## Configuration
 
-Start from [`generic-egress.example.toml`](generic-egress.example.toml).
+`ajar-connectors join` writes the config: the first four keys come from the
+invite and from `join --target`, and the rest from the instance's
+`settings.toml`. To run the connector by hand, start from
+[`generic-egress.example.toml`](generic-egress.example.toml).
 
 | Key | Default | Meaning |
 |-----|---------|---------|
 | `nats_url` | required | Ajar NATS, `tls://` in production |
-| `subject` | required | under `ajar.egress.`, wildcards allowed |
-| `egress_verifying_key` | required | Core's egress key: 64-char hex inline, or a path to a file of 32 raw bytes or hex |
-| `[deliver] url` | required | endpoint for the POSTs |
+| `egress_subject` | required | under `ajar.egress.`, wildcards allowed |
+| `egress_verifying_key` | required | a file holding Core's egress key as 64 hex characters |
+| `target` | required | endpoint for the POSTs |
 | `[deliver] headers` | none | extra request headers, such as the consumer's bearer token |
 | `[deliver] attempts` | `2` | attempts per event, at least 1 |
 | `[mapping]` | required, non-empty | consumer field name = path; an unknown path is refused at startup |

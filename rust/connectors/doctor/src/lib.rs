@@ -18,6 +18,7 @@ use report::Finding;
 const ENV_VARS: [&str; 3] = ["NATS_URL", "AJAR_SOURCE_ID", "AJAR_SIGNING_SEED"];
 
 pub struct Options {
+    pub role: Role,
     /// The connector's own config TOML. `None` reads `NATS_URL`,
     /// `AJAR_SOURCE_ID` and `AJAR_SIGNING_SEED` instead, the variables an SDK
     /// embedder runs with.
@@ -25,15 +26,39 @@ pub struct Options {
     /// A local sink's registered-keys directory; enables a real registration
     /// check instead of a note.
     pub sources_dir: Option<String>,
+    /// The CA, client certificate and key the connector will run with. `None` reads the
+    /// `AJAR_TLS_*` environment, as the connector itself does.
+    pub tls_files: Option<TlsFiles>,
     /// Deadline per network operation.
     pub timeout: Duration,
 }
 
+pub struct TlsFiles {
+    pub ca: String,
+    pub cert: String,
+    pub key: String,
+}
+
+pub enum Role {
+    Producer,
+    /// An egress connector. Its config names no source ID, so the identity its certificate
+    /// must carry is given here.
+    Consumer {
+        connector_id: String,
+    },
+}
+
 struct Inputs {
+    /// The identity on the bus: a producer's source ID, or a consumer's connector ID.
     source_id: String,
     nats_url: String,
+    producer: Option<ProducerInputs>,
+    /// A consumer's delivery target.
+    target: Option<String>,
+}
+
+struct ProducerInputs {
     signing_key_path: String,
-    subject_prefix: String,
     spool: Option<common::spool::SpoolConfig>,
     transport: Option<common::Transport>,
     /// A config with a bad marking does not load, so this is never an error.
@@ -44,41 +69,65 @@ struct Inputs {
 pub async fn run(opts: &Options) -> Vec<Finding> {
     let mut out = Vec::new();
 
-    let resolved = match &opts.config_path {
-        Some(path) => match common::Config::load(path) {
-            Ok(cfg) => Ok(Inputs {
-                spool: cfg.spool_config(),
-                marking: cfg.marking().ok().flatten(),
-                transport: Some(cfg.transport),
-                source_id: cfg.source_id,
-                nats_url: cfg.nats_url,
-                signing_key_path: cfg.signing_key_path,
-                subject_prefix: cfg.subject_prefix,
-            }),
-            Err(e) => Err(Finding::fail(
-                "config",
-                format!("{e:#}"),
-                "The doctor reads the same file the connector runs with. Fix the error \
-                 above; the example config shipped next to your connector (the \
-                 *.example.toml in the tarball and the repo) shows every required \
-                 field.",
-            )),
-        },
-        None => inputs_from_env(),
-    };
-    let cfg = match resolved {
-        Ok(inputs) => {
-            out.push(Finding::ok(
-                "config",
+    let config_fix = "The doctor reads the same file the connector runs with. Fix the error \
+                      above; the example config shipped next to your connector (the \
+                      *.example.toml in the tarball and the repo) shows every required field.";
+    let resolved = match (&opts.role, &opts.config_path) {
+        (Role::Producer, Some(path)) => match common::Config::load(path) {
+            Ok(cfg) => Ok((
                 format!(
                     "source {:?} publishes to {}.{} at {}",
-                    inputs.source_id, inputs.subject_prefix, inputs.source_id, inputs.nats_url
+                    cfg.source_id, cfg.subject_prefix, cfg.source_id, cfg.nats_url
                 ),
-            ));
+                Inputs {
+                    producer: Some(ProducerInputs {
+                        spool: cfg.spool_config(),
+                        marking: cfg.marking().ok().flatten(),
+                        transport: Some(cfg.transport),
+                        signing_key_path: cfg.signing_key_path,
+                    }),
+                    source_id: cfg.source_id,
+                    nats_url: cfg.nats_url,
+                    target: None,
+                },
+            )),
+            Err(e) => Err(Finding::fail("config", format!("{e:#}"), config_fix)),
+        },
+        (Role::Producer, None) => inputs_from_env(),
+        (Role::Consumer { connector_id }, Some(path)) => {
+            match common::EgressConfig::<toml::Table>::load(path) {
+                Ok(cfg) => Ok((
+                    format!(
+                        "consumer {connector_id:?} reads {} at {} and delivers to {}",
+                        cfg.egress_subject, cfg.nats_url, cfg.target
+                    ),
+                    Inputs {
+                        source_id: connector_id.clone(),
+                        nats_url: cfg.nats_url,
+                        producer: None,
+                        target: Some(cfg.target),
+                    },
+                )),
+                Err(e) => Err(Finding::fail("config", format!("{e:#}"), config_fix)),
+            }
+        }
+        (Role::Consumer { .. }, None) => Err(Finding::fail(
+            "config",
+            "a consumer is checked from its config file, and none was given",
+            "Check it through its instance: ajar-connectors check <connector-id>.",
+        )),
+    };
+    let cfg = match resolved {
+        Ok((detail, inputs)) => {
+            out.push(Finding::ok("config", detail));
             inputs
         }
         Err(finding) => {
             out.push(finding);
+            let consumer_steps: &[&'static str] = match opts.role {
+                Role::Producer => &[],
+                Role::Consumer { .. } => &["target"],
+            };
             for step in [
                 "signing key",
                 "spool",
@@ -89,23 +138,44 @@ pub async fn run(opts: &Options) -> Vec<Finding> {
                 "certificate files",
                 "tls handshake",
                 "clock",
-            ] {
+            ]
+            .iter()
+            .chain(consumer_steps)
+            {
                 out.push(Finding::skip(step, "blocked until the config loads"));
             }
             return out;
         }
     };
 
-    let verifying_hex = check_signing_key(&mut out, &cfg);
-    check_spool(&mut out, &cfg);
-    check_marking(&mut out, &cfg);
-    transport::check(&mut out, cfg.transport.as_ref(), opts.timeout);
-    check_registration(
-        &mut out,
-        &cfg,
-        opts.sources_dir.as_deref(),
-        verifying_hex.as_deref(),
-    );
+    match &cfg.producer {
+        Some(producer) => {
+            let verifying_hex = check_signing_key(&mut out, producer);
+            check_spool(&mut out, producer);
+            check_marking(&mut out, producer);
+            transport::check(&mut out, producer.transport.as_ref(), opts.timeout);
+            check_registration(
+                &mut out,
+                &cfg,
+                opts.sources_dir.as_deref(),
+                verifying_hex.as_deref(),
+            );
+        }
+        None => {
+            for step in [
+                "signing key",
+                "spool",
+                "marking",
+                "transport",
+                "registration",
+            ] {
+                out.push(Finding::skip(
+                    step,
+                    "a consumer publishes nothing, so it has none",
+                ));
+            }
+        }
+    }
     let (endpoint, greeting) = check_endpoint(&mut out, &cfg, opts.timeout).await;
 
     // The TLS demand comes from the URL, so a dead tls:// endpoint still
@@ -113,7 +183,14 @@ pub async fn run(opts: &Options) -> Vec<Finding> {
     let url_demands_tls = net::parse_urls(&cfg.nats_url)
         .map(|eps| eps.iter().any(|e| e.tls_scheme))
         .unwrap_or(false);
-    let policy = tls::policy(url_demands_tls);
+    let policy = match &opts.tls_files {
+        Some(files) => tls::Policy::Mtls {
+            ca: files.ca.clone(),
+            cert: files.cert.clone(),
+            key: files.key.clone(),
+        },
+        None => tls::policy(url_demands_tls),
+    };
     let mtls = check_policy(&mut out, &policy, greeting.as_ref());
 
     match (mtls, endpoint) {
@@ -154,10 +231,13 @@ pub async fn run(opts: &Options) -> Vec<Finding> {
         }
     }
 
+    if let Some(target) = &cfg.target {
+        check_target(&mut out, target, opts.timeout).await;
+    }
     out
 }
 
-fn inputs_from_env() -> Result<Inputs, Finding> {
+fn inputs_from_env() -> Result<(String, Inputs), Finding> {
     let values = ENV_VARS.map(|name| std::env::var(name).ok().filter(|v| !v.trim().is_empty()));
     let [Some(nats_url), Some(source_id), Some(signing_key_path)] = values.clone() else {
         let missing: Vec<&str> = ENV_VARS
@@ -178,18 +258,23 @@ fn inputs_from_env() -> Result<Inputs, Finding> {
              (the path to your 32-byte seed file).",
         ));
     };
-    Ok(Inputs {
-        source_id,
-        nats_url,
-        signing_key_path,
-        subject_prefix: "ajar.ingest".to_string(),
-        spool: None,
-        marking: None,
-        transport: None,
-    })
+    Ok((
+        format!("source {source_id:?} publishes to ajar.ingest.{source_id} at {nats_url}"),
+        Inputs {
+            source_id,
+            nats_url,
+            producer: Some(ProducerInputs {
+                signing_key_path,
+                spool: None,
+                marking: None,
+                transport: None,
+            }),
+            target: None,
+        },
+    ))
 }
 
-fn check_signing_key(out: &mut Vec<Finding>, cfg: &Inputs) -> Option<String> {
+fn check_signing_key(out: &mut Vec<Finding>, cfg: &ProducerInputs) -> Option<String> {
     let key = match common::key::load(&cfg.signing_key_path) {
         Ok(k) => k,
         Err(e) => {
@@ -256,7 +341,7 @@ fn check_signing_key(out: &mut Vec<Finding>, cfg: &Inputs) -> Option<String> {
     Some(derived)
 }
 
-fn check_marking(out: &mut Vec<Finding>, cfg: &Inputs) {
+fn check_marking(out: &mut Vec<Finding>, cfg: &ProducerInputs) {
     match &cfg.marking {
         Some(m) => out.push(Finding::ok(
             "marking",
@@ -272,7 +357,7 @@ fn check_marking(out: &mut Vec<Finding>, cfg: &Inputs) {
     }
 }
 
-fn check_spool(out: &mut Vec<Finding>, cfg: &Inputs) {
+fn check_spool(out: &mut Vec<Finding>, cfg: &ProducerInputs) {
     let Some(spool_cfg) = &cfg.spool else {
         out.push(Finding::skip(
             "spool",
@@ -709,6 +794,74 @@ async fn check_handshake(
             ));
             None
         }
+    }
+}
+
+/// The consumer's delivery target answers a TCP connection. Nothing is sent.
+async fn check_target(out: &mut Vec<Finding>, target: &str, timeout: Duration) {
+    let (scheme, rest) = match target.split_once("://") {
+        Some((scheme, rest)) => (scheme.to_ascii_lowercase(), rest),
+        None => (String::new(), target),
+    };
+    if scheme == "udp" {
+        out.push(Finding::skip(
+            "target",
+            format!("{target} takes datagrams, so there is no connection to try"),
+        ));
+        return;
+    }
+    let authority = rest.split('/').next().unwrap_or(rest);
+    let authority = authority.rsplit('@').next().unwrap_or(authority);
+    let default_port = match scheme.as_str() {
+        "https" => Some(443),
+        "http" => Some(80),
+        _ => None,
+    };
+    let host_and_port = authority
+        .rsplit_once(':')
+        .and_then(|(host, port)| Some((host, port.parse::<u16>().ok()?)));
+    let (host, port) = match (host_and_port, default_port) {
+        (Some(host_and_port), _) => host_and_port,
+        (None, Some(port)) => (authority, port),
+        (None, None) => {
+            out.push(Finding::fail(
+                "target",
+                format!("{target:?} names no host and port"),
+                "Give the target as host:port or a URL, for example tls://takserver:8089 \
+                 or https://consumer.example/events: ajar-connectors start <connector-id> \
+                 --target <target>.",
+            ));
+            return;
+        }
+    };
+    let endpoint = net::Endpoint {
+        host: host
+            .trim_start_matches('[')
+            .trim_end_matches(']')
+            .to_string(),
+        port,
+        tls_scheme: false,
+    };
+    match net::dial(&endpoint, timeout).await {
+        net::Dial::Connected(_) => out.push(Finding::ok(
+            "target",
+            format!("{} accepts connections", endpoint.addr()),
+        )),
+        net::Dial::NoDns(e) => out.push(Finding::fail(
+            "target",
+            format!("{} does not resolve: {e}", endpoint.host),
+            "Check the target's name, and that this machine's DNS knows it. To change \
+             the target: ajar-connectors start <connector-id> --target <target>.",
+        )),
+        net::Dial::NoAnswer(e) => out.push(Finding::fail(
+            "target",
+            format!("nothing answers at {}: {e}", endpoint.addr()),
+            format!(
+                "Check that the target is running, and that no firewall between this \
+                 machine and it blocks port {}.",
+                endpoint.port
+            ),
+        )),
     }
 }
 

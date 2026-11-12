@@ -134,7 +134,7 @@ pub async fn probe(
 ) -> anyhow::Result<Handshake> {
     static CRYPTO_PROVIDER: OnceLock<()> = OnceLock::new();
     CRYPTO_PROVIDER.get_or_init(|| {
-        let _ = rustls::crypto::ring::default_provider().install_default();
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
     });
 
     let mut roots = RootCertStore::empty();
@@ -144,7 +144,7 @@ pub async fn probe(
         })?;
     }
 
-    let provider = Arc::new(rustls::crypto::ring::default_provider());
+    let provider = Arc::new(rustls::crypto::aws_lc_rs::default_provider());
     let inner = WebPkiServerVerifier::builder_with_provider(Arc::new(roots), provider.clone())
         .build()
         .map_err(|e| anyhow::anyhow!("building a verifier from {ca_path}: {e}"))?;
@@ -155,7 +155,7 @@ pub async fn probe(
 
     let builder = ClientConfig::builder_with_provider(provider)
         .with_safe_default_protocol_versions()
-        .expect("ring supports the default protocol versions")
+        .expect("aws-lc-rs supports the default protocol versions")
         .dangerous()
         .with_custom_certificate_verifier(recorder.clone());
     let config = match client {

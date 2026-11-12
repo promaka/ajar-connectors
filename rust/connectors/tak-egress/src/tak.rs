@@ -18,7 +18,7 @@ use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName}
 use tokio_rustls::rustls::{ClientConfig, RootCertStore};
 use tokio_rustls::TlsConnector;
 
-use crate::config::TakConfig;
+use crate::config::{endpoint, is_datagram, TakConfig};
 
 enum Delivery {
     Tls {
@@ -40,12 +40,11 @@ pub struct TakLink {
 }
 
 impl TakLink {
-    pub fn new(cfg: &TakConfig) -> anyhow::Result<TakLink> {
-        let delivery = if cfg.is_datagram() {
-            let to: SocketAddr = cfg
-                .endpoint()
+    pub fn new(target: &str, cfg: &TakConfig) -> anyhow::Result<TakLink> {
+        let delivery = if is_datagram(target) {
+            let to: SocketAddr = endpoint(target)
                 .parse()
-                .with_context(|| format!("tak.url {:?}: not ip:port", cfg.url))?;
+                .with_context(|| format!("target {target:?}: not ip:port"))?;
             let socket = socket2::Socket::new(
                 socket2::Domain::IPV4,
                 socket2::Type::DGRAM,
@@ -67,7 +66,7 @@ impl TakLink {
             tracing::info!(to = %to, multicast = to.ip().is_multicast(), "TAK datagram delivery");
             Delivery::Datagram { socket, to }
         } else {
-            let (ca, cert, key) = cfg.tls_files()?;
+            let (ca, cert, key) = cfg.tls_files(target)?;
             let mut roots = RootCertStore::empty();
             for c in load_certs(ca)? {
                 roots
@@ -81,18 +80,18 @@ impl TakLink {
                 .with_root_certificates(roots)
                 .with_client_auth_cert(load_certs(cert)?, client_key)
                 .context("building TLS client auth")?;
-            let sni = cfg.sni();
+            let sni = cfg.sni(target);
             let server_name = ServerName::try_from(sni.clone())
                 .with_context(|| format!("invalid TLS server name {sni:?}"))?;
             Delivery::Tls {
-                endpoint: cfg.endpoint().to_string(),
+                endpoint: endpoint(target).to_string(),
                 server_name,
                 connector: TlsConnector::from(Arc::new(tls)),
                 stream: None,
             }
         };
         // A datagram socket has no connection to be down.
-        let up = Arc::new(AtomicU64::new(u64::from(cfg.is_datagram())));
+        let up = Arc::new(AtomicU64::new(u64::from(is_datagram(target))));
         Ok(TakLink {
             delivery,
             reconnects: Arc::new(AtomicU64::new(0)),
@@ -185,8 +184,8 @@ mod tests {
     async fn datagram_delivery_is_verbatim() {
         let receiver = UdpSocket::bind("127.0.0.1:0").await.unwrap();
         let port = receiver.local_addr().unwrap().port();
-        let cfg: TakConfig = toml::from_str(&format!("url = \"udp://127.0.0.1:{port}\"")).unwrap();
-        let mut link = TakLink::new(&cfg).unwrap();
+        let target = format!("udp://127.0.0.1:{port}");
+        let mut link = TakLink::new(&target, &TakConfig::default()).unwrap();
         assert_eq!(link.up.load(Ordering::Relaxed), 1);
         link.send(b"<event uid='1'/>").await.unwrap();
         link.send(b"<event uid='2'/>").await.unwrap();
@@ -199,10 +198,9 @@ mod tests {
     }
 
     #[test]
-    fn datagram_url_must_be_an_address() {
-        let cfg: TakConfig = toml::from_str("url = \"udp://atak.local:6969\"").unwrap();
+    fn datagram_target_must_be_an_address() {
         assert!(
-            TakLink::new(&cfg).is_err(),
+            TakLink::new("udp://atak.local:6969", &TakConfig::default()).is_err(),
             "a host name is refused: datagrams need an address"
         );
     }

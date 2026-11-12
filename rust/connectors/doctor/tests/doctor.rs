@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use ajar_doctor::{net, report, tls, Options};
+use ajar_doctor::{net, report, tls, Options, Role};
 use tempfile::TempDir;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
@@ -46,8 +46,8 @@ async fn clean_env() -> MutexGuard<'static, ()> {
     guard
 }
 
-fn install_ring() {
-    let _ = tokio_rustls::rustls::crypto::ring::default_provider().install_default();
+fn install_provider() {
+    let _ = tokio_rustls::rustls::crypto::aws_lc_rs::default_provider().install_default();
 }
 
 /// A CA and its PEM.
@@ -209,8 +209,10 @@ fn config(dir: &TempDir, nats_url: &str) -> String {
 
 async fn doctor(config_path: Option<String>, sources_dir: Option<&Path>) -> (String, bool) {
     let findings = ajar_doctor::run(&Options {
+        role: Role::Producer,
         config_path,
         sources_dir: sources_dir.map(|d| d.to_str().unwrap().to_string()),
+        tls_files: None,
         timeout: Duration::from_secs(3),
     })
     .await;
@@ -258,7 +260,7 @@ struct Mtls {
 
 impl Mtls {
     fn new() -> Self {
-        install_ring();
+        install_provider();
         let dir = tempfile::tempdir().unwrap();
         let (ca, ca_pem) = mint_ca();
         let (cert_pem, key_pem) = mint_client(&ca, SOURCE_ID);
@@ -287,7 +289,7 @@ impl Mtls {
 
 #[tokio::test]
 async fn probe_happy_path_reports_tls_established() {
-    install_ring();
+    install_provider();
     let (ca, ca_pem) = mint_ca();
     let (cert, key) = mint_server(&ca, &["localhost"], None);
     let addr = spawn_tls_server(server_config(&cert, &key, None), "PONG\r\n").await;
@@ -303,7 +305,7 @@ async fn probe_happy_path_reports_tls_established() {
 
 #[tokio::test]
 async fn probe_names_the_wrong_ca() {
-    install_ring();
+    install_provider();
     let (_, ca_a_pem) = mint_ca();
     let (ca_b, _) = mint_ca();
     let (cert, key) = mint_server(&ca_b, &["localhost"], None);
@@ -323,7 +325,7 @@ async fn probe_names_the_wrong_ca() {
 
 #[tokio::test]
 async fn probe_san_mismatch_lists_covered_names() {
-    install_ring();
+    install_provider();
     let (ca, ca_pem) = mint_ca();
     let (cert, key) = mint_server(&ca, &["somewhere.else"], None);
     let addr = spawn_tls_server(server_config(&cert, &key, None), "PONG\r\n").await;
@@ -343,7 +345,7 @@ async fn probe_san_mismatch_lists_covered_names() {
 
 #[tokio::test]
 async fn probe_expired_server_cert_points_at_clock() {
-    install_ring();
+    install_provider();
     let (ca, ca_pem) = mint_ca();
     let (cert, key) = mint_server(&ca, &["localhost"], Some((-30, -1)));
     let addr = spawn_tls_server(server_config(&cert, &key, None), "PONG\r\n").await;
@@ -358,7 +360,7 @@ async fn probe_expired_server_cert_points_at_clock() {
 
 #[tokio::test]
 async fn probe_postdated_server_cert_points_at_slow_clock() {
-    install_ring();
+    install_provider();
     let (ca, ca_pem) = mint_ca();
     let (cert, key) = mint_server(&ca, &["localhost"], Some((1, 30)));
     let addr = spawn_tls_server(server_config(&cert, &key, None), "PONG\r\n").await;
@@ -373,7 +375,7 @@ async fn probe_postdated_server_cert_points_at_slow_clock() {
 
 #[tokio::test]
 async fn probe_missing_client_cert_blames_client_cert() {
-    install_ring();
+    install_provider();
     let (ca, ca_pem) = mint_ca();
     let (cert, key) = mint_server(&ca, &["localhost"], None);
     let addr = spawn_tls_server(server_config(&cert, &key, Some(&ca)), "PONG\r\n").await;
@@ -401,7 +403,7 @@ async fn dial_tells_dead_port_from_bad_name() {
 
 #[tokio::test]
 async fn probe_flags_cleartext_server_under_mtls() {
-    install_ring();
+    install_provider();
     let (_, ca_pem) = mint_ca();
     let port = spawn_cleartext_nats().await;
 
@@ -415,7 +417,7 @@ async fn probe_flags_cleartext_server_under_mtls() {
 
 #[tokio::test]
 async fn probe_separates_authorization_refusal() {
-    install_ring();
+    install_provider();
     let (ca, ca_pem) = mint_ca();
     let (cert, key) = mint_server(&ca, &["localhost"], None);
     let addr = spawn_tls_server(
@@ -730,4 +732,69 @@ async fn dead_tls_url_still_requires_tls() {
     let (text, healthy) = doctor(Some(config), None).await;
     assert!(!healthy);
     assert!(text.contains("TLS is required"), "{text}");
+}
+
+/// The findings for a consumer whose config delivers to `target`.
+async fn consumer_findings(target: &str) -> Vec<report::Finding> {
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = write(
+        &dir,
+        "consumer.toml",
+        &format!(
+            "nats_url = \"nats://127.0.0.1:1\"\n\
+             egress_subject = \"ajar.egress.cot.*\"\n\
+             egress_verifying_key = \"/instance/egress.pub\"\n\
+             target = \"{target}\"\n"
+        ),
+    );
+    ajar_doctor::run(&Options {
+        role: Role::Consumer {
+            connector_id: "ally-feed".into(),
+        },
+        config_path: Some(config_path),
+        sources_dir: None,
+        tls_files: None,
+        timeout: Duration::from_secs(3),
+    })
+    .await
+}
+
+fn finding<'a>(findings: &'a [report::Finding], step: &str) -> &'a report::Finding {
+    findings.iter().find(|f| f.step == step).unwrap()
+}
+
+#[tokio::test]
+async fn consumer_target_that_answers_passes() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let findings = consumer_findings(&format!("tls://{addr}")).await;
+    let target = finding(&findings, "target");
+    assert_eq!(target.status, report::Status::Ok, "{}", target.detail);
+    assert_eq!(
+        finding(&findings, "signing key").status,
+        report::Status::Skip
+    );
+}
+
+#[tokio::test]
+async fn consumer_target_nobody_answers_fails() {
+    let addr = TcpListener::bind("127.0.0.1:0")
+        .await
+        .unwrap()
+        .local_addr()
+        .unwrap();
+    let findings = consumer_findings(&format!("{addr}")).await;
+    let target = finding(&findings, "target");
+    assert_eq!(target.status, report::Status::Fail);
+    assert!(
+        target.detail.contains("nothing answers"),
+        "{}",
+        target.detail
+    );
+}
+
+#[tokio::test]
+async fn consumer_datagram_target_is_skipped() {
+    let findings = consumer_findings("udp://239.2.3.1:6969").await;
+    assert_eq!(finding(&findings, "target").status, report::Status::Skip);
 }

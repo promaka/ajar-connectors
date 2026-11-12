@@ -20,7 +20,7 @@ use ajar_sapient_wire::v2;
 use anyhow::Context;
 use futures_util::StreamExt;
 
-pub use config::{EgressConfig, SapientConfig, Site};
+pub use config::{EgressConfig, SapientConfig, SapientSettings, Site};
 pub use link::FusionLink;
 pub use report::{Mapper, Node};
 
@@ -103,9 +103,9 @@ pub async fn run(cfg: EgressConfig) -> anyhow::Result<()> {
     let node = Node::from_config(&cfg);
     let mut mapper = Mapper::new(&cfg);
     let metrics = Metrics::default();
-    let mut relay = Relay::new(cfg.sapient.buffer_max, metrics.clone());
+    let mut relay = Relay::new(cfg.connector.sapient.buffer_max, metrics.clone());
     let mut dedupe = Dedupe::new(DEDUPE_WINDOW);
-    let mut link = FusionLink::new(&cfg.sapient.fusion_node, node.clone());
+    let mut link = FusionLink::new(&cfg.target, node.clone());
 
     health::spawn_counters(vec![
         ("egress_delivered_total", metrics.delivered.clone()),
@@ -133,21 +133,22 @@ pub async fn run(cfg: EgressConfig) -> anyhow::Result<()> {
         .await
         .context("connecting to Ajar NATS")?;
     let mut sub = client
-        .subscribe(cfg.subject.clone())
+        .subscribe(cfg.egress_subject.clone())
         .await
-        .with_context(|| format!("subscribing {}", cfg.subject))?;
+        .with_context(|| format!("subscribing {}", cfg.egress_subject))?;
 
     tracing::info!(
-        subject = %cfg.subject,
-        fusion_node = %cfg.sapient.fusion_node,
+        subject = %cfg.egress_subject,
+        fusion_node = %cfg.target,
         node_id = %node.node_id,
-        status_interval_s = cfg.sapient.status_interval_s,
-        buffer_max = cfg.sapient.buffer_max,
+        status_interval_s = cfg.connector.sapient.status_interval_s,
+        buffer_max = cfg.connector.sapient.buffer_max,
         "sapient egress starting"
     );
 
-    let mut status_tick =
-        tokio::time::interval(Duration::from_secs_f64(cfg.sapient.status_interval_s));
+    let mut status_tick = tokio::time::interval(Duration::from_secs_f64(
+        cfg.connector.sapient.status_interval_s,
+    ));
     status_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut first_status = true;
     let shutdown = shutdown_signal();

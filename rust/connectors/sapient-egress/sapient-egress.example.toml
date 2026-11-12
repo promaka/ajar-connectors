@@ -1,20 +1,22 @@
 # SPDX-License-Identifier: Apache-2.0
 #
-# SAPIENT (BSI Flex 335) egress: Ajar as a sensor node on a fusion node, each
-# governed event a detection report. Run: ajar-sapient-egress ./sapient-egress.toml
+# SAPIENT (BSI Flex 335) egress: Ajar as a sensor node on a fusion node. `ajar-connectors join`
+# writes the first four keys from the invite and --target, and [sapient] from the instance's
+# settings.toml. Run by hand: ajar-sapient-egress ./sapient-egress.toml
 
 # Production is tls://<host>:443 with AJAR_TLS_* set to the subscribe-only certificate.
 nats_url = "nats://127.0.0.1:4222"
 
 # The signed egress channel; narrow it with ajar.egress.signed.<source_id>.
-subject = "ajar.egress.signed.>"
+egress_subject = "ajar.egress.signed.>"
 
-# Core's egress verifying key: 64 hex characters, or a file holding them.
+# A file holding Core's egress verifying key as 64 hex characters: the invite's egress.pub.
 egress_verifying_key = "/etc/ajar/egress.pub"
 
-[sapient]
 # The fusion node's SAPIENT endpoint.
-fusion_node = "fusion-node.example:7777"
+target = "fusion-node.example:7777"
+
+[sapient]
 # This node's UUID; set it so a restart re-registers as the same node.
 # node_id = "7d2e0b1c-1111-4222-8333-444455556666"
 name = "Ajar"

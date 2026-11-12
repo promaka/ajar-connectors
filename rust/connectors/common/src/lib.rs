@@ -54,7 +54,7 @@ pub mod ws;
 /// line-framed `file` truncate it.
 pub const MAX_FRAME_BYTES: usize = 64 * 1024;
 
-pub use config::{Config, Enrichment, Framing, SensorSite, SpoolSetting, Transport};
+pub use config::{Config, EgressConfig, Enrichment, Framing, SensorSite, SpoolSetting, Transport};
 #[cfg(feature = "dds")]
 pub use config::{DdsOptions, DdsPayload, DdsReliability};
 pub use identity::GovernedIdentity;
