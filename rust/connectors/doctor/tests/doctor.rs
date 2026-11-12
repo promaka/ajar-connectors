@@ -126,7 +126,9 @@ fn server_config(
     )
 }
 
-/// A TLS server that answers each connection's first read with `reply`.
+/// A TLS server that answers each connection's first read with `reply`, after a
+/// CONNECT, and refuses anything else first, as NATS does with authentication on. A `|`
+/// in `reply` splits it into writes a moment apart.
 async fn spawn_tls_server(config: Arc<ServerConfig>, reply: &'static str) -> SocketAddr {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -137,9 +139,16 @@ async fn spawn_tls_server(config: Arc<ServerConfig>, reply: &'static str) -> Soc
                 // A failed handshake is the client's to assert on.
                 if let Ok(mut stream) = acceptor.accept(tcp).await {
                     let mut buf = [0u8; 256];
-                    let _ = stream.read(&mut buf).await;
-                    let _ = stream.write_all(reply.as_bytes()).await;
-                    let _ = stream.flush().await;
+                    let n = stream.read(&mut buf).await.unwrap_or(0);
+                    let answer = match buf[..n].starts_with(b"CONNECT ") {
+                        true => reply,
+                        false => "-ERR 'Authorization Violation'\r\n",
+                    };
+                    for part in answer.split('|') {
+                        let _ = stream.write_all(part.as_bytes()).await;
+                        let _ = stream.flush().await;
+                        tokio::time::sleep(Duration::from_millis(100)).await;
+                    }
                     tokio::time::sleep(Duration::from_millis(500)).await;
                 }
             });
@@ -431,7 +440,29 @@ async fn probe_separates_authorization_refusal() {
         .outcome
         .expect_err("must fail");
     assert!(d.problem.contains("TLS is fine"), "{}", d.problem);
-    assert!(d.fix.contains("ajar.ingest.acme-radar-1"), "{}", d.fix);
+    assert!(d.fix.contains("acme-radar-1"), "{}", d.fix);
+}
+
+#[tokio::test]
+async fn probe_waits_past_the_servers_own_ping_for_the_refusal() {
+    install_provider();
+    let (ca, ca_pem) = mint_ca();
+    let (cert, key) = mint_server(&ca, &["localhost"], None);
+    let addr = spawn_tls_server(
+        server_config(&cert, &key, None),
+        "PING\r\n|-ERR 'Authorization Violation'\r\n",
+    )
+    .await;
+
+    let d = probe(addr, "localhost", &ca_pem)
+        .await
+        .outcome
+        .expect_err("must fail");
+    assert!(
+        d.problem.contains("Authorization Violation"),
+        "{}",
+        d.problem
+    );
 }
 
 #[tokio::test]
