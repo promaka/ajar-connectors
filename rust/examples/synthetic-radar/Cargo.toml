@@ -14,7 +14,7 @@ publish = false
 ajar-connector.workspace = true
 # No default features avoids async-nats's optional `time` dep (E0119); `ring` re-adds the TLS provider.
 # Without `ring` a TLS connect panics: "Could not automatically determine the process-level CryptoProvider".
-async-nats = { version = "0.50", default-features = false, features = ["ring"] }
+async-nats = { version = "0.52", default-features = false, features = ["ring"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
 bytes = "1"
 # Decodes the 64-char hex seed `ajar keygen` writes.
