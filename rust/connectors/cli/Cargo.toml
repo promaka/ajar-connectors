@@ -1,0 +1,36 @@
+# SPDX-License-Identifier: Apache-2.0
+[package]
+name = "ajar-connectors"
+description = "Installs, enrols and runs Ajar connectors on a machine."
+version = "0.7.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[[bin]]
+name = "ajar-connectors"
+path = "src/main.rs"
+
+[dependencies]
+ajar-doctor = { path = "../doctor" }
+ajar-tooling.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+hex.workspace = true
+flate2.workspace = true
+rcgen.workspace = true
+semver.workspace = true
+serde.workspace = true
+tar.workspace = true
+tempfile.workspace = true
+tokio.workspace = true
+toml.workspace = true
+x509-parser.workspace = true
+
+[dev-dependencies]
+ed25519-dalek.workspace = true
+serde_json.workspace = true
+sha2.workspace = true

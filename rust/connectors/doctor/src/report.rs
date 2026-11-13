@@ -86,7 +86,9 @@ pub fn render(findings: &[Finding]) -> (String, bool) {
     let Some(first) = findings.iter().find(|f| f.status == Status::Fail) else {
         out.push_str("Everything the doctor can check from here checks out.\n");
         out.push_str("If events still do not arrive, the refusal is on the operator's side:\n");
-        out.push_str("ask them to look at the sink log for your source_id.\n");
+        out.push_str(
+            "`ajar status` on Core shows what it accepted and refused from your source_id.\n",
+        );
         return (out, true);
     };
     out.push_str(&format!(
@@ -105,7 +107,7 @@ mod tests {
         let (text, healthy) = render(&[Finding::ok("config", "loaded")]);
         assert!(healthy);
         assert!(text.contains("ok"));
-        assert!(text.contains("sink log for your source_id"));
+        assert!(text.contains("`ajar status` on Core"));
     }
 
     #[test]

@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use anyhow::Context;
+use async_nats::{ClientError, ServerError};
 
 /// Seconds between repeated "cannot reach" warnings.
 const UNREACHABLE_WARN_EVERY_S: u64 = 30;
@@ -32,6 +33,19 @@ pub async fn connect(url: &str) -> anyhow::Result<async_nats::Client> {
                     }
                     async_nats::Event::Disconnected => {
                         tracing::warn!(url = %urls, "disconnected from nats, reconnecting");
+                    }
+                    // A refusal while connecting is a client error; on a live connection, a
+                    // server error. Either way the operator decides: Core's `ajar status`
+                    // shows whether the connector is revoked.
+                    async_nats::Event::ClientError(ClientError::Other(e))
+                        if e.ends_with("authorization violation") =>
+                    {
+                        if warn_due(&last_warn, UNREACHABLE_WARN_EVERY_S) {
+                            tracing::warn!(url = %urls, "bus refused this connector");
+                        }
+                    }
+                    async_nats::Event::ServerError(ServerError::AuthorizationViolation) => {
+                        tracing::warn!(url = %urls, "bus refused this connector");
                     }
                     async_nats::Event::ClientError(e) => {
                         if warn_due(&last_warn, UNREACHABLE_WARN_EVERY_S) {

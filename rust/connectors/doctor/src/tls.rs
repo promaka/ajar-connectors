@@ -123,8 +123,8 @@ impl ServerCertVerifier for RecordingVerifier {
 }
 
 /// The full TLS path on a fresh connection: cleartext INFO preflight,
-/// handshake under the given CA and client identity, then a PING to surface a
-/// deferred rejection.
+/// handshake under the given CA and client identity, then CONNECT and PING to
+/// surface a deferred rejection or an authorization refusal.
 pub async fn probe(
     ep: &Endpoint,
     ca_path: &str,
@@ -244,17 +244,44 @@ pub async fn probe(
     };
 
     // Under TLS 1.3 a server rejects a client certificate only after the
-    // handshake completes, so the PING surfaces it.
-    let _ = tls.write_all(b"PING\r\n").await;
+    // handshake completes, so the PING surfaces it. With authentication on, NATS
+    // refuses anything but CONNECT first, and answers a refused identity only
+    // after its authorization timeout.
+    let connect = format!(
+        "CONNECT {{\"verbose\":false,\"pedantic\":false,\"tls_required\":true,\
+         \"name\":\"ajar-doctor\",\"lang\":\"rust\",\"version\":\"{}\",\"protocol\":1}}\r\nPING\r\n",
+        env!("CARGO_PKG_VERSION")
+    );
+    let _ = tls.write_all(connect.as_bytes()).await;
+    // NATS may send its own PING while it waits on the callout; that one is answered,
+    // and the PONG to this PING or an -ERR decides.
     let mut buf = vec![0u8; 4096];
-    let post = tokio::time::timeout(Duration::from_millis(2000), tls.read(&mut buf)).await;
+    let mut text = String::new();
+    const ANSWER_WAIT: Duration = Duration::from_secs(15);
+    let deadline = tokio::time::Instant::now() + ANSWER_WAIT;
+    let post = loop {
+        match tokio::time::timeout_at(deadline, tls.read(&mut buf)).await {
+            Ok(Ok(n)) if n > 0 => {
+                text.push_str(&String::from_utf8_lossy(&buf[..n]));
+                while let Some(at) = text.find("PING\r\n") {
+                    text.replace_range(at..at + 6, "");
+                    let _ = tls.write_all(b"PONG\r\n").await;
+                }
+                if text.contains("-ERR") || text.contains("PONG") {
+                    break Ok(Ok(text));
+                }
+            }
+            Ok(Ok(_)) => break Ok(Ok(text)),
+            Ok(Err(e)) => break Ok(Err(e)),
+            Err(elapsed) => break Err(elapsed),
+        }
+    };
     let outcome = match post {
-        Ok(Ok(0)) => Err(Diagnosis {
+        Ok(Ok(text)) if text.trim().is_empty() => Err(Diagnosis {
             problem: "the server closed the connection right after the handshake".into(),
             fix: client_cert_fix(source_id),
         }),
-        Ok(Ok(n)) => {
-            let text = String::from_utf8_lossy(&buf[..n]).to_string();
+        Ok(Ok(text)) => {
             if text.contains("-ERR") {
                 Err(Diagnosis {
                     problem: format!(
@@ -262,15 +289,17 @@ pub async fn probe(
                         text.trim()
                     ),
                     fix: format!(
-                        "The transport works and the refusal is authorization. Ask the operator \
-                         to grant this identity publish permission on ajar.ingest.{source_id} \
-                         (registration step 3 covers this)."
+                        "The transport works and the bus refused this identity. On Core, `ajar \
+                         status` shows whether {source_id} is invited or revoked."
                     ),
                 })
             } else {
                 Ok(format!(
                     "TLS established and the server answered ({})",
-                    text.lines().next().unwrap_or("").trim()
+                    text.lines()
+                        .find(|line| !line.trim().is_empty())
+                        .unwrap_or("")
+                        .trim()
                 ))
             }
         }
@@ -284,11 +313,15 @@ pub async fn probe(
             },
             fix: client_cert_fix(source_id),
         }),
-        Err(_) => Ok(
-            "TLS established; the server accepted the connection and stayed quiet \
-             (some servers wait for CONNECT)"
-                .to_string(),
-        ),
+        Err(_) => Err(Diagnosis {
+            problem: format!(
+                "TLS is fine, but the bus did not answer CONNECT within {}s",
+                ANSWER_WAIT.as_secs()
+            ),
+            fix: "The bus waits on Core to admit this connector, and Core did not answer: ask \
+                  the operator whether Core is running (`ajar status`)."
+                .into(),
+        }),
     };
 
     Ok(Handshake {
