@@ -82,7 +82,7 @@ pub struct RemoveArgs {
 pub fn run(ctx: &Context, args: RunArgs) -> anyhow::Result<()> {
     let root = ctx.root()?;
     let (connector_type, version) = super::install::parse_spec(&args.connector)?;
-    let installed = Overview::on_machine(root, &ctx.current_dir, Platform::current())?
+    let installed = Overview::on_machine(root, Platform::current())?
         .on_machine_connectors()
         .iter()
         .filter(|c| c.connector_type == connector_type)

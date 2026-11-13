@@ -31,7 +31,7 @@ struct Cli {
 enum Command {
     /// Create the folder ajar-connectors lives in, and put it on the PATH.
     Setup(setup::SetupArgs),
-    /// Install a connector type from a package, a binary file or an online release.
+    /// Install a connector type from a package or an online release, or a binary with --file.
     Install(install::InstallArgs),
     /// Install newer versions, and move instances onto them.
     Update(install::UpdateArgs),

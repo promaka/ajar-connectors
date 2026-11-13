@@ -2,6 +2,8 @@
 //! `install`, `update`, `list` and `uninstall`: the connector types on this machine.
 
 use std::collections::BTreeMap;
+use std::os::unix::fs::PermissionsExt;
+use std::path::PathBuf;
 
 use ajar_tooling::invite::ConnectorType;
 use ajar_tooling::prompt::{Plan, Prompt};
@@ -17,6 +19,10 @@ use crate::instances::{Instance, ProcessState};
 pub struct InstallArgs {
     /// A connector type, optionally with a version: adsb or adsb@0.6.7.
     pub connector: String,
+    /// A binary to install as this connector type, such as one you built. It installs as
+    /// version local.
+    #[arg(long)]
+    pub file: Option<PathBuf>,
     /// Skip the confirmation.
     #[arg(long)]
     pub yes: bool,
@@ -56,27 +62,71 @@ pub struct UninstallArgs {
 pub fn install(ctx: &Context, prompt: &mut Prompt, args: InstallArgs) -> anyhow::Result<()> {
     let root = ctx.root()?;
     let (connector_type, version) = parse_spec(&args.connector)?;
-    let version = version
-        .map(|v| Version::parse(&v).with_context(|| format!("{v:?} is not a version like 0.6.7")))
-        .transpose()?;
-    let mut overview = Overview::on_machine(root, &ctx.current_dir, Platform::current())?;
-
-    let found = match overview.find_for_install(&connector_type, version.as_ref())? {
-        InstallSource::AlreadyInstalled { installed, newer } => {
-            prompt.say(&format!(
-                "{connector_type} {} is already installed, so nothing changes.",
-                installed.version
-            ))?;
-            if let Some(newer) = newer {
-                prompt.say(&format!(
-                    "{connector_type} {} is in packages/: `ajar-connectors update \
-                     {connector_type}` installs it.",
-                    newer.version
-                ))?;
+    if connector_type.is_tool() {
+        anyhow::bail!("{connector_type} is a tool, not a connector type");
+    }
+    let found = match &args.file {
+        Some(file) => {
+            if version.is_some() {
+                anyhow::bail!(
+                    "--file installs {connector_type} as version local: name the type without \
+                     @<version>"
+                );
             }
-            return Ok(());
+            let file = std::path::absolute(ctx.current_dir.join(file))
+                .with_context(|| format!("resolving {}", file.display()))?;
+            let metadata =
+                std::fs::metadata(&file).with_context(|| format!("reading {}", file.display()))?;
+            if !metadata.is_file() || metadata.permissions().mode() & 0o111 == 0 {
+                anyhow::bail!("{} is not an executable file", file.display());
+            }
+            let local_dir = root
+                .connectors_dir()
+                .join(connector_type.as_str())
+                .join("local");
+            if local_dir.exists() {
+                anyhow::bail!(
+                    "{connector_type} local is already installed: run `ajar-connectors \
+                     uninstall {connector_type}@local` first"
+                );
+            }
+            AvailableConnector {
+                connector_type: connector_type.clone(),
+                version: ConnectorVersion::Local,
+                location: Location::BinaryFile(file),
+            }
         }
-        InstallSource::Install(found) => found,
+        None => {
+            if version.as_deref() == Some("local") {
+                anyhow::bail!(
+                    "{connector_type} local is a binary from your machine: run `ajar-connectors install \
+                     {connector_type} --file <binary>`"
+                );
+            }
+            let version = version
+                .map(|v| {
+                    Version::parse(&v).with_context(|| format!("{v:?} is not a version like 0.6.7"))
+                })
+                .transpose()?;
+            let mut overview = Overview::on_machine(root, Platform::current())?;
+            match overview.find_for_install(&connector_type, version.as_ref())? {
+                InstallSource::AlreadyInstalled { installed, newer } => {
+                    prompt.say(&format!(
+                        "{connector_type} {} is already installed, so nothing changes.",
+                        installed.version
+                    ))?;
+                    if let Some(newer) = newer {
+                        prompt.say(&format!(
+                            "{connector_type} {} is in packages/: `ajar-connectors update \
+                             {connector_type}` installs it.",
+                            newer.version
+                        ))?;
+                    }
+                    return Ok(());
+                }
+                InstallSource::Install(found) => found,
+            }
+        }
     };
 
     let mut plan = Plan::default();
@@ -97,7 +147,7 @@ pub fn install(ctx: &Context, prompt: &mut Prompt, args: InstallArgs) -> anyhow:
 
 pub fn update(ctx: &Context, prompt: &mut Prompt, args: UpdateArgs) -> anyhow::Result<()> {
     let root = ctx.root()?;
-    let mut overview = Overview::on_machine(root, &ctx.current_dir, Platform::current())?;
+    let mut overview = Overview::on_machine(root, Platform::current())?;
     let installed: Vec<AvailableConnector> = overview
         .on_machine_connectors()
         .iter()
@@ -293,19 +343,20 @@ pub fn list(ctx: &Context, prompt: &mut Prompt, args: ListArgs) -> anyhow::Resul
         return Ok(());
     };
 
-    let mut overview = Overview::on_machine(root, &ctx.current_dir, Platform::current())?;
+    let mut overview = Overview::on_machine(root, Platform::current())?;
     let instances = Instance::load_all(root)?;
     if overview.on_machine_connectors().is_empty() && overview.unusable.is_empty() {
-        prompt.say("No connector is installed, in packages/ or in the current folder.")?;
+        prompt.say("No connector is installed or in packages/.")?;
     }
-    // The overview lists installed connectors first, then packages, then binary files.
+    // The overview lists installed connectors first, then packages.
     let mut heading = None;
     for connector in overview.on_machine_connectors() {
         let this_heading = match connector.location {
             Location::Installed(_) => "Installed:",
             Location::Package(_) => "In packages/:",
-            Location::BinaryFile(_) => "In the current folder:",
-            Location::Online(_) => "Online:",
+            Location::BinaryFile(_) | Location::Online(_) => {
+                unreachable!("the overview holds only installed versions and packages")
+            }
         };
         if heading != Some(this_heading) {
             prompt.say(this_heading)?;
@@ -414,7 +465,7 @@ fn install_step(connector: &AvailableConnector) -> String {
     let source = match &connector.location {
         Location::Installed(dir) => format!("already in {}", dir.display()),
         Location::Package(path) => format!("from {}", path.display()),
-        Location::BinaryFile(path) => format!("from {}, as version local", path.display()),
+        Location::BinaryFile(path) => format!("from {}", path.display()),
         Location::Online(release) => format!("from GitHub ({})", release.tarball),
     };
     format!(
@@ -425,8 +476,52 @@ fn install_step(connector: &AvailableConnector) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::fs::Permissions;
+
     use super::*;
     use crate::testutil::{create, machine, producer, write_invite, Machine};
+
+    #[test]
+    fn file_installs_as_local_once() {
+        let Machine { tmp, root } = machine();
+        let file = tmp.path().join("my-build");
+        std::fs::write(&file, b"binary").unwrap();
+        std::fs::set_permissions(&file, Permissions::from_mode(0o755)).unwrap();
+        let ctx = Context::in_root(root, tmp.path().to_path_buf());
+        let install_args = || InstallArgs {
+            connector: "adsb".into(),
+            file: Some(file.clone()),
+            yes: true,
+        };
+
+        install(&ctx, &mut Prompt::terminal(), install_args()).unwrap();
+        let local = ctx.root().unwrap().connectors_dir().join("adsb/local");
+        assert!(local.join("ajar-adsb").is_file());
+        let err = install(&ctx, &mut Prompt::terminal(), install_args()).unwrap_err();
+        assert!(err.to_string().contains("uninstall adsb@local"), "{err}");
+    }
+
+    #[test]
+    fn file_that_is_a_tool_or_not_executable_is_refused() {
+        let Machine { tmp, root } = machine();
+        let file = tmp.path().join("my-build");
+        std::fs::write(&file, b"binary").unwrap();
+        let ctx = Context::in_root(root, tmp.path().to_path_buf());
+        let install_args = |connector: &str| InstallArgs {
+            connector: connector.into(),
+            file: Some(file.clone()),
+            yes: true,
+        };
+
+        let err = install(&ctx, &mut Prompt::terminal(), install_args("adsb")).unwrap_err();
+        assert!(err.to_string().contains("not an executable file"), "{err}");
+        std::fs::set_permissions(&file, Permissions::from_mode(0o755)).unwrap();
+        let err = install(&ctx, &mut Prompt::terminal(), install_args("doctor")).unwrap_err();
+        assert!(err.to_string().contains("a tool"), "{err}");
+        let connectors_dir = ctx.root().unwrap().connectors_dir();
+        assert!(!connectors_dir.join("adsb/local").exists());
+        assert!(!connectors_dir.join("doctor").exists());
+    }
 
     #[test]
     fn version_in_use_is_kept_and_an_unused_one_uninstalled() {

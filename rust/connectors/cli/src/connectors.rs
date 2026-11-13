@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Connector types and where each version can come from: installed in `connectors/`, a release
-//! tarball in `packages/`, a binary file in the current folder, or an online release. Holds the
-//! rules `install` follows to pick one, and installing into `connectors/<type>/<version>/`.
+//! tarball in `packages/`, an online release, or a binary file given to `install --file`. Holds
+//! the rules `install` follows to pick one, and installing into `connectors/<type>/<version>/`.
 
 use std::fmt;
 use std::fs::{File, OpenOptions, Permissions};
@@ -63,7 +63,7 @@ pub enum Location {
     Installed(PathBuf),
     /// A release tarball in `packages/`, with its `.sha256` beside it.
     Package(PathBuf),
-    /// An executable `ajar-<type>` in the current folder.
+    /// A binary given to `install --file`, which installs as version `local`.
     BinaryFile(PathBuf),
     Online(OnlineRelease),
 }
@@ -90,19 +90,15 @@ pub enum InstallSource {
 pub struct Overview {
     platform: Option<Platform>,
     on_machine: Vec<AvailableConnector>,
-    /// Files in `packages/` and the current folder, and online releases once asked for, that
-    /// look like connectors but can't be installed, with the reason.
+    /// Files in `packages/`, and online releases once asked for, that look like connectors but
+    /// can't be installed, with the reason.
     pub unusable: Vec<(PathBuf, String)>,
     /// `None` until asked for. The error is the reason online releases are unavailable.
     online: Option<Result<Vec<AvailableConnector>, String>>,
 }
 
 impl Overview {
-    pub fn on_machine(
-        root: &Root,
-        current_dir: &Path,
-        platform: Option<Platform>,
-    ) -> anyhow::Result<Overview> {
+    pub fn on_machine(root: &Root, platform: Option<Platform>) -> anyhow::Result<Overview> {
         let mut overview = Overview {
             platform,
             on_machine: Vec::new(),
@@ -111,18 +107,12 @@ impl Overview {
         };
         overview.add_installed(&root.connectors_dir())?;
         overview.add_packages(&root.packages_dir())?;
-        overview.add_binary_files(current_dir)?;
-        // Folder and file names sort 0.10.0 before 0.6.7, so each section is sorted again by
-        // type and then by version.
-        let section = |location: &Location| match location {
-            Location::Installed(_) => 0,
-            Location::Package(_) => 1,
-            Location::BinaryFile(_) => 2,
-            Location::Online(_) => 3,
-        };
+        // Installed versions first, then packages. Folder and file names sort 0.10.0 before
+        // 0.6.7, so each is sorted again by type and then by version.
+        let is_package = |c: &AvailableConnector| matches!(c.location, Location::Package(_));
         overview.on_machine.sort_by(|a, b| {
-            section(&a.location)
-                .cmp(&section(&b.location))
+            is_package(a)
+                .cmp(&is_package(b))
                 .then_with(|| a.connector_type.cmp(&b.connector_type))
                 .then_with(|| a.version.cmp(&b.version))
         });
@@ -179,8 +169,7 @@ impl Overview {
     }
 
     /// Picks where `install` takes `connector_type` from: installed wins and changes nothing,
-    /// then a package or a binary file (refused when both are there), then online. With
-    /// `version`, binary files are skipped because their version is unknown.
+    /// then a package, then online.
     pub fn find_for_install(
         &mut self,
         connector_type: &ConnectorType,
@@ -221,45 +210,22 @@ impl Overview {
             .filter(wanted)
             .filter(|c| matches!(c.location, Location::Package(_)))
             .max_by(|a, b| a.version.cmp(&b.version));
-        let binary_file = self
-            .on_machine
-            .iter()
-            .filter(|c| version.is_none() && wanted(c))
-            .find(|c| matches!(c.location, Location::BinaryFile(_)));
-        match (package, binary_file) {
-            (
-                Some(AvailableConnector {
-                    location: Location::Package(package),
-                    ..
-                }),
-                Some(AvailableConnector {
-                    location: Location::BinaryFile(binary_file),
-                    ..
-                }),
-            ) => anyhow::bail!(
-                "both {} and {} can install {spec}: remove one, or install the package with \
-                 {spec}@<version>, since a named version skips binary files",
-                package.display(),
-                binary_file.display()
-            ),
-            (Some(found), None) | (None, Some(found)) => {
-                return Ok(InstallSource::Install(found.clone()))
-            }
-            _ => {}
+        if let Some(package) = package {
+            return Ok(InstallSource::Install(package.clone()));
         }
 
         let binary_hint = match version {
             Some(_) => String::new(),
             None => format!(
-                "; to install a binary you built, put it in the current folder as \
-                 ajar-{connector_type}"
+                "; to install a binary from your machine: `ajar-connectors install {connector_type} \
+                 --file <binary>`"
             ),
         };
         let online = match self.online() {
             Ok(online) => online,
             Err(reason) => anyhow::bail!(
-                "{spec} is not installed, not in packages/ and not in the current folder, \
-                 and online releases are unavailable: {reason}{binary_hint}"
+                "{spec} is not installed and not in packages/, and online releases are \
+                 unavailable: {reason}{binary_hint}"
             ),
         };
         let found = online
@@ -310,7 +276,7 @@ impl Overview {
                     .push((path, "not a connector release tarball".to_owned()));
                 continue;
             };
-            if !tarball.is_connector_type() {
+            if tarball.connector_type.is_tool() {
                 self.unusable
                     .push((path, "a tool, not a connector type".to_owned()));
                 continue;
@@ -332,34 +298,6 @@ impl Overview {
                 connector_type: tarball.connector_type,
                 version: ConnectorVersion::Release(tarball.version),
                 location: Location::Package(path),
-            });
-        }
-        Ok(())
-    }
-
-    fn add_binary_files(&mut self, current_dir: &Path) -> anyhow::Result<()> {
-        for path in read_dir(current_dir)? {
-            let Some(connector_type) = file_name(&path)
-                .and_then(|name| name.strip_prefix("ajar-"))
-                // The command itself and the tools it replaced.
-                .filter(|name| !["connectors", "doctor", "up"].contains(name))
-                .and_then(|name| ConnectorType::try_from(name.to_owned()).ok())
-            else {
-                continue;
-            };
-            let metadata =
-                std::fs::metadata(&path).with_context(|| format!("reading {}", path.display()))?;
-            if !metadata.is_file() {
-                continue;
-            }
-            if metadata.permissions().mode() & 0o111 == 0 {
-                self.unusable.push((path, "not executable".to_owned()));
-                continue;
-            }
-            self.on_machine.push(AvailableConnector {
-                connector_type,
-                version: ConnectorVersion::Local,
-                location: Location::BinaryFile(path),
             });
         }
         Ok(())
@@ -396,10 +334,9 @@ pub fn install(root: &Root, connector: &AvailableConnector) -> anyhow::Result<Pa
             unpack(&tarball, staging.path())?;
         }
         Location::BinaryFile(file) => {
-            let target = staging.path().join(
-                file.file_name()
-                    .with_context(|| format!("{} has no file name", file.display()))?,
-            );
+            let target = staging
+                .path()
+                .join(format!("ajar-{}", connector.connector_type));
             std::fs::copy(file, &target).with_context(|| format!("copying {}", file.display()))?;
             std::fs::set_permissions(&target, Permissions::from_mode(0o755))
                 .with_context(|| format!("making {} executable", target.display()))?;
@@ -533,8 +470,6 @@ fn file_name(path: &Path) -> Option<&str> {
 
 #[cfg(test)]
 mod tests {
-    use std::io::Write;
-
     use sha2::{Digest, Sha256};
 
     use super::*;
@@ -543,21 +478,14 @@ mod tests {
     const PLATFORM: Platform = Platform::X86_64Linux;
 
     struct Machine {
-        _tmp: tempfile::TempDir,
+        tmp: tempfile::TempDir,
         root: Root,
-        current_dir: PathBuf,
     }
 
     fn machine() -> Machine {
         let tmp = tempfile::tempdir().unwrap();
         let root = Root::create(&tmp.path().join("root"), Scope::CurrentUser).unwrap();
-        let current_dir = tmp.path().join("here");
-        std::fs::create_dir(&current_dir).unwrap();
-        Machine {
-            _tmp: tmp,
-            root,
-            current_dir,
-        }
+        Machine { tmp, root }
     }
 
     fn connector_type(name: &str) -> ConnectorType {
@@ -600,21 +528,8 @@ mod tests {
         path
     }
 
-    fn add_binary_file(machine: &Machine, name: &str) -> PathBuf {
-        let path = machine.current_dir.join(format!("ajar-{name}"));
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o755)
-            .open(&path)
-            .unwrap();
-        file.write_all(b"binary").unwrap();
-        path
-    }
-
     fn overview(machine: &Machine) -> Overview {
-        let mut overview =
-            Overview::on_machine(&machine.root, &machine.current_dir, Some(PLATFORM)).unwrap();
+        let mut overview = Overview::on_machine(&machine.root, Some(PLATFORM)).unwrap();
         overview.online = Some(Err("offline in tests".to_owned()));
         overview
     }
@@ -649,22 +564,10 @@ mod tests {
     }
 
     #[test]
-    fn package_and_binary_file_together_are_refused() {
-        let machine = machine();
-        add_package(&machine, "adsb", "0.6.7", None);
-        add_binary_file(&machine, "adsb");
-        let err = overview(&machine)
-            .find_for_install(&connector_type("adsb"), None)
-            .unwrap_err();
-        assert!(err.to_string().contains("remove one"), "{err}");
-    }
-
-    #[test]
-    fn named_version_skips_binary_files_and_picks_that_package() {
+    fn named_version_picks_that_package() {
         let machine = machine();
         add_package(&machine, "adsb", "0.6.6", None);
         add_package(&machine, "adsb", "0.6.7", None);
-        add_binary_file(&machine, "adsb");
         let wanted = Version::parse("0.6.6").unwrap();
         let source = overview(&machine)
             .find_for_install(&connector_type("adsb"), Some(&wanted))
@@ -683,7 +586,7 @@ mod tests {
             .find_for_install(&connector_type("adsb"), None)
             .unwrap_err();
         assert!(err.to_string().contains("offline in tests"), "{err}");
-        assert!(err.to_string().contains("as ajar-adsb"), "{err}");
+        assert!(err.to_string().contains("--file"), "{err}");
     }
 
     #[test]
@@ -733,17 +636,18 @@ mod tests {
     }
 
     #[test]
-    fn binary_file_installs_as_local() {
+    fn binary_file_installs_as_local_under_the_type_name() {
         let machine = machine();
-        add_binary_file(&machine, "adsb");
-        let InstallSource::Install(found) = overview(&machine)
-            .find_for_install(&connector_type("adsb"), None)
-            .unwrap()
-        else {
-            panic!("expected the binary file");
+        let file = machine.tmp.path().join("my-build");
+        std::fs::write(&file, b"binary").unwrap();
+        let found = AvailableConnector {
+            connector_type: connector_type("adsb"),
+            version: ConnectorVersion::Local,
+            location: Location::BinaryFile(file),
         };
         let dir = install(&machine.root, &found).unwrap();
         assert_eq!(dir, machine.root.connectors_dir().join("adsb/local"));
+        assert_eq!(installed_binary(&dir).unwrap(), dir.join("ajar-adsb"));
     }
 
     #[test]

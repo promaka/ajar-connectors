@@ -205,9 +205,8 @@ impl Instance {
         if !version_dir.is_dir() {
             match &self.record.version {
                 ConnectorVersion::Local => anyhow::bail!(
-                    "{connector_type} local is not installed: put the binary in the current \
-                     folder as ajar-{connector_type} and run `ajar-connectors install \
-                     {connector_type}`"
+                    "{connector_type} local is not installed: run `ajar-connectors install \
+                     {connector_type} --file <binary>` to install a binary from your machine"
                 ),
                 ConnectorVersion::Release(version) => anyhow::bail!(
                     "{connector_type} {version} is not installed: run `ajar-connectors install \

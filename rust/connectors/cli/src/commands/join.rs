@@ -79,7 +79,7 @@ pub fn join(ctx: &Context, prompt: &mut Prompt, args: JoinArgs) -> anyhow::Resul
 
     let version = match &args.version {
         Some(text) => ConnectorVersion::try_from(text.clone())?,
-        None => Overview::on_machine(root, &ctx.current_dir, Platform::current())?
+        None => Overview::on_machine(root, Platform::current())?
             .on_machine_connectors()
             .iter()
             .filter(|c| &c.connector_type == connector_type)

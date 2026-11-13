@@ -82,6 +82,12 @@ impl ConnectorType {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+
+    /// True for the tools released from this repository under the same naming, which are
+    /// not connector types.
+    pub fn is_tool(&self) -> bool {
+        ["connectors", "doctor", "up"].contains(&self.as_str())
+    }
 }
 
 impl TryFrom<String> for ConnectorType {
