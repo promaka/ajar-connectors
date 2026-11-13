@@ -10,10 +10,6 @@ repository.workspace = true
 authors.workspace = true
 publish = false
 
-[[bin]]
-name = "ajar-doctor"
-path = "src/main.rs"
-
 [features]
 # Same default as the serial- and DDS-capable connectors it ships with.
 default = ["serial", "dds"]
@@ -39,7 +35,3 @@ rcgen.workspace = true
 # Shifts certificate validity windows for the expired and postdated cases.
 time.workspace = true
 tempfile.workspace = true
-
-# See CONTRIBUTING.md, "Releases".
-[package.metadata.ajar]
-release = true

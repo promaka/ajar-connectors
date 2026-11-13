@@ -2,7 +2,7 @@
 //! The doctor's failure matrix against real loopback listeners and a throwaway rcgen PKI.
 
 use std::net::SocketAddr;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -37,9 +37,6 @@ async fn clean_env() -> MutexGuard<'static, ()> {
         "AJAR_TLS_CERT",
         "AJAR_TLS_KEY",
         "AJAR_REQUIRE_TLS",
-        "NATS_URL",
-        "AJAR_SOURCE_ID",
-        "AJAR_SIGNING_SEED",
     ] {
         std::env::remove_var(name);
     }
@@ -216,11 +213,10 @@ fn config(dir: &TempDir, nats_url: &str) -> String {
     )
 }
 
-async fn doctor(config_path: Option<String>, sources_dir: Option<&Path>) -> (String, bool) {
+async fn doctor(config_path: String) -> (String, bool) {
     let findings = ajar_doctor::run(&Options {
         role: Role::Producer,
         config_path,
-        sources_dir: sources_dir.map(|d| d.to_str().unwrap().to_string()),
         tls_files: None,
         timeout: Duration::from_secs(3),
     })
@@ -243,14 +239,6 @@ async fn probe(addr: SocketAddr, host: &str, trusted_ca_pem: &str) -> tls::Hands
     tls::probe(&ep(host, addr.port()), &ca_path, None, SOURCE_ID, WAIT)
         .await
         .unwrap()
-}
-
-/// A registry dir holding `other-source.pub`.
-fn sources_dir(dir: &TempDir) -> PathBuf {
-    let sources = dir.path().join("sources");
-    std::fs::create_dir_all(&sources).unwrap();
-    std::fs::write(sources.join("other-source.pub"), "ab".repeat(32)).unwrap();
-    sources
 }
 
 fn derived_pub_hex() -> String {
@@ -471,48 +459,24 @@ async fn broken_config_blocks_every_step() {
     let dir = tempfile::tempdir().unwrap();
     let broken = write(&dir, "broken.toml", "source_id = \"x\"\n# nothing else");
 
-    let (text, healthy) = doctor(Some(broken), None).await;
+    let (text, healthy) = doctor(broken).await;
     assert!(!healthy);
     assert!(text.contains("Start with the first one: config."), "{text}");
     assert!(text.contains("blocked until the config loads"), "{text}");
 }
 
 #[tokio::test]
-async fn unregistered_source_lists_registered_names() {
+async fn reachable_producer_is_healthy_and_names_its_key() {
     let _env = clean_env().await;
     let dir = tempfile::tempdir().unwrap();
     let port = spawn_cleartext_nats().await;
     let config = config(&dir, &format!("nats://127.0.0.1:{port}"));
-    let sources = sources_dir(&dir);
 
-    let (text, healthy) = doctor(Some(config), Some(&sources)).await;
-    assert!(!healthy);
-    assert!(text.contains("no acme-radar-1.pub"), "{text}");
-    assert!(text.contains("other-source"), "{text}");
-    assert!(text.contains("ajar-sink mint acme-radar-1"), "{text}");
-    assert!(
-        text.contains("speaks NATS"),
-        "endpoint still checked: {text}"
-    );
-    assert!(
-        text.contains("derives public key"),
-        "key still checked: {text}"
-    );
-    assert!(text.contains("dev only"), "cleartext is a warning: {text}");
-}
-
-#[tokio::test]
-async fn registered_source_is_healthy() {
-    let _env = clean_env().await;
-    let dir = tempfile::tempdir().unwrap();
-    let port = spawn_cleartext_nats().await;
-    let config = config(&dir, &format!("nats://127.0.0.1:{port}"));
-    let sources = sources_dir(&dir);
-    std::fs::write(sources.join("acme-radar-1.pub"), derived_pub_hex()).unwrap();
-
-    let (text, healthy) = doctor(Some(config), Some(&sources)).await;
+    let (text, healthy) = doctor(config).await;
     assert!(healthy, "{text}");
-    assert!(text.contains("matches the loaded seed"), "{text}");
+    assert!(text.contains(&derived_pub_hex()), "{text}");
+    assert!(text.contains("speaks NATS"), "{text}");
+    assert!(text.contains("dev only"), "cleartext is a warning: {text}");
     assert!(text.contains("store-and-forward"), "spool hint: {text}");
 }
 
@@ -536,7 +500,7 @@ async fn writable_spool_is_healthy() {
         ),
     );
 
-    let (text, healthy) = doctor(Some(spooled), None).await;
+    let (text, healthy) = doctor(spooled).await;
     assert!(healthy, "{text}");
     assert!(text.contains("is writable, nothing queued"), "{text}");
 }
@@ -549,7 +513,7 @@ async fn stale_sibling_pub_fails_the_key() {
     let config = config(&dir, &format!("nats://127.0.0.1:{port}"));
     std::fs::write(dir.path().join("acme-radar-1.pub"), "cd".repeat(32)).unwrap();
 
-    let (text, healthy) = doctor(Some(config), None).await;
+    let (text, healthy) = doctor(config).await;
     assert!(!healthy);
     assert!(text.contains("no longer match"), "{text}");
 }
@@ -574,7 +538,7 @@ async fn missing_serial_device_says_plug_it_in() {
         ),
     );
 
-    let (text, healthy) = doctor(Some(serial), None).await;
+    let (text, healthy) = doctor(serial).await;
     assert!(!healthy);
     assert!(text.contains("does not exist"), "{text}");
     assert!(text.contains("plugged in"), "{text}");
@@ -599,7 +563,7 @@ async fn readable_serial_device_passes() {
         ),
     );
 
-    let (text, _) = doctor(Some(serial), None).await;
+    let (text, _) = doctor(serial).await;
     assert!(text.contains("present and readable"), "{text}");
 }
 
@@ -614,7 +578,7 @@ async fn dead_standby_is_a_warning() {
         &format!("nats://127.0.0.1:{port},nats://127.0.0.1:{standby}"),
     );
 
-    let (text, healthy) = doctor(Some(config), None).await;
+    let (text, healthy) = doctor(config).await;
     assert!(
         healthy,
         "a dead standby is a warning, not a failure: {text}"
@@ -624,7 +588,7 @@ async fn dead_standby_is_a_warning() {
 }
 
 #[tokio::test]
-async fn garbage_seed_names_the_mint_command() {
+async fn garbage_seed_points_to_a_new_invite() {
     let _env = clean_env().await;
     let dir = tempfile::tempdir().unwrap();
     let port = spawn_cleartext_nats().await;
@@ -635,35 +599,9 @@ async fn garbage_seed_names_the_mint_command() {
         &connector_toml(&format!("nats://127.0.0.1:{port}"), bad_seed, UDP_TRANSPORT),
     );
 
-    let (text, healthy) = doctor(Some(config), None).await;
+    let (text, healthy) = doctor(config).await;
     assert!(!healthy);
-    assert!(text.contains("ajar-sink mint"), "{text}");
-}
-
-#[tokio::test]
-async fn incomplete_environment_names_missing_vars() {
-    let _env = clean_env().await;
-
-    let (text, healthy) = doctor(None, None).await;
-    assert!(!healthy);
-    assert!(
-        text.contains("NATS_URL, AJAR_SOURCE_ID, AJAR_SIGNING_SEED"),
-        "{text}"
-    );
-}
-
-#[tokio::test]
-async fn environment_alone_is_enough() {
-    let _env = clean_env().await;
-    let dir = tempfile::tempdir().unwrap();
-    let port = spawn_cleartext_nats().await;
-    std::env::set_var("NATS_URL", format!("nats://127.0.0.1:{port}"));
-    std::env::set_var("AJAR_SOURCE_ID", SOURCE_ID);
-    std::env::set_var("AJAR_SIGNING_SEED", seed_file(&dir));
-
-    let (text, healthy) = doctor(None, None).await;
-    assert!(healthy, "{text}");
-    assert!(text.contains("speaks NATS"), "{text}");
+    assert!(text.contains("new invite"), "{text}");
 }
 
 #[tokio::test]
@@ -672,7 +610,7 @@ async fn tls_url_without_tls_env_fails_policy() {
     let mtls = Mtls::new();
     let config = mtls.serve().await;
 
-    let (text, healthy) = doctor(Some(config), None).await;
+    let (text, healthy) = doctor(config).await;
     assert!(!healthy);
     assert!(text.contains("TLS is required"), "{text}");
     assert!(
@@ -688,7 +626,7 @@ async fn partial_tls_env_is_named() {
     let config = mtls.serve().await;
     std::env::set_var("AJAR_TLS_CA", &mtls.ca_path);
 
-    let (text, healthy) = doctor(Some(config), None).await;
+    let (text, healthy) = doctor(config).await;
     assert!(!healthy);
     assert!(text.contains("partial TLS configuration"), "{text}");
     assert!(text.contains("AJAR_TLS_CERT"), "{text}");
@@ -701,7 +639,7 @@ async fn full_mtls_run_is_healthy() {
     let config = mtls.serve().await;
     mtls.export(&mtls.cert_path, &mtls.key_path);
 
-    let (text, healthy) = doctor(Some(config), None).await;
+    let (text, healthy) = doctor(config).await;
     assert!(healthy, "{text}");
     assert!(text.contains("mTLS"), "{text}");
     assert!(text.contains("matches source_id"), "{text}");
@@ -719,7 +657,7 @@ async fn swapped_cert_and_key_are_named() {
     let config = mtls.serve().await;
     mtls.export(&mtls.key_path, &mtls.cert_path);
 
-    let (text, healthy) = doctor(Some(config), None).await;
+    let (text, healthy) = doctor(config).await;
     assert!(!healthy);
     assert!(text.contains("swapped"), "{text}");
 }
@@ -734,7 +672,7 @@ async fn client_cn_mismatch_is_flagged() {
     let key = write(&mtls.dir, "other.key", &key_pem);
     mtls.export(&cert, &key);
 
-    let (text, _) = doctor(Some(config), None).await;
+    let (text, _) = doctor(config).await;
     assert!(text.contains("CN is \"someone-else\""), "{text}");
 }
 
@@ -745,7 +683,7 @@ async fn dead_mtls_endpoint_blocks_tls_steps() {
     let config = config(&mtls.dir, &format!("tls://127.0.0.1:{}", dead_port()));
     mtls.export(&mtls.cert_path, &mtls.key_path);
 
-    let (text, healthy) = doctor(Some(config), None).await;
+    let (text, healthy) = doctor(config).await;
     assert!(!healthy);
     assert!(text.contains("did not answer"), "{text}");
     assert!(
@@ -760,7 +698,7 @@ async fn dead_tls_url_still_requires_tls() {
     let dir = tempfile::tempdir().unwrap();
     let config = config(&dir, &format!("tls://127.0.0.1:{}", dead_port()));
 
-    let (text, healthy) = doctor(Some(config), None).await;
+    let (text, healthy) = doctor(config).await;
     assert!(!healthy);
     assert!(text.contains("TLS is required"), "{text}");
 }
@@ -782,8 +720,7 @@ async fn consumer_findings(target: &str) -> Vec<report::Finding> {
         role: Role::Consumer {
             connector_id: "ally-feed".into(),
         },
-        config_path: Some(config_path),
-        sources_dir: None,
+        config_path,
         tls_files: None,
         timeout: Duration::from_secs(3),
     })

@@ -9,6 +9,14 @@ CONTRIBUTING.md, "Releases").
 
 ## [Unreleased]
 
+### Changed
+
+- A library only, run by `ajar-connectors join` and `check`. The `ajar-doctor`
+  binary is gone, and so is the mode that read `NATS_URL`, `AJAR_SOURCE_ID` and
+  `AJAR_SIGNING_SEED` without a config file. No more tarballs or images.
+- Checks consumers too: an egress connector's config, and a TCP connection to
+  its target.
+
 ## [0.6.7] - 2026-11-02
 
 ### Changed

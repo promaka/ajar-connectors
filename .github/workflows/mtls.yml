@@ -52,7 +52,7 @@ jobs:
           set -euo pipefail
           # A file source: the container runs detached with no stdin pipe.
           cat > "$GITHUB_WORKSPACE/c.toml" <<'TOML'
-          source_id = "ajar-connector"
+          source_id = "mtls-test"
           nats_url = "tls://127.0.0.1:4222"
           signing_key_path = "/etc/ajar/seed"
           [transport]

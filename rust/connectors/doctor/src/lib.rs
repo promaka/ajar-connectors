@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
-//! `ajar-doctor`: preflight for a connector that publishes nothing. Walks the
-//! onboarding steps in order (config, key, transport, registration, endpoint,
-//! TLS, clock) and says what to do about the first broken one. Read-only on
-//! the wire: it dials, greets and handshakes, but never publishes an event.
+//! The preflight `ajar-connectors join` and `check` run. Walks the onboarding
+//! steps in order (config, key, transport, registration, endpoint, TLS, clock,
+//! and a consumer's target) and says what to do about the first broken one.
+//! Read-only on the wire: it dials, greets and handshakes, but never publishes.
 
 pub mod certs;
 pub mod net;
@@ -15,17 +15,10 @@ use std::time::Duration;
 use ajar_connector_common as common;
 use report::Finding;
 
-const ENV_VARS: [&str; 3] = ["NATS_URL", "AJAR_SOURCE_ID", "AJAR_SIGNING_SEED"];
-
 pub struct Options {
     pub role: Role,
-    /// The connector's own config TOML. `None` reads `NATS_URL`,
-    /// `AJAR_SOURCE_ID` and `AJAR_SIGNING_SEED` instead, the variables an SDK
-    /// embedder runs with.
-    pub config_path: Option<String>,
-    /// A local sink's registered-keys directory; enables a real registration
-    /// check instead of a note.
-    pub sources_dir: Option<String>,
+    /// The connector's own config TOML.
+    pub config_path: String,
     /// The CA, client certificate and key the connector will run with. `None` reads the
     /// `AJAR_TLS_*` environment, as the connector itself does.
     pub tls_files: Option<TlsFiles>,
@@ -72,8 +65,9 @@ pub async fn run(opts: &Options) -> Vec<Finding> {
     let config_fix = "The doctor reads the same file the connector runs with. Fix the error \
                       above; the example config shipped next to your connector (the \
                       *.example.toml in the tarball and the repo) shows every required field.";
-    let resolved = match (&opts.role, &opts.config_path) {
-        (Role::Producer, Some(path)) => match common::Config::load(path) {
+    let path = opts.config_path.as_str();
+    let resolved = match &opts.role {
+        Role::Producer => match common::Config::load(path) {
             Ok(cfg) => Ok((
                 format!(
                     "source {:?} publishes to {}.{} at {}",
@@ -93,29 +87,21 @@ pub async fn run(opts: &Options) -> Vec<Finding> {
             )),
             Err(e) => Err(Finding::fail("config", format!("{e:#}"), config_fix)),
         },
-        (Role::Producer, None) => inputs_from_env(),
-        (Role::Consumer { connector_id }, Some(path)) => {
-            match common::EgressConfig::<toml::Table>::load(path) {
-                Ok(cfg) => Ok((
-                    format!(
-                        "consumer {connector_id:?} reads {} at {} and delivers to {}",
-                        cfg.egress_subject, cfg.nats_url, cfg.target
-                    ),
-                    Inputs {
-                        source_id: connector_id.clone(),
-                        nats_url: cfg.nats_url,
-                        producer: None,
-                        target: Some(cfg.target),
-                    },
-                )),
-                Err(e) => Err(Finding::fail("config", format!("{e:#}"), config_fix)),
-            }
-        }
-        (Role::Consumer { .. }, None) => Err(Finding::fail(
-            "config",
-            "a consumer is checked from its config file, and none was given",
-            "Check it through its instance: ajar-connectors check <connector-id>.",
-        )),
+        Role::Consumer { connector_id } => match common::EgressConfig::<toml::Table>::load(path) {
+            Ok(cfg) => Ok((
+                format!(
+                    "consumer {connector_id:?} reads {} at {} and delivers to {}",
+                    cfg.egress_subject, cfg.nats_url, cfg.target
+                ),
+                Inputs {
+                    source_id: connector_id.clone(),
+                    nats_url: cfg.nats_url,
+                    producer: None,
+                    target: Some(cfg.target),
+                },
+            )),
+            Err(e) => Err(Finding::fail("config", format!("{e:#}"), config_fix)),
+        },
     };
     let cfg = match resolved {
         Ok((detail, inputs)) => {
@@ -154,12 +140,7 @@ pub async fn run(opts: &Options) -> Vec<Finding> {
             check_spool(&mut out, producer);
             check_marking(&mut out, producer);
             transport::check(&mut out, producer.transport.as_ref(), opts.timeout);
-            check_registration(
-                &mut out,
-                &cfg,
-                opts.sources_dir.as_deref(),
-                verifying_hex.as_deref(),
-            );
+            check_registration(&mut out, &cfg, verifying_hex.as_deref());
         }
         None => {
             for step in [
@@ -237,43 +218,6 @@ pub async fn run(opts: &Options) -> Vec<Finding> {
     out
 }
 
-fn inputs_from_env() -> Result<(String, Inputs), Finding> {
-    let values = ENV_VARS.map(|name| std::env::var(name).ok().filter(|v| !v.trim().is_empty()));
-    let [Some(nats_url), Some(source_id), Some(signing_key_path)] = values.clone() else {
-        let missing: Vec<&str> = ENV_VARS
-            .iter()
-            .zip(&values)
-            .filter(|(_, v)| v.is_none())
-            .map(|(n, _)| *n)
-            .collect();
-        return Err(Finding::fail(
-            "config",
-            format!(
-                "no config file given and the environment is incomplete: {} not set",
-                missing.join(", ")
-            ),
-            "Either pass the connector's config file (ajar-doctor connector.toml) or export \
-             the three variables your embedded connector runs with: NATS_URL (the operator's \
-             endpoint), AJAR_SOURCE_ID (your registered source id) and AJAR_SIGNING_SEED \
-             (the path to your 32-byte seed file).",
-        ));
-    };
-    Ok((
-        format!("source {source_id:?} publishes to ajar.ingest.{source_id} at {nats_url}"),
-        Inputs {
-            source_id,
-            nats_url,
-            producer: Some(ProducerInputs {
-                signing_key_path,
-                spool: None,
-                marking: None,
-                transport: None,
-            }),
-            target: None,
-        },
-    ))
-}
-
 fn check_signing_key(out: &mut Vec<Finding>, cfg: &ProducerInputs) -> Option<String> {
     let key = match common::key::load(&cfg.signing_key_path) {
         Ok(k) => k,
@@ -283,8 +227,7 @@ fn check_signing_key(out: &mut Vec<Finding>, cfg: &ProducerInputs) -> Option<Str
                 format!("{e:#}"),
                 "The seed file must be exactly 32 raw bytes or 64 hex characters. If you have \
                  an OpenSSL-generated PEM, extract the seed as shown in the onboarding guide \
-                 (Keys section), or mint a fresh pair with `ajar-sink mint <source_id> <dir>` \
-                 and register the new .pub with your operator.",
+                 (Keys section), or ask the operator for a new invite.",
             ));
             return None;
         }
@@ -409,12 +352,7 @@ fn check_spool(out: &mut Vec<Finding>, cfg: &ProducerInputs) {
     }
 }
 
-fn check_registration(
-    out: &mut Vec<Finding>,
-    cfg: &Inputs,
-    sources_dir: Option<&str>,
-    derived: Option<&str>,
-) {
+fn check_registration(out: &mut Vec<Finding>, cfg: &Inputs, derived: Option<&str>) {
     let Some(derived) = derived else {
         out.push(Finding::skip(
             "registration",
@@ -422,77 +360,14 @@ fn check_registration(
         ));
         return;
     };
-    let Some(dir) = sources_dir else {
-        out.push(Finding::skip(
-            "registration",
-            format!(
-                "cannot be verified from this box. Ask your operator to confirm that source \
-                 {:?} is registered with exactly this public key: {derived}",
-                cfg.source_id
-            ),
-        ));
-        return;
-    };
-    let path = std::path::Path::new(dir).join(format!("{}.pub", cfg.source_id));
-    match std::fs::read_to_string(&path) {
-        Ok(registered) if registered.trim().to_ascii_lowercase() == derived => {
-            out.push(Finding::ok(
-                "registration",
-                format!("{} matches the loaded seed", path.display()),
-            ));
-        }
-        Ok(registered) => {
-            out.push(Finding::fail(
-                "registration",
-                format!(
-                    "{} holds {} but the seed derives {derived}",
-                    path.display(),
-                    registered.trim()
-                ),
-                "The sink will refuse every event as a signature failure. Either point \
-                 signing_key_path at the seed that belongs to the registered key, or \
-                 re-register: copy the new .pub into the sink's sources_dir (or re-run \
-                 `ajar-sink mint`) and restart the sink.",
-            ));
-        }
-        Err(_) => {
-            let registered: Vec<String> = std::fs::read_dir(dir)
-                .map(|entries| {
-                    entries
-                        .filter_map(|e| e.ok())
-                        .filter_map(|e| {
-                            let p = e.path();
-                            (p.extension().and_then(|x| x.to_str()) == Some("pub")).then(|| {
-                                p.file_stem()
-                                    .unwrap_or_default()
-                                    .to_string_lossy()
-                                    .into_owned()
-                            })
-                        })
-                        .collect()
-                })
-                .unwrap_or_default();
-            out.push(Finding::fail(
-                "registration",
-                format!(
-                    "no {}.pub in {dir} (registered there: {})",
-                    cfg.source_id,
-                    if registered.is_empty() {
-                        "nothing".to_string()
-                    } else {
-                        registered.join(", ")
-                    }
-                ),
-                format!(
-                    "This source is not registered, so the sink refuses its events as \
-                     \"unregistered source\". Register it: `ajar-sink mint {} {dir}` (or copy \
-                     an existing .pub there) and restart the sink. If one of the names listed \
-                     above was meant to be this connector, fix source_id in the config instead.",
-                    cfg.source_id
-                ),
-            ));
-        }
-    }
+    out.push(Finding::skip(
+        "registration",
+        format!(
+            "cannot be verified from this box. Ask your operator to confirm that source {:?} is \
+             registered with exactly this public key: {derived}",
+            cfg.source_id
+        ),
+    ));
 }
 
 async fn check_endpoint(
@@ -507,8 +382,8 @@ async fn check_endpoint(
                 "endpoint",
                 format!("nats_url {:?}: {e:#}", cfg.nats_url),
                 "nats_url must look like nats://host:4222 or tls://host:4222, with a \
-                 comma-separated list for failover. Use the exact endpoint(s) the \
-                 operator sent back in registration step 3.",
+                 comma-separated list for failover. Use the endpoint(s) in the operator's \
+                 invite.",
             ));
             return (None, None);
         }

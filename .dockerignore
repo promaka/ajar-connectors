@@ -18,4 +18,5 @@ vendor-crates
 *.pfx
 *.crt
 *.cer
-*.packet.tar
+*.invite
+*.request

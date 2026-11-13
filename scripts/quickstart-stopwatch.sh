@@ -20,9 +20,9 @@ trap 'pkill -P $$ 2>/dev/null || true; rm -rf "$WORK"' EXIT
 t0=$(date +%s)
 
 # README section 4, step 4: build the connector (plus the sink that stands in
-# for Core locally, and the doctor the troubleshooting section names).
+# for Core locally, and ajar-connectors for its check).
 cargo build --release --manifest-path rust/connectors/Cargo.toml \
-  -p ajar-ais-nmea -p ajar-sink -p ajar-doctor
+  -p ajar-ais-nmea -p ajar-sink -p ajar-connectors
 BIN=rust/connectors/target/release
 
 # Section 4, step 2: copy the example config; step 3: edit four values.
@@ -44,7 +44,7 @@ PY
 
 # Section 9 stand-in: a local broker and the sink registering the minted key.
 nats-server -p "$PORT" &>/dev/null &
-# Wait until the broker actually listens: the doctor runs next and rightly
+# Wait until the broker actually listens: the check runs next and rightly
 # fails on a port that does not answer (a race my machine won and CI lost).
 for _ in $(seq 1 100); do
   (exec 3<>"/dev/tcp/127.0.0.1/$PORT") 2>/dev/null && { exec 3>&-; break; }
@@ -60,8 +60,8 @@ SINK
 "$BIN/ajar-sink" run "$WORK/sink.toml" &>"$WORK/sink.log" &
 disown -a
 
-# Section 7f: the doctor signs off the setup before the connector runs.
-"$BIN/ajar-doctor" "$WORK/ais.toml" --sources-dir "$WORK/keys" --timeout-secs 5
+# Section 7f: the check signs off the setup before the connector runs.
+"$BIN/ajar-connectors" check --config "$WORK/ais.toml"
 
 # Run the connector and feed it one real AIS sentence over UDP.
 "$BIN/ajar-ais-nmea" "$WORK/ais.toml" &>"$WORK/connector.log" &

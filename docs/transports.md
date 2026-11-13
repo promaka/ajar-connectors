@@ -390,7 +390,7 @@ payload = "body"
 | `interface_ip` | unset | Use only the NIC holding this IP, for a box with the domain on one LAN |
 
 A mismatch in topic, type name or reliability produces silence, not an error.
-`ajar-doctor` says which it is. Only the default partition is joined.
+`ajar-connectors check` says which it is. Only the default partition is joined.
 
 CI runs this transport against ROS 2 Jazzy publishers of `std_msgs/String`, one on
 Fast DDS and one on Cyclone DDS.

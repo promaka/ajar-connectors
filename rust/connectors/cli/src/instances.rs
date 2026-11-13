@@ -171,8 +171,7 @@ impl Instance {
                     connector_id: c.connector_id.to_string(),
                 },
             },
-            config_path: Some(config_path.to_string_lossy().into_owned()),
-            sources_dir: None,
+            config_path: config_path.to_string_lossy().into_owned(),
             tls_files: Some(ajar_doctor::TlsFiles {
                 ca: path(InviteFile::CaCert),
                 cert: path(InviteFile::MtlsCert),

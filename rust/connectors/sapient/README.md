@@ -127,11 +127,11 @@ Shared keys the connector uses:
 **Entity types.** The `sapient:` types are not in the vendored MIM ontology.
 They are an operator-registered fragment, [`sapient.types.json`](sapient.types.json),
 parented to `mim:object`, `mim:sensor` and `mim:action`. The Core operator
-registers it once:
+registers it with the first invite:
 
 ```sh
-ajar onboard sapient-fusion-1 --mint --types sapient: --protocol sapient \
-  --type-spec sapient.types.json ...
+ajar invite sapient-fusion-1 --connector sapient --entities sapient: \
+  --entity-file sapient.types.json
 ```
 
 A site that has not registered the fragment sets `[options.types]` to MIM

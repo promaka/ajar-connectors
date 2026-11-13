@@ -7,7 +7,6 @@ members = [
     "doctor",
     "tooling",
     "cli",
-    "up",
     "tak-cot",
     "ais-nmea",
     "mavlink",

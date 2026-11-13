@@ -477,28 +477,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ajar-up"
-version = "0.6.7"
-dependencies = [
- "ajar-connector",
- "ajar-connector-common",
- "ajar-doctor",
- "anyhow",
- "async-nats",
- "ed25519-dalek",
- "futures-util",
- "hex",
- "prost",
- "serde",
- "serde_json",
- "sha2",
- "tar",
- "tempfile",
- "tokio",
- "toml",
-]
-
-[[package]]
 name = "android_system_properties"
 version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
