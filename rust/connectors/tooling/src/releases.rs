@@ -73,11 +73,6 @@ impl TarballName {
             platform: Platform::parse(&captures["platform"])?,
         })
     }
-
-    /// False for the tools released from this repository under the same naming.
-    pub fn is_connector_type(&self) -> bool {
-        !["connectors", "doctor", "up"].contains(&self.connector_type.as_str())
-    }
 }
 
 impl fmt::Display for TarballName {
@@ -130,7 +125,8 @@ impl GitHubRelease {
         })?;
         let release_tag = format!("{}-v{}", tarball.connector_type, tarball.version);
         if tarball.version < MIN_VERSION
-            || !tarball.is_connector_type()
+            || !tarball.version.pre.is_empty()
+            || tarball.connector_type.is_tool()
             || self.tag_name != release_tag
         {
             return None;
@@ -408,6 +404,10 @@ mod tests {
             (
                 "adsb-v0.6.7",
                 "ajar-adsb-0.6.7-aarch64-unknown-linux-gnu.tar.gz",
+            ),
+            (
+                "adsb-v1.0.0-rc.1",
+                "ajar-adsb-1.0.0-rc.1-x86_64-unknown-linux-gnu.tar.gz",
             ),
         ] {
             assert_eq!(online(release(tag, &[name])), None, "{name}");
