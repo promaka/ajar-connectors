@@ -38,7 +38,7 @@ authors = ["Ajar connectors contributors"]
 ajar-connector = { path = "../ajar-connector" }
 ajar-connector-common = { path = "common" }
 # jetstream: the spool drain advances only on a PubAck. No default features: they clash on `time`.
-async-nats = { version = "0.50", default-features = false, features = ["aws-lc-rs", "jetstream"] }
+async-nats = { version = "0.52", default-features = false, features = ["aws-lc-rs", "jetstream"] }
 ed25519-dalek = "3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "time", "signal", "io-util", "io-std", "fs", "process"] }
 bytes = "1"
@@ -77,5 +77,5 @@ semver = "1"
 reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "blocking", "json"] }
 quick-xml = "0.42"
 # Subject CN, SAN list, validity and public key, which rustls and rcgen do not expose.
-x509-parser = "0.17"
+x509-parser = "0.18"
 rcgen = { version = "0.14", default-features = false, features = ["aws_lc_rs", "pem"] }
