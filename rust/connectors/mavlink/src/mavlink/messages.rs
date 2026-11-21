@@ -36,6 +36,7 @@ pub(super) fn crc(data: &[u8], extra: u8) -> u16 {
 /// HEARTBEAT (0).
 pub(super) fn heartbeat(s: &mut VehicleState, p: &[u8]) {
     let base_mode = p[6];
+    s.mav_type = Some(p[4]);
     s.vehicle_type = vehicle_type(p[4]);
     s.status = mav_state(p[7]);
     // MAV_MODE_FLAG_SAFETY_ARMED

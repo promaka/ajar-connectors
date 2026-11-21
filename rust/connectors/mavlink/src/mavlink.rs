@@ -36,6 +36,7 @@ pub enum MavError {
 /// a message carries it.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct VehicleState {
+    pub mav_type: Option<u8>,
     pub vehicle_type: Option<&'static str>,
     pub status: Option<&'static str>,
     pub armed: Option<bool>,
@@ -326,6 +327,9 @@ impl MavParser {
             .metadata("source_uid", p.sysid.to_string())
             .metadata("mav_sysid", p.sysid.to_string())
             .identity("MAVLink", p.sysid.to_string());
+        if let Some(t) = s.mav_type {
+            b = b.metadata("mav_type", t.to_string());
+        }
         if p.truncated {
             b = b.metadata("payload_truncated", "true");
         }
@@ -524,6 +528,7 @@ mod tests {
         let ev = p.to_event_at(pos, OBSERVED).unwrap();
         assert_eq!(attr_of(&ev, "hostility"), Some("Friend"));
         assert_eq!(attr_of(&ev, "vehicle_type"), Some("multirotor"));
+        assert_eq!(meta_of(&ev, "mav_type"), Some("2"));
         assert_eq!(attr_of(&ev, "armed"), Some("true"));
     }
 
