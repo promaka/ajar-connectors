@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Contributing
 
-Thanks for helping build the Ajar connector SDK. 
+Thanks for helping build the Ajar connector SDK.
 
 ## Ground rules
 
