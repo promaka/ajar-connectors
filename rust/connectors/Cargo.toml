@@ -6,6 +6,7 @@ members = [
     "common",
     "doctor",
     "tooling",
+    "cli",
     "up",
     "tak-cot",
     "ais-nmea",
@@ -37,6 +38,7 @@ authors = ["Ajar connectors contributors"]
 [workspace.dependencies]
 ajar-connector = { path = "../ajar-connector" }
 ajar-connector-common = { path = "common" }
+ajar-tooling = { path = "tooling" }
 # jetstream: the spool drain advances only on a PubAck. No default features: they clash on `time`.
 async-nats = { version = "0.50", default-features = false, features = ["aws-lc-rs", "jetstream"] }
 ed25519-dalek = "3"
@@ -49,6 +51,7 @@ toml = "1.1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 anyhow = "1"
+clap = { version = "4", features = ["derive"] }
 thiserror = "2"
 tempfile = "3"
 hex = "0.4"
@@ -70,6 +73,7 @@ proptest = "1"
 uuid = "1"
 sha2 = "0.11"
 tar = "0.4"
+flate2 = "1"
 getrandom = "0.4"
 regex = "1"
 semver = "1"
