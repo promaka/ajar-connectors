@@ -87,7 +87,7 @@ dependencies = [
 
 [[package]]
 name = "ajar-connector-common"
-version = "0.6.6"
+version = "0.7.0"
 dependencies = [
  "ajar-connector",
  "anyhow",
@@ -99,7 +99,7 @@ dependencies = [
  "hex",
  "proptest",
  "rcgen",
- "reqwest 0.12.28",
+ "reqwest 0.13.5",
  "rumqttc",
  "rustdds",
  "rustls",
@@ -165,7 +165,7 @@ dependencies = [
 
 [[package]]
 name = "ajar-generic"
-version = "0.6.7"
+version = "0.7.0"
 dependencies = [
  "ajar-connector",
  "ajar-connector-common",
@@ -2631,6 +2631,7 @@ dependencies = [
  "rustls-platform-verifier",
  "serde",
  "serde_json",
+ "serde_urlencoded",
  "sync_wrapper",
  "tokio",
  "tokio-rustls",

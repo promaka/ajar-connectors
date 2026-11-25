@@ -22,6 +22,8 @@ pub mod dir;
 pub mod exec;
 pub mod file;
 pub mod health;
+#[cfg(all(test, feature = "oauth"))]
+mod http_mock;
 pub mod http_server;
 pub mod identity;
 pub mod key;
@@ -42,6 +44,8 @@ pub mod udp;
 pub mod dds;
 #[cfg(feature = "mqtt")]
 pub mod mqtt;
+#[cfg(feature = "oauth")]
+pub mod oauth;
 #[cfg(feature = "rest-poll")]
 pub mod rest;
 #[cfg(feature = "serial")]
@@ -50,13 +54,15 @@ pub mod serial;
 pub mod ws;
 
 /// Largest native frame the runtime reads. Most transports reject a longer
-/// frame, since half a record parses into a wrong event; `mqtt`, `rest-poll` and
-/// line-framed `file` truncate it.
+/// frame, since half a record parses into a wrong event; `mqtt` and line-framed
+/// `file` truncate it.
 pub const MAX_FRAME_BYTES: usize = 64 * 1024;
 
 pub use config::{Config, EgressConfig, Enrichment, Framing, SensorSite, SpoolSetting, Transport};
 #[cfg(feature = "dds")]
 pub use config::{DdsOptions, DdsPayload, DdsReliability};
+#[cfg(feature = "rest-poll")]
+pub use config::{HttpMethod, RestPollOptions};
 pub use identity::GovernedIdentity;
 pub use ontology::GovernedAttribute;
 pub use profile::Profile;
@@ -124,10 +130,6 @@ pub async fn open_source(transport: &Transport) -> anyhow::Result<Box<dyn FrameS
             headers,
         } => Box::new(ws::open(url, subscribe.clone(), headers)?),
         #[cfg(feature = "rest-poll")]
-        Transport::RestPoll {
-            url,
-            interval_secs,
-            auth_header,
-        } => Box::new(rest::open(url, *interval_secs, auth_header.as_deref())?),
+        Transport::RestPoll(opts) => Box::new(rest::open(opts)?),
     })
 }
