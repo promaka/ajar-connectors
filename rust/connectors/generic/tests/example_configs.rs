@@ -75,20 +75,13 @@ fn every_example_config_works_when_copied_verbatim() {
         if crate_name == "generic" {
             let mapping = Mapping::load(path.to_str().unwrap())
                 .unwrap_or_else(|e| panic!("{name}: mapping does not load: {e}"));
-            let declared = common::ontology::Declared {
-                entity_type: mapping.entity_type.clone(),
-                attributes: mapping.attributes.values().cloned().collect(),
-                fixed_values: cfg
-                    .default_hostility
-                    .clone()
-                    .map(|v| vec![("hostility".to_string(), v)])
-                    .unwrap_or_default(),
-            };
-            let faults = common::ontology::check(&declared);
-            assert!(
-                faults.is_empty(),
-                "{name}: the ontology would quarantine this mapping: {faults:?}"
-            );
+            for declared in mapping.declared(cfg.default_hostility.as_deref()) {
+                let faults = common::ontology::check(&declared);
+                assert!(
+                    faults.is_empty(),
+                    "{name}: the ontology would quarantine this mapping: {faults:?}"
+                );
+            }
         }
     }
 }

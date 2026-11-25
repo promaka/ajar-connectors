@@ -2,7 +2,7 @@
 [package]
 name = "ajar-connector-common"
 description = "Shared runtime for Ajar connectors: config, mTLS transport, seal-and-publish loop, health."
-version = "0.6.6"
+version = "0.7.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -18,7 +18,8 @@ required-features = ["dds"]
 # Opt-in to keep builds lean for air-gapped sites. dds is pure Rust, no C bindings.
 serial = ["dep:tokio-serial"]
 mqtt = ["dep:rumqttc"]
-rest-poll = ["dep:reqwest"]
+oauth = ["dep:reqwest"]
+rest-poll = ["oauth"]
 websocket = ["dep:tokio-tungstenite", "dep:futures-util"]
 dds = ["dep:rustdds", "dep:futures-util"]
 
@@ -34,7 +35,8 @@ toml.workspace = true
 tracing.workspace = true
 anyhow.workspace = true
 hex.workspace = true
-serde_json.workspace = true
+# raw_value keeps each record of a rest-poll response as the bytes it arrived as.
+serde_json = { workspace = true, features = ["raw_value"] }
 async-trait.workspace = true
 thiserror.workspace = true
 tokio-rustls.workspace = true
@@ -44,7 +46,7 @@ tokio-serial = { version = "5", optional = true }
 # The *-no-provider features keep aws-lc-rs the only rustls crypto provider.
 rumqttc = { version = "0.25", default-features = false, features = ["use-rustls-no-provider"], optional = true }
 rustdds = { version = "0.14", default-features = false, optional = true }
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-no-provider"], optional = true }
+reqwest = { workspace = true, features = ["form"], optional = true }
 futures-util = { workspace = true, optional = true }
 tokio-tungstenite = { version = "0.30", default-features = false, features = [
     "connect",

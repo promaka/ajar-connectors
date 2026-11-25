@@ -129,7 +129,7 @@ fn non_empty_env(name: &str) -> Option<String> {
 /// Install aws-lc-rs as the process-wide rustls crypto provider. rustls picks one
 /// from crate features only while exactly one is compiled in; with two, a TLS
 /// config fails to build before any I/O and the server sees only an EOF.
-fn install_crypto_provider() {
+pub(crate) fn install_crypto_provider() {
     static ONCE: std::sync::Once = std::sync::Once::new();
     ONCE.call_once(|| {
         if rustls::crypto::aws_lc_rs::default_provider()

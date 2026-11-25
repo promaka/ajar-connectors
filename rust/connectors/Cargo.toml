@@ -73,8 +73,8 @@ tar = "0.4"
 getrandom = "0.4"
 regex = "1"
 semver = "1"
-# Blocking, for the command-line tools. No provider: aws-lc-rs is installed at run time, as for async-nats.
-reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "blocking", "json"] }
+# No provider: aws-lc-rs is installed at run time, as for async-nats.
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "json"] }
 quick-xml = "0.42"
 # Subject CN, SAN list, validity and public key, which rustls and rcgen do not expose.
 x509-parser = "0.17"

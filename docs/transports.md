@@ -31,7 +31,7 @@ feature of `ajar-connector-common`.
 | `dds` | `dds` | Every ingress connector, by default. `--no-default-features` drops it |
 | `serial` | `serial` | `ajar-ais-nmea`, by default |
 | `mqtt` | `mqtt` | None |
-| `rest-poll` | `rest-poll` | None |
+| `rest-poll` | `rest-poll` | `ajar-generic`, by default |
 | `ws-client` | `websocket` | None |
 
 To add one to another connector, name the dependency's feature:
@@ -345,25 +345,54 @@ A message over the frame limit is dropped whole.
 
 ## `rest-poll`
 
-GET a URL on an interval. Each response body is one frame. A failed poll or an
-error status is logged and retried at the next interval.
+Request a URL on an interval: a GET, or a POST when `body` is set. Each
+response body is one frame or, with `records`, each element of a JSON array in
+the response is one frame. A failed poll or an error status is logged and
+retried at the next interval.
 
 ```toml
 [transport]
 kind = "rest-poll"
-url = "https://api.example.com/tracks"
+url = "https://api.example.com/tracks/query"
 interval_secs = 30
-auth_header = "Bearer <token>"
+body = '{"area":{"lat":60.0,"lon":10.0,"radius_m":100000}}'
+records = "/tracks"
+
+[transport.oauth]
+token_url = "https://auth.example.com/oauth2/token"
+client_id = "acme-tracks-1"
+client_secret_file = "/etc/ajar/acme-tracks-1.client-secret"
 ```
 
 | Key | Default | Meaning |
 |---|---|---|
 | `url` | | The URL |
 | `interval_secs` | `30` | Seconds between polls, at least 1. The first poll is immediate |
+| `body` | unset | Request body, sent as a POST with `application/json` |
 | `auth_header` | unset | `Authorization` header value |
+| `oauth` | unset | OAuth 2.0 client credentials, below. Exclusive with `auth_header` |
+| `records` | unset | Path to an array in the response: member names after `/`, as `"/data/tracks"`, or `""` for a top-level array |
 
-There is no pagination. A larger or paginated API needs a purpose-built
-connector.
+With `records`, each element becomes one frame with the exact bytes it had in
+the response, so the event payload holds that record and not the whole
+response. An element over the frame limit is dropped with a warning; the rest
+of the response is still delivered. Without `records`, a body over the frame
+limit is dropped.
+
+`oauth` fetches a bearer token with the client credentials grant, sending
+`client_id` and the secret in the form body. The token is reused until 30 s
+before its `expires_in`. A 401 from the API drops it, so the next poll fetches
+a new one.
+
+| `oauth` key | Default | Meaning |
+|---|---|---|
+| `token_url` | | The token endpoint |
+| `client_id` | | The client id |
+| `client_secret_file` | | A file holding the client secret on one line |
+| `scope` | unset | The `scope` to request |
+
+A request times out after 30 s, and a response over 16 MiB is refused. There is
+no pagination; a paginated API needs a purpose-built connector.
 
 ## `dds`
 

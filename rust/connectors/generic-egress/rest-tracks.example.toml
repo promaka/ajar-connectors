@@ -1,0 +1,45 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Governed tracks out of Ajar into a REST track API, in the API's own body shape, with OAuth.
+# Run by hand: ajar-generic-egress ./rest-tracks.toml
+
+# tls:// in production, with this consumer's subscribe-only identity in AJAR_TLS_*.
+nats_url = "tls://ajar.example.mil:4222"
+# Must start with ajar.egress.; the certificate decides what is actually seen.
+egress_subject = "ajar.egress.signed.>"
+# A file holding Core's egress verifying key as 64 hex characters: the invite's egress.pub.
+egress_verifying_key = "/etc/ajar/egress.pub"
+# One HTTP POST per event.
+target = "https://tracks.example.com/api/v1/tracks/update"
+
+# "${path}", "${path|number}" or "${path|text}" take event values; id, policy_tags and unmapped must be placed.
+template = '''
+{
+  "feed": "ajar",
+  "updates": [{
+    "action": "upsert",
+    "id": "${meta:source_uid}",
+    "name": "${attr:callsign}",
+    "position": {
+      "observed_at": "${timestamp}",
+      "lat": "${lat}",
+      "lon": "${lon}",
+      "alt_m": "${alt_m}",
+      "speed_mps": "${attr:speed|number}",
+      "course_deg": "${attr:course|number}"
+    },
+    "fields": [
+      {"id": "ajar.event_id", "value": "${id}"},
+      {"id": "ajar.entity_type", "value": "${entity_type}"},
+      {"id": "ajar.policy_tags", "value": "${policy_tags|text}"},
+      {"id": "ajar.unmapped", "value": "${unmapped|text}"}
+    ]
+  }]
+}
+'''
+
+[deliver.oauth]
+token_url = "https://auth.example.com/oauth2/token"
+client_id = "acme-tracks-out"
+# One line holding the client secret; keep it readable by the connector only.
+client_secret_file = "/etc/ajar/acme-tracks-out.client-secret"

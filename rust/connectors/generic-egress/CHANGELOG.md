@@ -9,8 +9,26 @@ CONTRIBUTING.md, "Releases").
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-25
+
+### Added
+
+- `template`: a JSON body in the consumer's own shape, with `"${path}"`
+  placeholders and `number` and `text` filters, as an alternative to
+  `[mapping]`. A template must place the event id, the policy tags and, unless
+  `unmapped = "refuse"`, the unmapped content.
+- `[deliver.oauth]`: OAuth 2.0 client credentials for the consumer's API, with
+  the token refreshed before it expires and after a 401.
+- `rest-tracks.example.toml`.
+
+### Fixed
+
+- HTTPS targets work: the HTTP client trusts the operating system's root
+  certificates, where it trusted none and every TLS handshake failed.
+
 ### Changed
 
+- The last failed delivery attempt is not followed by a wait.
 - Breaking: the config uses the shape every egress connector shares, which
   `ajar-connectors join` writes. `subject` is renamed `egress_subject`,
   `[deliver] url` moves to the top-level `target`, and `egress_verifying_key`

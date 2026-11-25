@@ -36,8 +36,8 @@ with a Core that accepts `v1`.
 | [`ajar-sapient-egress`](rust/connectors/sapient-egress) | Counter-UAS: SAPIENT egress | [0.6.7](https://github.com/promaka/ajar-connectors/releases/tag/sapient-egress-v0.6.7) | `ajar-connector-sapient-egress` |
 | [`ajar-tak-cot`](rust/connectors/tak-cot) | C2: TAK / Cursor-on-Target ingress | [0.6.7](https://github.com/promaka/ajar-connectors/releases/tag/tak-cot-v0.6.7) | `ajar-connector-tak-cot` |
 | [`ajar-tak-egress`](rust/connectors/tak-egress) | C2: CoT egress to a TAK Server | [0.6.7](https://github.com/promaka/ajar-connectors/releases/tag/tak-egress-v0.6.7) | `ajar-connector-tak-egress` |
-| [`ajar-generic`](rust/connectors/generic) | Any JSON, CSV or NMEA-like feed, by config | [0.6.7](https://github.com/promaka/ajar-connectors/releases/tag/generic-v0.6.7) | `ajar-connector-generic` |
-| [`ajar-generic-egress`](rust/connectors/generic-egress) | Governed events out as JSON over HTTP | [0.6.7](https://github.com/promaka/ajar-connectors/releases/tag/generic-egress-v0.6.7) | `ajar-connector-generic-egress` |
+| [`ajar-generic`](rust/connectors/generic) | Any JSON, CSV or NMEA-like feed, by config | [0.7.0](https://github.com/promaka/ajar-connectors/releases/tag/generic-v0.7.0) | `ajar-connector-generic` |
+| [`ajar-generic-egress`](rust/connectors/generic-egress) | Governed events out as JSON over HTTP | [0.7.0](https://github.com/promaka/ajar-connectors/releases/tag/generic-egress-v0.7.0) | `ajar-connector-generic-egress` |
 | [`ajar-feed-synthetic`](rust/connectors/feed-synthetic) | Test feed: one scenario on every wire format | [0.6.7](https://github.com/promaka/ajar-connectors/releases/tag/feed-synthetic-v0.6.7) | `ajar-connector-feed-synthetic` |
 | [`synthetic-radar`](rust/examples/synthetic-radar) | Test feed: synthetic air tracks | [0.6.7](https://github.com/promaka/ajar-connectors/releases/tag/synthetic-radar-v0.6.7) | `ajar-connector-synthetic-radar` |
 | [`ajar-doctor`](rust/connectors/doctor) | Tool: preflight diagnostics | [0.6.7](https://github.com/promaka/ajar-connectors/releases/tag/doctor-v0.6.7) | `ajar-connector-doctor` |
@@ -233,8 +233,9 @@ operator's profile gating decides whether it is ever started.
 Any feed without a dedicated connector, mapped to canonical events in configuration
 rather than in code. Suits vendor REST and JSON APIs, national C2 exports, IoT and
 sensor buses, and scheduled CSV drops: anything emitting line-delimited JSON, CSV or
-a simple record format. Runs on an HTTP poll, MQTT, a watched directory, a tailed
-file, stdin or exec.
+a simple record format. Nested JSON is reached with JSON pointers, and a feed's own
+codes are translated by value tables. Runs on an HTTP poll (GET or POST, with OAuth
+client credentials), MQTT, a watched directory, a tailed file, stdin or exec.
 
 ## Choosing quickly
 

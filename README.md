@@ -833,7 +833,7 @@ limit is in [docs/transports.md](docs/transports.md).
 | `pcap-replay` | recorded capture | replays a .pcap with original timing - evaluate on real recordings |
 | `serial` | RS-232/422/485 | shipped in `ajar-ais-nmea`; other connectors build with the `serial` feature |
 | `mqtt` | subscribe a topic | needs the `mqtt` feature (IoT buses) |
-| `rest-poll` | HTTP GET on interval | needs the `rest-poll` feature (pull-only APIs) |
+| `rest-poll` | HTTP GET or POST on interval, optional OAuth | in `ajar-generic`; others need the `rest-poll` feature (pull-only APIs) |
 | `ws-client` | WebSocket, connect out | needs the `websocket` feature; hosted live feeds, subscription message and auth headers supported |
 | `dds` | subscribe a DDS topic | shipped in every ingress connector; the bus inside naval combat systems and under ROS 2; a lean build is `--no-default-features` |
 

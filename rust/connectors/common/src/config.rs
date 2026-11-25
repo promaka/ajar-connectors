@@ -62,6 +62,11 @@ impl Config {
         })?;
         cfg.marking()
             .map_err(|e| anyhow::anyhow!("parsing config {path}: {e}"))?;
+        #[cfg(feature = "rest-poll")]
+        if let Transport::RestPoll(opts) = &cfg.transport {
+            opts.validate()
+                .with_context(|| format!("parsing config {path}"))?;
+        }
         Ok(cfg)
     }
 
@@ -233,6 +238,39 @@ fn default_interval() -> u64 {
     30
 }
 
+#[cfg(feature = "rest-poll")]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RestPollOptions {
+    pub url: String,
+    #[serde(default = "default_interval")]
+    pub interval_secs: u64,
+    #[serde(default)]
+    pub body: Option<String>,
+    /// `Authorization` header value.
+    #[serde(default)]
+    pub auth_header: Option<String>,
+    #[serde(default)]
+    pub oauth: Option<crate::oauth::OAuthClient>,
+    #[serde(default)]
+    pub records: Option<String>,
+}
+
+#[cfg(feature = "rest-poll")]
+impl RestPollOptions {
+    fn validate(&self) -> anyhow::Result<()> {
+        if self.auth_header.is_some() && self.oauth.is_some() {
+            anyhow::bail!("transport.auth_header and transport.oauth are exclusive");
+        }
+        if let Some(path) = self.records.as_deref().filter(|p| !p.is_empty()) {
+            if !path.starts_with('/') {
+                anyhow::bail!("transport.records {path:?} must be empty or start with '/'");
+            }
+        }
+        Ok(())
+    }
+}
+
 /// How a native feed reaches the connector, selected by `kind` in the
 /// `[transport]` table. The feature-gated kinds need the matching Cargo feature.
 #[derive(Debug, Clone, Deserialize)]
@@ -345,16 +383,9 @@ pub enum Transport {
         #[serde(default)]
         headers: HashMap<String, String>,
     },
-    /// GET a URL on an interval; each response body is one frame.
+    /// Request a URL on an interval; each response, or each record in it, is one frame.
     #[cfg(feature = "rest-poll")]
-    RestPoll {
-        url: String,
-        #[serde(default = "default_interval")]
-        interval_secs: u64,
-        /// `Authorization` header value.
-        #[serde(default)]
-        auth_header: Option<String>,
-    },
+    RestPoll(RestPollOptions),
 }
 
 /// How a byte stream is split into frames.
@@ -655,6 +686,51 @@ mod tests {
                 .as_deref(),
             Some("did you mean the field `source_id`?")
         );
+    }
+
+    #[cfg(feature = "rest-poll")]
+    fn rest_poll(transport: &str) -> anyhow::Result<Config> {
+        load(&format!(
+            "source_id = \"x\"\nnats_url = \"nats://h:4222\"\nsigning_key_path = \"k\"\n\
+             [transport]\nkind = \"rest-poll\"\nurl = \"https://api.example.com/q\"\n{transport}"
+        ))
+    }
+
+    #[cfg(feature = "rest-poll")]
+    #[test]
+    fn rest_poll_body_oauth_and_records_load() {
+        let cfg = rest_poll(
+            "body = '{}'\nrecords = \"/tracks\"\n\
+             [transport.oauth]\ntoken_url = \"https://auth.example.com/token\"\n\
+             client_id = \"radar-1\"\nclient_secret_file = \"/etc/ajar/radar-1.secret\"",
+        )
+        .unwrap();
+        let Transport::RestPoll(opts) = cfg.transport else {
+            panic!("not rest-poll");
+        };
+        assert_eq!(opts.records.as_deref(), Some("/tracks"));
+        assert_eq!(opts.oauth.unwrap().client_id, "radar-1");
+    }
+
+    #[cfg(feature = "rest-poll")]
+    #[test]
+    fn rest_poll_takes_one_kind_of_auth() {
+        let err = format!(
+            "{:#}",
+            rest_poll(
+                "auth_header = \"Bearer x\"\n[transport.oauth]\ntoken_url = \"t\"\n\
+                 client_id = \"c\"\nclient_secret_file = \"f\""
+            )
+            .unwrap_err()
+        );
+        assert!(err.contains("exclusive"), "{err}");
+    }
+
+    #[cfg(feature = "rest-poll")]
+    #[test]
+    fn rest_poll_relative_records_pointer_is_refused() {
+        let err = format!("{:#}", rest_poll("records = \"tracks\"").unwrap_err());
+        assert!(err.contains("start with '/'"), "{err}");
     }
 
     #[test]

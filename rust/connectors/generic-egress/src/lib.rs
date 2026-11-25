@@ -2,12 +2,13 @@
 //! Governed events out of Ajar, as consumer-shaped JSON over HTTP.
 //!
 //! Per event: verify Core's egress signature, decode, dedupe on the event id,
-//! render through the field mapping, deliver. An envelope that does not verify
+//! render through the field mapping or body template, deliver. An envelope that does not verify
 //! under the egress key is counted and dropped.
 
 pub mod config;
 pub mod label;
 pub mod map;
+pub mod template;
 
 use std::collections::{HashSet, VecDeque};
 use std::sync::atomic::AtomicU64;

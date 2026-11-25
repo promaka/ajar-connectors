@@ -2,10 +2,12 @@
 //! The config-driven parser: one JSON object or CSV row per frame, mapped to one
 //! event by a [`Mapping`].
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 
 use ajar_connector::{BuildError, Event, EventBuilder};
 use ajar_connector_common::{Enrichment, FrameParser, ParseError};
+use serde_json::Value;
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
@@ -25,6 +27,25 @@ pub enum GenericError {
     Build(#[from] BuildError),
 }
 
+enum Record {
+    Json(Value),
+    Csv(BTreeMap<String, String>),
+}
+
+impl Record {
+    /// A field's value as text: a JSON key, a JSON pointer starting with `/`, or a CSV column.
+    fn get(&self, field: &str) -> Option<Cow<'_, str>> {
+        match self {
+            Record::Json(value) => match field.starts_with('/') {
+                true => value.pointer(field),
+                false => value.get(field),
+            }
+            .map(json_text),
+            Record::Csv(columns) => columns.get(field).map(|v| Cow::Borrowed(v.as_str())),
+        }
+    }
+}
+
 pub struct GenericParser {
     source_id: String,
     mapping: Mapping,
@@ -40,28 +61,28 @@ impl GenericParser {
         }
     }
 
-    /// The frame as `field -> value`, every value a string.
-    fn record(&self, frame: &[u8]) -> Result<BTreeMap<String, String>, GenericError> {
+    fn record(&self, frame: &[u8]) -> Result<Record, GenericError> {
         let text =
             std::str::from_utf8(frame).map_err(|_| GenericError::Decode("not UTF-8".into()))?;
         match self.mapping.format {
             Format::Json => {
-                let value: serde_json::Value = serde_json::from_str(text.trim())
+                let value: Value = serde_json::from_str(text.trim())
                     .map_err(|e| GenericError::Decode(e.to_string()))?;
-                let serde_json::Value::Object(obj) = value else {
+                if !value.is_object() {
                     return Err(GenericError::Decode("expected a JSON object".into()));
-                };
-                Ok(obj.into_iter().map(|(k, v)| (k, json_scalar(v))).collect())
+                }
+                Ok(Record::Json(value))
             }
             Format::Csv => {
                 let parts = text.trim().split(&self.mapping.delimiter);
-                Ok(self
-                    .mapping
-                    .columns
-                    .iter()
-                    .cloned()
-                    .zip(parts.map(|p| p.trim().to_string()))
-                    .collect())
+                Ok(Record::Csv(
+                    self.mapping
+                        .columns
+                        .iter()
+                        .cloned()
+                        .zip(parts.map(|p| p.trim().to_string()))
+                        .collect(),
+                ))
             }
         }
     }
@@ -70,7 +91,13 @@ impl GenericParser {
         let rec = self.record(frame)?;
         let m = &self.mapping;
 
-        let mut b = EventBuilder::new(self.source_id.clone(), m.entity_type.clone())
+        let entity_type = m
+            .entity_type_field
+            .as_ref()
+            .and_then(|field| rec.get(field))
+            .and_then(|value| m.entity_types.get(value.as_ref()))
+            .unwrap_or(&m.entity_type);
+        let mut b = EventBuilder::new(self.source_id.clone(), entity_type.clone())
             .new_id()
             .payload(frame.to_vec());
 
@@ -79,7 +106,7 @@ impl GenericParser {
                 let raw = rec
                     .get(field)
                     .ok_or_else(|| GenericError::Missing(field.clone()))?;
-                b.timestamp(to_rfc3339(raw, m.timestamp_format)?)
+                b.timestamp(to_rfc3339(&raw, m.timestamp_format)?)
             }
             None => b.now(),
         };
@@ -120,13 +147,20 @@ impl GenericParser {
         }
 
         for (src, key) in &m.attributes {
-            if let Some(v) = rec.get(src) {
-                b = b.attribute(key.as_str(), v.as_str());
+            let Some(raw) = rec.get(src) else {
+                continue;
+            };
+            let value = match m.values.get(key) {
+                Some(table) => table.get(raw.as_ref()).map(String::as_str),
+                None => Some(raw.as_ref()),
+            };
+            if let Some(value) = value {
+                b = b.attribute(key.as_str(), value);
             }
         }
         for (src, key) in &m.metadata {
             if let Some(v) = rec.get(src) {
-                b = b.metadata(key.as_str(), v.as_str());
+                b = b.metadata(key.as_str(), v.as_ref());
             }
         }
 
@@ -141,13 +175,11 @@ impl FrameParser for GenericParser {
 }
 
 /// Strings unquoted, null empty, arrays and objects as JSON text.
-fn json_scalar(v: serde_json::Value) -> String {
+fn json_text(v: &Value) -> Cow<'_, str> {
     match v {
-        serde_json::Value::String(s) => s,
-        serde_json::Value::Null => String::new(),
-        serde_json::Value::Bool(b) => b.to_string(),
-        serde_json::Value::Number(n) => n.to_string(),
-        other => other.to_string(),
+        Value::String(s) => Cow::Borrowed(s),
+        Value::Null => Cow::Borrowed(""),
+        other => Cow::Owned(other.to_string()),
     }
 }
 
@@ -267,6 +299,133 @@ mod tests {
             .metadata
             .iter()
             .any(|m| m.key == "hull" && m.value == "HULL7"));
+    }
+
+    fn track_mapping() -> Mapping {
+        mapping(
+            r#"
+            [mapping]
+            format = "json"
+            entity_type = "mim:object"
+            entity_type_field = "/kind"
+            timestamp_field = "/position/time"
+            lat_field = "/position/lat"
+            lon_field = "/position/lon"
+            [mapping.entity_types]
+            AIR = "mim:aircraft"
+            [mapping.attributes]
+            "/affiliation" = "hostility"
+            [mapping.values.hostility]
+            H = "Hostile"
+            F = "Friend"
+            [mapping.metadata]
+            "/ref/id" = "source_uid"
+            "/affiliation" = "affiliation_code"
+            "#,
+        )
+    }
+
+    fn track(kind: &str, affiliation: &str) -> Event {
+        let frame = format!(
+            r#"{{"kind":"{kind}","affiliation":"{affiliation}","ref":{{"id":"T-7"}},
+               "position":{{"time":"2026-06-10T08:00:00Z","lat":60.1,"lon":10.2}}}}"#
+        );
+        GenericParser::new("gen-1", track_mapping(), Enrichment::default())
+            .to_event(frame.as_bytes())
+            .unwrap()
+    }
+
+    fn attribute<'e>(ev: &'e Event, key: &str) -> Option<&'e str> {
+        ev.attributes
+            .iter()
+            .find(|a| a.key == key)
+            .map(|a| a.value.as_str())
+    }
+
+    #[test]
+    fn json_pointers_reach_nested_fields() {
+        let ev = track("AIR", "H");
+        assert_eq!(ev.timestamp, "2026-06-10T08:00:00Z");
+        assert_eq!(ev.location.as_ref().unwrap().longitude, 10.2);
+        assert!(ev
+            .metadata
+            .iter()
+            .any(|m| m.key == "source_uid" && m.value == "T-7"));
+    }
+
+    #[test]
+    fn value_table_translates_an_attribute() {
+        let ev = track("AIR", "H");
+        assert_eq!(attribute(&ev, "hostility"), Some("Hostile"));
+        assert!(
+            ev.metadata
+                .iter()
+                .any(|m| m.key == "affiliation_code" && m.value == "H"),
+            "metadata keeps the native code"
+        );
+    }
+
+    #[test]
+    fn value_missing_from_its_table_emits_no_attribute() {
+        assert_eq!(attribute(&track("AIR", "Q"), "hostility"), None);
+    }
+
+    #[test]
+    fn entity_type_follows_the_type_field() {
+        assert_eq!(track("AIR", "F").entity_type, "mim:aircraft");
+        assert_eq!(track("SURFACE", "F").entity_type, "mim:object");
+    }
+
+    #[test]
+    fn declared_covers_every_entity_type() {
+        let declared = track_mapping().declared(None);
+        let types: Vec<&str> = declared.iter().map(|d| d.entity_type.as_str()).collect();
+        assert_eq!(types, ["mim:object", "mim:aircraft"]);
+    }
+
+    #[test]
+    fn declared_checks_table_values_and_default_hostility() {
+        let fixed = &track_mapping().declared(Some("Unknown"))[0].fixed_values;
+        assert!(fixed.contains(&("hostility".into(), "Hostile".into())));
+        assert!(fixed.contains(&("hostility".into(), "Unknown".into())));
+    }
+
+    #[test]
+    fn json_pointer_in_a_csv_mapping_is_refused() {
+        let mut m = track_mapping();
+        m.format = Format::Csv;
+        m.columns = vec!["kind".into()];
+        let err = m.validate().unwrap_err().to_string();
+        assert!(err.contains("CSV mapping"), "{err}");
+    }
+
+    #[test]
+    fn value_table_for_an_unmapped_attribute_is_refused() {
+        let mut m = track_mapping();
+        m.values.insert("speed".into(), BTreeMap::new());
+        let err = m.validate().unwrap_err().to_string();
+        assert!(err.contains("[mapping.values.speed]"), "{err}");
+    }
+
+    #[test]
+    fn type_field_without_a_table_is_refused() {
+        let mut m = track_mapping();
+        m.entity_types.clear();
+        assert!(m.validate().is_err());
+    }
+
+    #[test]
+    fn unknown_mapping_key_is_refused() {
+        #[derive(Debug, serde::Deserialize)]
+        #[allow(dead_code)] // only parsed
+        struct W {
+            mapping: Mapping,
+        }
+        let err = toml::from_str::<W>(
+            "[mapping]\nformat = \"json\"\nentity_type = \"mim:object\"\nlat = \"y\"",
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("unknown field `lat`"), "{err}");
     }
 
     #[test]

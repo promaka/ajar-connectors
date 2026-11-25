@@ -34,7 +34,7 @@ pub fn validate_path(path: &str) -> anyhow::Result<()> {
     )
 }
 
-fn lookup(event: &Event, path: &str) -> Option<Value> {
+pub(crate) fn lookup(event: &Event, path: &str) -> Option<Value> {
     if let Some(name) = path.strip_prefix("attr:") {
         return event
             .attributes
@@ -123,42 +123,51 @@ pub fn render(
         }
     }
 
-    let mut extra_attrs = Map::new();
-    for a in &event.attributes {
-        let name = a.key.as_str();
-        if !mapped_paths
-            .iter()
-            .any(|p| p.strip_prefix("attr:") == Some(name))
-        {
-            extra_attrs.insert(a.key.clone(), Value::String(a.value.clone()));
-        }
-    }
-    let mut extra_meta = Map::new();
-    for m in &event.metadata {
-        let name = m.key.as_str();
-        if !mapped_paths
-            .iter()
-            .any(|p| p.strip_prefix("meta:") == Some(name))
-        {
-            extra_meta.insert(m.key.clone(), Value::String(m.value.clone()));
-        }
-    }
-    if !extra_attrs.is_empty() || !extra_meta.is_empty() {
+    if let Some(extra) = unmapped_content(event, &mapped_paths) {
         match unmapped {
             Unmapped::Refuse => return None,
             Unmapped::Include => {
-                let mut u = Map::new();
-                if !extra_attrs.is_empty() {
-                    u.insert("attributes".into(), Value::Object(extra_attrs));
-                }
-                if !extra_meta.is_empty() {
-                    u.insert("metadata".into(), Value::Object(extra_meta));
-                }
-                out.insert("unmapped".into(), Value::Object(u));
+                out.insert("unmapped".into(), Value::Object(extra));
             }
         }
     }
     Some(Value::Object(out))
+}
+
+/// The attributes and metadata no mapped path names, as `{"attributes": {..}, "metadata": {..}}`
+/// with empty halves left out, or `None` when there are none.
+pub(crate) fn unmapped_content<S: AsRef<str>>(
+    event: &Event,
+    mapped_paths: &[S],
+) -> Option<Map<String, Value>> {
+    let named = |prefix: &str, key: &str| {
+        mapped_paths
+            .iter()
+            .any(|p| p.as_ref().strip_prefix(prefix) == Some(key))
+    };
+    let extra_attrs: Map<String, Value> = event
+        .attributes
+        .iter()
+        .filter(|a| !named("attr:", &a.key))
+        .map(|a| (a.key.clone(), Value::String(a.value.clone())))
+        .collect();
+    let extra_meta: Map<String, Value> = event
+        .metadata
+        .iter()
+        .filter(|m| !named("meta:", &m.key))
+        .map(|m| (m.key.clone(), Value::String(m.value.clone())))
+        .collect();
+    if extra_attrs.is_empty() && extra_meta.is_empty() {
+        return None;
+    }
+    let mut u = Map::new();
+    if !extra_attrs.is_empty() {
+        u.insert("attributes".into(), Value::Object(extra_attrs));
+    }
+    if !extra_meta.is_empty() {
+        u.insert("metadata".into(), Value::Object(extra_meta));
+    }
+    Some(u)
 }
 
 #[cfg(test)]

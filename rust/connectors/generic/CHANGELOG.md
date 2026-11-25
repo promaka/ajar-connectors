@@ -9,6 +9,26 @@ CONTRIBUTING.md, "Releases").
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-25
+
+### Added
+
+- JSON pointers (RFC 6901) as field settings, so nested fields such as
+  `"/position/lat"` can be mapped.
+- `[mapping.values.<attribute>]` tables that translate a feed's codes into an
+  attribute's vocabulary. Table values are checked against the ontology at startup.
+- `entity_type_field` with `[mapping.entity_types]`, so one feed can emit
+  several entity types; `entity_type` is the fallback.
+- The `rest-poll` transport is built in by default, with POST bodies, OAuth
+  client credentials and `records` to split a JSON array response into one
+  frame per record. The binary grows by about 1.7 MB; `--no-default-features`
+  leaves it out.
+- `rest-tracks.example.toml`.
+
+### Changed
+
+- An unknown key in `[mapping]` is refused at startup instead of ignored.
+
 ## [0.6.7] - 2026-11-02
 
 ### Changed

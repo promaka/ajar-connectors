@@ -1,0 +1,59 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Config-driven ingress: a track picture polled from a REST API with an OAuth client.
+# Run: ajar-generic ./rest-tracks.toml
+
+source_id = "acme-tracks-1"
+nats_url = "nats://127.0.0.1:4222"
+subject_prefix = "ajar.ingest"
+signing_key_path = "/etc/ajar/acme-tracks-1.seed"
+
+[transport]
+kind = "rest-poll"
+url = "https://tracks.example.com/api/v1/tracks/query"
+interval_secs = 10
+# Sent as a JSON POST on every poll; without it the poll is a GET.
+body = '{"area":{"lat":60.0,"lon":10.0,"radius_m":100000}}'
+# The array in the response whose elements are the records.
+records = "/tracks"
+
+[transport.oauth]
+token_url = "https://auth.example.com/oauth2/token"
+client_id = "acme-tracks-1"
+# One line holding the client secret; keep it readable by the connector only.
+client_secret_file = "/etc/ajar/acme-tracks-1.client-secret"
+
+[mapping]
+format = "json"
+# For a category with no entry under [mapping.entity_types].
+entity_type = "mim:object"
+entity_type_field = "/category"
+timestamp_field = "/position/observed_at"
+lat_field = "/position/lat"
+lon_field = "/position/lon"
+alt_field = "/position/alt_m"
+
+# Record value = entity type.
+[mapping.entity_types]
+AIR = "mim:aircraft"
+SURFACE = "mim:surface-vessel"
+LAND = "mim:land-vehicle"
+
+# Record field or JSON pointer = Ajar attribute key; values must be in the declared unit.
+[mapping.attributes]
+"/affiliation" = "hostility"
+"/position/course_deg" = "course"
+"/position/speed_mps" = "speed"
+
+# Record value = attribute value; a value not listed emits no attribute.
+[mapping.values.hostility]
+F = "Friend"
+H = "Hostile"
+N = "Neutral"
+U = "Unknown"
+
+# Record field or JSON pointer = metadata key; native identifiers go here.
+[mapping.metadata]
+"/id" = "source_uid"
+"/name" = "track_name"
+"/affiliation" = "affiliation_code"
