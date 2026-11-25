@@ -7,9 +7,14 @@
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
-use ajar_generic_egress::{map, Dedupe, EgressMetrics, DEDUPE_WINDOW};
+use ajar_connector_common::oauth::TokenSource;
+use ajar_generic_egress::config::Deliver;
+use ajar_generic_egress::{Dedupe, EgressMetrics, DEDUPE_WINDOW};
 use anyhow::Context;
 use futures_util::StreamExt;
+use reqwest::header::AUTHORIZATION;
+use reqwest::StatusCode;
+use serde_json::Value;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -28,7 +33,7 @@ async fn main() -> anyhow::Result<()> {
         .find(|a| !a.starts_with("--"))
         .cloned()
         .unwrap_or_else(|| "generic-egress.toml".to_string());
-    let cfg =
+    let (cfg, body_shape) =
         ajar_generic_egress::config::load(&path).with_context(|| format!("loading {path}"))?;
 
     let key = match cfg.verifying_key() {
@@ -53,6 +58,14 @@ async fn main() -> anyhow::Result<()> {
     let http = reqwest::Client::builder()
         .timeout(Duration::from_secs(10))
         .build()?;
+    let mut tokens = cfg
+        .connector
+        .deliver
+        .oauth
+        .clone()
+        .map(|client| TokenSource::new(http.clone(), client))
+        .transpose()
+        .context("deliver.oauth")?;
     let mut dedupe = Dedupe::new(DEDUPE_WINDOW);
     let mut received = 0u64;
     let mut heartbeat = tokio::time::interval(Duration::from_secs(15));
@@ -83,9 +96,8 @@ async fn main() -> anyhow::Result<()> {
                     metrics.deduped.fetch_add(1, Ordering::Relaxed);
                     continue;
                 }
-                let Some(body) = map::render(
+                let Some(body) = body_shape.render(
                     &event,
-                    &cfg.connector.mapping.fields,
                     cfg.connector.unmapped,
                     cfg.connector.confidentiality_label.as_ref(),
                 ) else {
@@ -100,22 +112,14 @@ async fn main() -> anyhow::Result<()> {
                     continue;
                 }
 
-                let mut delivered = false;
-                for attempt in 0..cfg.connector.deliver.attempts {
-                    let mut req = http.post(&cfg.target).json(&body);
-                    for (k, v) in &cfg.connector.deliver.headers {
-                        req = req.header(k, v);
-                    }
-                    match req.send().await {
-                        Ok(resp) if resp.status().is_success() => {
-                            delivered = true;
-                            break;
-                        }
-                        Ok(resp) => tracing::warn!(status = %resp.status(), attempt, "consumer refused"),
-                        Err(e) => tracing::warn!(error = %e, attempt, "delivery failed"),
-                    }
-                    tokio::time::sleep(Duration::from_millis(500 * (attempt as u64 + 1))).await;
-                }
+                let delivered = deliver(
+                    &http,
+                    &cfg.target,
+                    &cfg.connector.deliver,
+                    tokens.as_mut(),
+                    &body,
+                )
+                .await;
                 if delivered {
                     metrics.delivered.fetch_add(1, Ordering::Relaxed);
                 } else {
@@ -135,4 +139,45 @@ async fn main() -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+/// POSTs one body, retrying up to `deliver.attempts` times; true once the consumer answers 2xx.
+async fn deliver(
+    http: &reqwest::Client,
+    target: &str,
+    deliver: &Deliver,
+    mut tokens: Option<&mut TokenSource>,
+    body: &Value,
+) -> bool {
+    for attempt in 0..deliver.attempts {
+        if attempt > 0 {
+            tokio::time::sleep(Duration::from_millis(500 * u64::from(attempt))).await;
+        }
+        let mut req = http.post(target).json(body);
+        for (k, v) in &deliver.headers {
+            req = req.header(k, v);
+        }
+        if let Some(tokens) = tokens.as_deref_mut() {
+            match tokens.authorization().await {
+                Ok(value) => req = req.header(AUTHORIZATION, value),
+                Err(e) => {
+                    tracing::warn!(error = %e, attempt, "oauth token fetch failed");
+                    continue;
+                }
+            }
+        }
+        match req.send().await {
+            Ok(resp) if resp.status().is_success() => return true,
+            Ok(resp) => {
+                if resp.status() == StatusCode::UNAUTHORIZED {
+                    if let Some(tokens) = tokens.as_deref_mut() {
+                        tokens.invalidate();
+                    }
+                }
+                tracing::warn!(status = %resp.status(), attempt, "consumer refused");
+            }
+            Err(e) => tracing::warn!(error = %e, attempt, "delivery failed"),
+        }
+    }
+    false
 }

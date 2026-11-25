@@ -2,9 +2,10 @@
 # ajar-generic-egress
 
 Egress connector from Ajar Core to an HTTP endpoint. It subscribes to governed
-events on NATS, verifies Core's egress signature, renders each event as one JSON
-object in the consumer's field names, and POSTs it. It is the egress counterpart
-of [`ajar-generic`](../generic): a mapping, no code.
+events on NATS, verifies Core's egress signature, renders each event as JSON in
+the consumer's field names or in the consumer's own body shape, and POSTs it.
+It is the egress counterpart of [`ajar-generic`](../generic): configuration, no
+code.
 
 ```
 Core ──▶ ajar.egress.<format>.<source> ──▶ verify egress signature ──▶ map ──▶ HTTP POST
@@ -31,8 +32,13 @@ envelope is in Ajar's audit chain.
 
 ## Output
 
-One HTTP POST per event, with one JSON object as body, to `target`. A 2xx
-response is a delivery. The object holds:
+One HTTP POST per event to `target`. A 2xx response is a delivery. The body is
+a flat object built from `[mapping]`, or the consumer's own shape built from a
+`template`.
+
+### Mapping
+
+The object holds:
 
 - each `[mapping]` field, `consumer_name = "path"`. A path absent from the event
   is left out of the object, not sent as null.
@@ -63,7 +69,35 @@ The event payload is never delivered. Core fields the mapping does not name
 (location, timestamp, source, entity type, confidence) are left out; only
 attributes and metadata fall under `unmapped`.
 
-**Confidentiality label.** With `[confidentiality_label]` set, the object gets a
+### Template
+
+`template` is JSON in the shape the consumer expects. A string that is exactly
+`"${path}"` is replaced by that event value, so a body can nest the event's
+fields wherever the consumer wants them. Any other string, number or literal is
+sent as written.
+
+| Placeholder | Value |
+|---|---|
+| `"${path}"` | any mapping path, as in the table above |
+| `"${path\|number}"` | the value as a number; absent when it is not a finite number. For attributes, which are strings |
+| `"${path\|text}"` | the value as a string: an array of strings comma-joined, anything else as JSON text |
+| `"${unmapped}"` | the attributes and metadata no placeholder names, as in `unmapped` above |
+| `"${confidentiality_label}"` | the label below, when configured |
+
+A value absent from the event removes the key that holds it. An element of an
+array none of whose placeholders has a value is removed, so an entry such as
+`{"id": "ajar.callsign", "value": "${attr:callsign}"}` is sent only when there
+is a callsign, while an entry with at least one value is kept.
+
+The template must place `${id}` and `${policy_tags}`, and `${unmapped}` unless
+`unmapped = "refuse"`. A template that leaves one out is refused at startup, so
+a template cannot drop the event id or its markings. There is no `governance`
+block in a template body. See
+[`rest-tracks.example.toml`](rest-tracks.example.toml).
+
+### Confidentiality label
+
+With `[confidentiality_label]` set, the object gets a
 STANAG 4774-shaped label projected from the policy tags. It changes no
 enforcement, and `policy_tags` is still delivered as the source of truth. The
 label is bound to the data by the signature, because it is derived from policy
@@ -93,7 +127,9 @@ invite and from `join --target`, and the rest from the instance's
 | `target` | required | endpoint for the POSTs |
 | `[deliver] headers` | none | extra request headers, such as the consumer's bearer token |
 | `[deliver] attempts` | `2` | attempts per event, at least 1 |
-| `[mapping]` | required, non-empty | consumer field name = path; an unknown path is refused at startup |
+| `[deliver.oauth]` | none | OAuth 2.0 client credentials: `token_url`, `client_id`, `client_secret_file`, optional `scope`. Exclusive with an `Authorization` header |
+| `[mapping]` | one of `[mapping]` or `template` | consumer field name = path; non-empty, and an unknown path is refused at startup |
+| `template` | one of `[mapping]` or `template` | JSON body template; an unknown path or filter is refused at startup |
 | `unmapped` | `include` | `include` or `refuse` |
 | `[confidentiality_label] policy_identifier` | none (no label) | the security policy the label's values are defined by |
 
@@ -110,7 +146,10 @@ consumer field name.
 - The last 4096 event ids are remembered, and an event whose id was seen is
   skipped.
 - With `unmapped = "refuse"`, an event carrying any attribute or metadata the
-  mapping does not name is not delivered.
+  mapping or template does not name is not delivered.
+- With `[deliver.oauth]`, a bearer token is fetched with the client credentials
+  grant and reused until 30 s before it expires. A 401 from the consumer drops
+  the token, so the next attempt fetches a new one.
 - Every 15 s a heartbeat log line reports `received`, `delivered`, `rejected`
   (verification or decoding failed), `deduped` and `gap_dropped` (refused by
   `unmapped = "refuse"`, or not delivered within the attempts).
@@ -120,7 +159,9 @@ Make the endpoint idempotent on the event id.
 ## Limits
 
 - At-most-once only; no durable (JetStream) consumer.
-- HTTP POST of JSON is the only output.
+- HTTP POST of JSON is the only output, one event per request.
+- A template only places values; it does no arithmetic, unit conversion or
+  lookup tables.
 
 ## Run
 

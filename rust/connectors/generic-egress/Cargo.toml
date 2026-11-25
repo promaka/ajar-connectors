@@ -16,7 +16,7 @@ path = "src/main.rs"
 
 [dependencies]
 ajar-connector.workspace = true
-ajar-connector-common.workspace = true
+ajar-connector-common = { workspace = true, features = ["oauth"] }
 async-nats.workspace = true
 tokio.workspace = true
 futures-util.workspace = true
@@ -29,7 +29,7 @@ anyhow.workspace = true
 thiserror.workspace = true
 hex.workspace = true
 prost.workspace = true
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-no-provider", "json"] }
+reqwest.workspace = true
 
 # See CONTRIBUTING.md, "Releases".
 [package.metadata.ajar]
