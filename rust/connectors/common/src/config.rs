@@ -238,7 +238,6 @@ fn default_interval() -> u64 {
     30
 }
 
-/// `Transport::RestPoll` settings.
 #[cfg(feature = "rest-poll")]
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -247,16 +246,12 @@ pub struct RestPollOptions {
     #[serde(default = "default_interval")]
     pub interval_secs: u64,
     #[serde(default)]
-    pub method: HttpMethod,
-    /// Sent as `application/json`.
-    #[serde(default)]
     pub body: Option<String>,
     /// `Authorization` header value.
     #[serde(default)]
     pub auth_header: Option<String>,
     #[serde(default)]
     pub oauth: Option<crate::oauth::OAuthClient>,
-    /// RFC 6901 JSON pointer to an array in the response; each element is one frame.
     #[serde(default)]
     pub records: Option<String>,
 }
@@ -264,27 +259,16 @@ pub struct RestPollOptions {
 #[cfg(feature = "rest-poll")]
 impl RestPollOptions {
     fn validate(&self) -> anyhow::Result<()> {
-        if self.body.is_some() && self.method == HttpMethod::Get {
-            anyhow::bail!("transport.body needs method = \"post\"");
-        }
         if self.auth_header.is_some() && self.oauth.is_some() {
             anyhow::bail!("transport.auth_header and transport.oauth are exclusive");
         }
-        if let Some(pointer) = &self.records {
-            crate::rest::pointer_tokens(pointer)
-                .with_context(|| format!("transport.records {pointer:?}"))?;
+        if let Some(path) = self.records.as_deref().filter(|p| !p.is_empty()) {
+            if !path.starts_with('/') {
+                anyhow::bail!("transport.records {path:?} must be empty or start with '/'");
+            }
         }
         Ok(())
     }
-}
-
-#[cfg(feature = "rest-poll")]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum HttpMethod {
-    #[default]
-    Get,
-    Post,
 }
 
 /// How a native feed reaches the connector, selected by `kind` in the
@@ -714,9 +698,9 @@ mod tests {
 
     #[cfg(feature = "rest-poll")]
     #[test]
-    fn rest_poll_post_with_oauth_and_records_loads() {
+    fn rest_poll_body_oauth_and_records_load() {
         let cfg = rest_poll(
-            "method = \"post\"\nbody = '{}'\nrecords = \"/tracks\"\n\
+            "body = '{}'\nrecords = \"/tracks\"\n\
              [transport.oauth]\ntoken_url = \"https://auth.example.com/token\"\n\
              client_id = \"radar-1\"\nclient_secret_file = \"/etc/ajar/radar-1.secret\"",
         )
@@ -724,16 +708,8 @@ mod tests {
         let Transport::RestPoll(opts) = cfg.transport else {
             panic!("not rest-poll");
         };
-        assert_eq!(opts.method, HttpMethod::Post);
         assert_eq!(opts.records.as_deref(), Some("/tracks"));
         assert_eq!(opts.oauth.unwrap().client_id, "radar-1");
-    }
-
-    #[cfg(feature = "rest-poll")]
-    #[test]
-    fn rest_poll_body_needs_post() {
-        let err = format!("{:#}", rest_poll("body = '{}'").unwrap_err());
-        assert!(err.contains("method = \"post\""), "{err}");
     }
 
     #[cfg(feature = "rest-poll")]

@@ -24,8 +24,7 @@ JSON values are read as text: strings unquoted, numbers and booleans as
 written, `null` as an empty string, a nested object or array as its JSON text.
 A field setting is a top-level key, or an RFC 6901 JSON pointer when it starts
 with `/`: `"/position/lat"` reads `lat` inside `position`, and
-`"/sensors/0/id"` reads into an array. A top-level key that starts with `/` is
-reached as a pointer, `"/~1key"`.
+`"/sensors/0/id"` reads into an array.
 
 A REST API that returns many records in one response fits the `rest-poll`
 transport with `records`, which hands the connector one record per frame (see

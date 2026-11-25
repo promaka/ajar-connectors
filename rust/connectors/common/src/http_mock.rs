@@ -7,7 +7,6 @@ use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 
-/// A JSON reply.
 pub struct Reply {
     status: u16,
     body: String,
@@ -25,7 +24,6 @@ impl Reply {
 #[derive(Debug, Clone)]
 pub struct Request {
     pub method: String,
-    pub path: String,
     /// Header names lowercased.
     pub headers: Vec<(String, String)>,
     pub body: String,
@@ -38,6 +36,20 @@ impl Request {
             .find(|(n, _)| n == name)
             .map(|(_, v)| v.as_str())
     }
+}
+
+/// A token endpoint's answer for the client credentials grant.
+pub fn token_reply(token: &str, expires_in: u64) -> Reply {
+    Reply::json(
+        200,
+        &format!(r#"{{"access_token":"{token}","token_type":"Bearer","expires_in":{expires_in}}}"#),
+    )
+}
+
+pub fn secret_file(text: &str) -> tempfile::NamedTempFile {
+    let file = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(file.path(), text).unwrap();
+    file
 }
 
 pub struct MockServer {
@@ -98,9 +110,7 @@ async fn read_request(stream: &mut tokio::net::TcpStream) -> Option<Request> {
     };
     let head = String::from_utf8_lossy(&raw[..head_end]).into_owned();
     let mut lines = head.split("\r\n");
-    let mut start = lines.next()?.split(' ');
-    let method = start.next()?.to_string();
-    let path = start.next()?.to_string();
+    let method = lines.next()?.split(' ').next()?.to_string();
     let headers: Vec<(String, String)> = lines
         .filter_map(|line| line.split_once(':'))
         .map(|(n, v)| (n.trim().to_ascii_lowercase(), v.trim().to_string()))
@@ -120,7 +130,6 @@ async fn read_request(stream: &mut tokio::net::TcpStream) -> Option<Request> {
     let body = String::from_utf8_lossy(&raw[head_end..]).into_owned();
     Some(Request {
         method,
-        path,
         headers,
         body,
     })

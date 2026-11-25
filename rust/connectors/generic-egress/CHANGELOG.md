@@ -9,6 +9,8 @@ CONTRIBUTING.md, "Releases").
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-25
+
 ### Added
 
 - `template`: a JSON body in the consumer's own shape, with `"${path}"`
@@ -18,6 +20,11 @@ CONTRIBUTING.md, "Releases").
 - `[deliver.oauth]`: OAuth 2.0 client credentials for the consumer's API, with
   the token refreshed before it expires and after a 401.
 - `rest-tracks.example.toml`.
+
+### Fixed
+
+- HTTPS targets work: the HTTP client trusts the operating system's root
+  certificates, where it trusted none and every TLS handshake failed.
 
 ### Changed
 

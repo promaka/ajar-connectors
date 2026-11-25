@@ -136,11 +136,14 @@ pub fn render(
 
 /// The attributes and metadata no mapped path names, as `{"attributes": {..}, "metadata": {..}}`
 /// with empty halves left out, or `None` when there are none.
-pub(crate) fn unmapped_content(event: &Event, mapped_paths: &[&str]) -> Option<Map<String, Value>> {
+pub(crate) fn unmapped_content<S: AsRef<str>>(
+    event: &Event,
+    mapped_paths: &[S],
+) -> Option<Map<String, Value>> {
     let named = |prefix: &str, key: &str| {
         mapped_paths
             .iter()
-            .any(|p| p.strip_prefix(prefix) == Some(key))
+            .any(|p| p.as_ref().strip_prefix(prefix) == Some(key))
     };
     let extra_attrs: Map<String, Value> = event
         .attributes

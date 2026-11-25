@@ -34,12 +34,9 @@ pub struct Mapping {
     pub delimiter: String,
     #[serde(default)]
     pub columns: Vec<String>,
-    /// The entity type of a record whose `entity_type_field` value has no entry in
-    /// `entity_types`, and of every record when that field is unset.
     pub entity_type: String,
     #[serde(default)]
     pub entity_type_field: Option<String>,
-    /// `entity_type_field` value to entity type.
     #[serde(default)]
     pub entity_types: BTreeMap<String, String>,
     /// Receipt time is used when unset.
@@ -59,8 +56,6 @@ pub struct Mapping {
     /// Record field to attribute key.
     #[serde(default)]
     pub attributes: BTreeMap<String, String>,
-    /// Attribute key to a table of record value to attribute value. A record value missing from
-    /// its table emits no attribute.
     #[serde(default)]
     pub values: BTreeMap<String, BTreeMap<String, String>>,
     /// Record field to metadata key.
@@ -101,15 +96,22 @@ impl Mapping {
         if let Some(key) = self.values.keys().find(|k| !mapped.contains(k.as_str())) {
             anyhow::bail!("[mapping.values.{key}] names no attribute in [mapping.attributes]");
         }
-        for field in self.fields().filter(|f| f.starts_with('/')) {
-            if self.format == Format::Csv {
+        if self.format == Format::Csv {
+            let pointer = [
+                &self.entity_type_field,
+                &self.timestamp_field,
+                &self.confidence_field,
+                &self.lat_field,
+                &self.lon_field,
+                &self.alt_field,
+            ]
+            .into_iter()
+            .flatten()
+            .chain(self.attributes.keys())
+            .chain(self.metadata.keys())
+            .find(|f| f.starts_with('/'));
+            if let Some(field) = pointer {
                 anyhow::bail!("JSON pointer {field:?} in a CSV mapping");
-            }
-            let mut chars = field.chars();
-            while let Some(c) = chars.next() {
-                if c == '~' && !matches!(chars.next(), Some('0' | '1')) {
-                    anyhow::bail!("JSON pointer {field:?} has a '~' not followed by 0 or 1");
-                }
             }
         }
         Ok(())
@@ -146,20 +148,5 @@ impl Mapping {
             }
         }
         types
-    }
-
-    fn fields(&self) -> impl Iterator<Item = &String> {
-        [
-            &self.entity_type_field,
-            &self.timestamp_field,
-            &self.confidence_field,
-            &self.lat_field,
-            &self.lon_field,
-            &self.alt_field,
-        ]
-        .into_iter()
-        .flatten()
-        .chain(self.attributes.keys())
-        .chain(self.metadata.keys())
     }
 }

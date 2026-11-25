@@ -5,14 +5,13 @@
 //! placeholders has a value is removed.
 
 use ajar_connector::Event;
+use anyhow::Context as _;
 use serde_json::{Map, Number, Value};
 
-use crate::label::{confidentiality_label, LabelConfig};
 use crate::map::{lookup, unmapped_content, validate_path, Unmapped};
 
-/// Template-only paths, alongside the event paths of [`crate::map`].
+/// The template-only path, alongside the event paths of [`crate::map`].
 const UNMAPPED: &str = "unmapped";
-const LABEL: &str = "confidentiality_label";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Filter {
@@ -20,7 +19,7 @@ enum Filter {
     Keep,
     /// A number; a value that does not parse as a finite number is absent.
     Number,
-    /// A string: arrays of strings comma-joined, other non-strings as JSON text.
+    /// A string; a non-string value as its JSON text.
     Text,
 }
 
@@ -32,7 +31,6 @@ enum Node {
     Array(Vec<Node>),
 }
 
-/// A compiled body template.
 #[derive(Debug, PartialEq)]
 pub struct Template {
     root: Node,
@@ -44,8 +42,7 @@ impl Template {
     /// Compiles a template, refusing one that could drop the event id or its markings: it must
     /// place `id` and `policy_tags`, and `unmapped` unless `unmapped` is `refuse`.
     pub fn parse(text: &str, unmapped: Unmapped) -> anyhow::Result<Template> {
-        let value: Value =
-            serde_json::from_str(text).map_err(|e| anyhow::anyhow!("template is not JSON: {e}"))?;
+        let value: Value = serde_json::from_str(text).context("template is not JSON")?;
         let mut paths = Vec::new();
         let root = compile(value, &mut paths)?;
         let required = match unmapped {
@@ -59,30 +56,17 @@ impl Template {
     }
 
     /// The consumer body for one event, or `None` when `Unmapped::Refuse` rejects it.
-    pub fn render(
-        &self,
-        event: &Event,
-        unmapped: Unmapped,
-        label: Option<&LabelConfig>,
-    ) -> Option<Value> {
-        let mapped: Vec<&str> = self.paths.iter().map(String::as_str).collect();
-        let extra = unmapped_content(event, &mapped);
+    pub fn render(&self, event: &Event, unmapped: Unmapped) -> Option<Value> {
+        let extra = unmapped_content(event, &self.paths);
         if extra.is_some() && unmapped == Unmapped::Refuse {
             return None;
         }
         let context = Context {
             event,
             unmapped: extra.map(Value::Object),
-            label: label.and_then(|cfg| confidentiality_label(cfg, event)),
         };
         Some(context.fill(&self.root).value.unwrap_or(Value::Null))
     }
-}
-
-struct Context<'e> {
-    event: &'e Event,
-    unmapped: Option<Value>,
-    label: Option<Value>,
 }
 
 /// A filled node, and how many placeholders it holds and how many of them had a value.
@@ -90,6 +74,11 @@ struct Filled {
     value: Option<Value>,
     placeholders: usize,
     present: usize,
+}
+
+struct Context<'e> {
+    event: &'e Event,
+    unmapped: Option<Value>,
 }
 
 impl Context<'_> {
@@ -102,12 +91,23 @@ impl Context<'_> {
                 present: 0,
             },
             Node::Field { path, filter } => {
-                let value = match path.as_str() {
+                let raw = match path.as_str() {
                     UNMAPPED => self.unmapped.clone(),
-                    LABEL => self.label.clone(),
                     _ => lookup(self.event, path),
-                }
-                .and_then(|v| apply(*filter, v));
+                };
+                let value = raw.and_then(|v| match (filter, v) {
+                    (Filter::Keep, v) => Some(v),
+                    (Filter::Number, Value::Number(n)) => Some(Value::Number(n)),
+                    (Filter::Number, Value::String(s)) => s
+                        .trim()
+                        .parse::<f64>()
+                        .ok()
+                        .and_then(Number::from_f64)
+                        .map(Value::Number),
+                    (Filter::Number, _) => None,
+                    (Filter::Text, Value::String(s)) => Some(Value::String(s)),
+                    (Filter::Text, v) => Some(Value::String(v.to_string())),
+                });
                 Filled {
                     present: usize::from(value.is_some()),
                     value,
@@ -153,31 +153,6 @@ impl Context<'_> {
     }
 }
 
-fn apply(filter: Filter, value: Value) -> Option<Value> {
-    match (filter, value) {
-        (Filter::Keep, v) => Some(v),
-        (Filter::Number, Value::Number(n)) => Some(Value::Number(n)),
-        (Filter::Number, Value::String(s)) => s
-            .trim()
-            .parse::<f64>()
-            .ok()
-            .and_then(Number::from_f64)
-            .map(Value::Number),
-        (Filter::Number, _) => None,
-        (Filter::Text, Value::String(s)) => Some(Value::String(s)),
-        (Filter::Text, Value::Array(items)) if items.iter().all(Value::is_string) => {
-            Some(Value::String(
-                items
-                    .iter()
-                    .filter_map(Value::as_str)
-                    .collect::<Vec<_>>()
-                    .join(","),
-            ))
-        }
-        (Filter::Text, v) => Some(Value::String(v.to_string())),
-    }
-}
-
 fn compile(value: Value, paths: &mut Vec<String>) -> anyhow::Result<Node> {
     Ok(match value {
         Value::String(s) => match s.strip_prefix("${").and_then(|r| r.strip_suffix('}')) {
@@ -190,7 +165,7 @@ fn compile(value: Value, paths: &mut Vec<String>) -> anyhow::Result<Node> {
                         anyhow::bail!("unknown filter {other:?} in {s:?}: expected number or text")
                     }
                 };
-                if path != UNMAPPED && path != LABEL {
+                if path != UNMAPPED {
                     validate_path(path)?;
                 }
                 paths.push(path.to_string());
@@ -258,7 +233,7 @@ mod tests {
     fn render(template: &str, unmapped: Unmapped) -> Option<Value> {
         Template::parse(template, unmapped)
             .unwrap()
-            .render(&event(), unmapped, None)
+            .render(&event(), unmapped)
     }
 
     #[test]
@@ -284,7 +259,7 @@ mod tests {
         let template = Template::parse(TRACK, Unmapped::Include).unwrap();
         let mut event = event();
         event.attributes.retain(|a| a.key == "speed");
-        let out = template.render(&event, Unmapped::Include, None).unwrap();
+        let out = template.render(&event, Unmapped::Include).unwrap();
         let fields = out["updates"][0]["fields"].as_array().unwrap();
         assert_eq!(fields.len(), 2, "no unmapped content, no unmapped entry");
     }
@@ -296,7 +271,7 @@ mod tests {
             Unmapped::Include,
         )
         .unwrap();
-        let out = template.render(&event(), Unmapped::Include, None).unwrap();
+        let out = template.render(&event(), Unmapped::Include).unwrap();
         let update = &out["updates"][0];
         assert!(update["id"].is_string(), "{out}");
         assert!(update.get("name").is_none());
@@ -307,7 +282,7 @@ mod tests {
         let out = render(TRACK, Unmapped::Include).unwrap();
         let fields = &out["updates"][0]["fields"];
         assert!(fields[0]["value"].is_string());
-        assert_eq!(fields[1]["value"], "class:restricted,rel:NATO");
+        assert_eq!(fields[1]["value"], r#"["class:restricted","rel:NATO"]"#);
         let unmapped = fields[2]["value"].as_str().unwrap();
         assert!(unmapped.contains("hostility"), "{unmapped}");
     }
@@ -339,15 +314,18 @@ mod tests {
         assert!(Template::parse(template, Unmapped::Refuse).is_ok());
     }
 
+    const REQUIRED: &str = r#""id":"${id}","tags":"${policy_tags}","u":"${unmapped}""#;
+
     #[test]
-    fn unknown_path_or_filter_is_refused() {
-        let base = r#"{"id":"${id}","tags":"${policy_tags}","u":"${unmapped}","x":"#;
-        assert!(
-            Template::parse(&format!(r#"{base}"${{latitude}}"}}"#), Unmapped::Include).is_err()
-        );
-        assert!(
-            Template::parse(&format!(r#"{base}"${{lat|upper}}"}}"#), Unmapped::Include).is_err()
-        );
+    fn unknown_path_is_refused() {
+        let template = format!(r#"{{{REQUIRED},"x":"${{latitude}}"}}"#);
+        assert!(Template::parse(&template, Unmapped::Include).is_err());
+    }
+
+    #[test]
+    fn unknown_filter_is_refused() {
+        let template = format!(r#"{{{REQUIRED},"x":"${{lat|upper}}"}}"#);
+        assert!(Template::parse(&template, Unmapped::Include).is_err());
     }
 
     #[test]
@@ -358,21 +336,5 @@ mod tests {
         )
         .unwrap();
         assert_eq!(out["note"], "cost is $5 {each}");
-    }
-
-    #[test]
-    fn label_is_placed_when_configured() {
-        let template = Template::parse(
-            r#"{"id":"${id}","t":"${policy_tags}","u":"${unmapped}","label":"${confidentiality_label}"}"#,
-            Unmapped::Include,
-        )
-        .unwrap();
-        let cfg = LabelConfig {
-            policy_identifier: "TEST-POLICY".into(),
-        };
-        let out = template
-            .render(&event(), Unmapped::Include, Some(&cfg))
-            .unwrap();
-        assert_eq!(out["label"]["classification"], "RESTRICTED");
     }
 }

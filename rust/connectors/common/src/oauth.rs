@@ -12,15 +12,11 @@ use serde::Deserialize;
 /// A token is fetched again this long before the server says it expires.
 const REFRESH_MARGIN: Duration = Duration::from_secs(30);
 
-/// Largest token response read; a token endpoint answers with a few hundred bytes.
-const MAX_TOKEN_RESPONSE_BYTES: usize = 64 * 1024;
-
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct OAuthClient {
     pub token_url: String,
     pub client_id: String,
-    /// A file holding the client secret, so the secret stays out of the config.
     pub client_secret_file: String,
     #[serde(default)]
     pub scope: Option<String>,
@@ -39,12 +35,6 @@ pub enum OAuthError {
     Request(#[from] reqwest::Error),
     #[error("token endpoint answered {0}")]
     Status(StatusCode),
-    #[error("token response over {MAX_TOKEN_RESPONSE_BYTES} bytes")]
-    TooLarge,
-    #[error("token response unreadable: {0}")]
-    Response(#[from] serde_json::Error),
-    #[error("token type {0:?} is not bearer")]
-    TokenType(String),
     #[error("access token is not a valid header value")]
     InvalidToken,
 }
@@ -52,7 +42,6 @@ pub enum OAuthError {
 #[derive(Deserialize)]
 struct TokenResponse {
     access_token: String,
-    token_type: Option<String>,
     expires_in: Option<u64>,
 }
 
@@ -121,7 +110,7 @@ impl TokenSource {
             form.push(("scope", scope.as_str()));
         }
         let requested_at = Instant::now();
-        let mut resp = self
+        let resp = self
             .http
             .post(&self.client.token_url)
             .form(&form)
@@ -130,19 +119,7 @@ impl TokenSource {
         if !resp.status().is_success() {
             return Err(OAuthError::Status(resp.status()));
         }
-        let mut body = Vec::new();
-        while let Some(chunk) = resp.chunk().await? {
-            if body.len() + chunk.len() > MAX_TOKEN_RESPONSE_BYTES {
-                return Err(OAuthError::TooLarge);
-            }
-            body.extend_from_slice(&chunk);
-        }
-        let response: TokenResponse = serde_json::from_slice(&body)?;
-        if let Some(kind) = response.token_type {
-            if !kind.eq_ignore_ascii_case("bearer") {
-                return Err(OAuthError::TokenType(kind));
-            }
-        }
+        let response: TokenResponse = resp.json().await?;
         let mut authorization = HeaderValue::from_str(&format!("Bearer {}", response.access_token))
             .map_err(|_| OAuthError::InvalidToken)?;
         authorization.set_sensitive(true);
@@ -160,35 +137,20 @@ impl TokenSource {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::http_mock::{MockServer, Reply};
+    use crate::http_mock::{secret_file, token_reply, MockServer, Reply};
 
-    fn client(server: &MockServer, secret: &tempfile::NamedTempFile) -> OAuthClient {
+    fn client(token_url: String, secret: &tempfile::NamedTempFile) -> OAuthClient {
         OAuthClient {
-            token_url: server.url("/token"),
+            token_url,
             client_id: "radar-1".into(),
             client_secret_file: secret.path().to_str().unwrap().into(),
             scope: Some("tracks".into()),
         }
     }
 
-    fn secret_file(text: &str) -> tempfile::NamedTempFile {
-        let file = tempfile::NamedTempFile::new().unwrap();
-        std::fs::write(file.path(), text).unwrap();
-        file
-    }
-
-    fn token_reply(token: &str, expires_in: u64) -> Reply {
-        Reply::json(
-            200,
-            &format!(
-                r#"{{"access_token":"{token}","token_type":"Bearer","expires_in":{expires_in}}}"#
-            ),
-        )
-    }
-
     async fn source(server: &MockServer, secret: &tempfile::NamedTempFile) -> TokenSource {
         crate::nats::install_crypto_provider();
-        TokenSource::new(reqwest::Client::new(), client(server, secret)).unwrap()
+        TokenSource::new(reqwest::Client::new(), client(server.url("/token"), secret)).unwrap()
     }
 
     #[tokio::test]
@@ -254,32 +216,11 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn non_bearer_token_type_is_refused() {
-        let server = MockServer::start(vec![Reply::json(
-            200,
-            r#"{"access_token":"t1","token_type":"mac"}"#,
-        )])
-        .await;
-        let secret = secret_file("s3cret");
-        let err = source(&server, &secret)
-            .await
-            .authorization()
-            .await
-            .unwrap_err();
-        assert!(matches!(err, OAuthError::TokenType(_)), "{err}");
-    }
-
     #[test]
     fn empty_secret_file_is_refused() {
         crate::nats::install_crypto_provider();
         let secret = secret_file("  \n");
-        let client = OAuthClient {
-            token_url: "http://127.0.0.1:1/token".into(),
-            client_id: "radar-1".into(),
-            client_secret_file: secret.path().to_str().unwrap().into(),
-            scope: None,
-        };
+        let client = client("http://127.0.0.1:1/token".into(), &secret);
         let err = TokenSource::new(reqwest::Client::new(), client)
             .err()
             .unwrap();

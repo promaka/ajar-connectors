@@ -22,7 +22,6 @@ pub struct GenericSettings {
     pub deliver: Deliver,
     #[serde(default)]
     pub mapping: Option<Mapping>,
-    /// A JSON body template, instead of `[mapping]`.
     #[serde(default)]
     pub template: Option<String>,
     #[serde(default)]
@@ -70,7 +69,7 @@ impl Body {
     ) -> Option<Value> {
         match self {
             Body::Fields(fields) => crate::map::render(event, fields, unmapped, label),
-            Body::Template(template) => template.render(event, unmapped, label),
+            Body::Template(template) => template.render(event, unmapped),
         }
     }
 }
@@ -87,7 +86,6 @@ fn default_buffer_max() -> usize {
     1000
 }
 
-/// The config and its compiled body.
 pub fn load(path: &str) -> anyhow::Result<(Config, Body)> {
     let cfg = Config::load(path)?;
     let body = validate(&cfg)?;
@@ -111,6 +109,9 @@ fn validate(cfg: &Config) -> anyhow::Result<Body> {
     match (&settings.mapping, &settings.template) {
         (Some(_), Some(_)) => anyhow::bail!("[mapping] and template are exclusive"),
         (None, None) => anyhow::bail!("set [mapping] or template: nothing would be delivered"),
+        (None, Some(_)) if settings.confidentiality_label.is_some() => {
+            anyhow::bail!("[confidentiality_label] needs [mapping], not template")
+        }
         (None, Some(text)) => Ok(Body::Template(Template::parse(text, settings.unmapped)?)),
         (Some(mapping), None) => {
             if mapping.fields.is_empty() {
@@ -166,6 +167,13 @@ mod tests {
     fn mapping_and_template_together_are_refused() {
         let err = cfg("template = '{}'\n[mapping]\nid = \"id\"").unwrap_err();
         assert!(err.to_string().contains("exclusive"), "{err}");
+    }
+
+    #[test]
+    fn label_with_a_template_is_refused() {
+        let err =
+            cfg("template = '{}'\n[confidentiality_label]\npolicy_identifier = \"P\"").unwrap_err();
+        assert!(err.to_string().contains("needs [mapping]"), "{err}");
     }
 
     #[test]

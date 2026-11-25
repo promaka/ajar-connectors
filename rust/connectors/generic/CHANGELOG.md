@@ -21,7 +21,8 @@ CONTRIBUTING.md, "Releases").
   several entity types; `entity_type` is the fallback.
 - The `rest-poll` transport is built in by default, with POST bodies, OAuth
   client credentials and `records` to split a JSON array response into one
-  frame per record.
+  frame per record. The binary grows by about 1.7 MB; `--no-default-features`
+  leaves it out.
 - `rest-tracks.example.toml`.
 
 ### Changed

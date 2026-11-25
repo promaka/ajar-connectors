@@ -27,7 +27,6 @@ pub enum GenericError {
     Build(#[from] BuildError),
 }
 
-/// One decoded frame.
 enum Record {
     Json(Value),
     Csv(BTreeMap<String, String>),
@@ -378,16 +377,17 @@ mod tests {
     }
 
     #[test]
-    fn declared_covers_every_entity_type_and_table_value() {
-        let declared = track_mapping().declared(Some("Unknown"));
+    fn declared_covers_every_entity_type() {
+        let declared = track_mapping().declared(None);
         let types: Vec<&str> = declared.iter().map(|d| d.entity_type.as_str()).collect();
         assert_eq!(types, ["mim:object", "mim:aircraft"]);
-        assert!(declared[0]
-            .fixed_values
-            .contains(&("hostility".into(), "Hostile".into())));
-        assert!(declared[0]
-            .fixed_values
-            .contains(&("hostility".into(), "Unknown".into())));
+    }
+
+    #[test]
+    fn declared_checks_table_values_and_default_hostility() {
+        let fixed = &track_mapping().declared(Some("Unknown"))[0].fixed_values;
+        assert!(fixed.contains(&("hostility".into(), "Hostile".into())));
+        assert!(fixed.contains(&("hostility".into(), "Unknown".into())));
     }
 
     #[test]

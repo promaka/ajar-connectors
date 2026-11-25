@@ -80,9 +80,8 @@ sent as written.
 |---|---|
 | `"${path}"` | any mapping path, as in the table above |
 | `"${path\|number}"` | the value as a number; absent when it is not a finite number. For attributes, which are strings |
-| `"${path\|text}"` | the value as a string: an array of strings comma-joined, anything else as JSON text |
+| `"${path\|text}"` | the value as a string; an array or object as its JSON text |
 | `"${unmapped}"` | the attributes and metadata no placeholder names, as in `unmapped` above |
-| `"${confidentiality_label}"` | the label below, when configured |
 
 A value absent from the event removes the key that holds it. An element of an
 array none of whose placeholders has a value is removed, so an entry such as
@@ -92,7 +91,8 @@ is a callsign, while an entry with at least one value is kept.
 The template must place `${id}` and `${policy_tags}`, and `${unmapped}` unless
 `unmapped = "refuse"`. A template that leaves one out is refused at startup, so
 a template cannot drop the event id or its markings. There is no `governance`
-block in a template body. See
+block or `confidentiality_label` in a template body, and `[confidentiality_label]`
+is refused with a template. See
 [`rest-tracks.example.toml`](rest-tracks.example.toml).
 
 ### Confidentiality label
@@ -150,6 +150,8 @@ consumer field name.
 - With `[deliver.oauth]`, a bearer token is fetched with the client credentials
   grant and reused until 30 s before it expires. A 401 from the consumer drops
   the token, so the next attempt fetches a new one.
+- HTTPS targets are checked against the operating system's trusted roots. A
+  target behind a private CA needs that CA in the system trust store.
 - Every 15 s a heartbeat log line reports `received`, `delivered`, `rejected`
   (verification or decoding failed), `deduped` and `gap_dropped` (refused by
   `unmapped = "refuse"`, or not delivered within the attempts).

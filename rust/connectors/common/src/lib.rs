@@ -58,11 +58,11 @@ pub mod ws;
 /// `file` truncate it.
 pub const MAX_FRAME_BYTES: usize = 64 * 1024;
 
+#[cfg(feature = "rest-poll")]
+pub use config::RestPollOptions;
 pub use config::{Config, EgressConfig, Enrichment, Framing, SensorSite, SpoolSetting, Transport};
 #[cfg(feature = "dds")]
 pub use config::{DdsOptions, DdsPayload, DdsReliability};
-#[cfg(feature = "rest-poll")]
-pub use config::{HttpMethod, RestPollOptions};
 pub use identity::GovernedIdentity;
 pub use ontology::GovernedAttribute;
 pub use profile::Profile;
