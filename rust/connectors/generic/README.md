@@ -22,7 +22,14 @@ confidence or epoch timestamp value that is not a number.
 
 JSON values are read as text: strings unquoted, numbers and booleans as
 written, `null` as an empty string, a nested object or array as its JSON text.
-Only top-level keys can be mapped.
+A field setting is a top-level key, or an RFC 6901 JSON pointer when it starts
+with `/`: `"/position/lat"` reads `lat` inside `position`, and
+`"/sensors/0/id"` reads into an array. A top-level key that starts with `/` is
+reached as a pointer, `"/~1key"`.
+
+A REST API that returns many records in one response fits the `rest-poll`
+transport with `records`, which hands the connector one record per frame (see
+[transports](../../../docs/transports.md#rest-poll)).
 
 CSV rows are split on `delimiter` with no quoting or escaping. Each value is
 trimmed and named by its position in `columns`. A row with fewer values than
@@ -30,15 +37,17 @@ trimmed and named by its position in `columns`. A row with fewer values than
 
 ## Output
 
-Every event has the mapping's `entity_type`, a fresh UUIDv7 id, and the frame
-as it arrived in its payload.
+Every event has a fresh UUIDv7 id and the frame as it arrived in its payload.
+Its entity type is `[mapping.entity_types]` looked up with the value of
+`entity_type_field`, or `entity_type` when that field is unset, absent from the
+record or has no entry.
 
 | Event field | From |
 |---|---|
 | timestamp | `timestamp_field`, converted by `timestamp_format`; the time of receipt when unset |
 | location | `lat_field`, `lon_field` in degrees and `alt_field` in metres, only when both lat and lon are present in the record |
 | confidence | `confidence_field`: a value above 1 is read as a percentage (87 becomes 0.87), then clamped to 0 to 1; 0 when unset or absent |
-| attributes | each `[mapping.attributes]` entry whose record field is present, plus `hostility` from `default_hostility` |
+| attributes | each `[mapping.attributes]` entry whose record field is present, translated by its `[mapping.values]` table when it has one, plus `hostility` from `default_hostility` |
 | metadata | each `[mapping.metadata]` entry whose record field is present |
 
 Values pass through as text with no unit conversion. A mapped attribute must
@@ -58,6 +67,7 @@ The connector config and the `[mapping]` block share one file. Three examples:
 | [`generic.example.toml`](generic.example.toml) | Newline JSON sensor records, with a CSV variant |
 | [`camera-detections.example.toml`](camera-detections.example.toml) | EO/IR camera detections: geolocated `mim:object`, `confidence_field`, `track_id` as `source_uid` |
 | [`esm-synthetic.example.toml`](esm-synthetic.example.toml) | ESM intercepts from a receiver or `ajar-feed-synthetic esm`: bearing-only `mim:equipment`, no location |
+| [`rest-tracks.example.toml`](rest-tracks.example.toml) | A track picture polled from a REST API with OAuth: JSON pointers, an entity type per category, an affiliation code table |
 
 `[mapping]` keys:
 
@@ -66,13 +76,16 @@ The connector config and the `[mapping]` block share one file. Three examples:
 | `format` | required | `json` or `csv` |
 | `columns` | none | CSV column names in order; required for `csv` |
 | `delimiter` | `","` | CSV delimiter |
-| `entity_type` | required | Entity type of every event |
+| `entity_type` | required | Entity type of every event, or of a record with no `entity_types` entry |
+| `entity_type_field` | none | Record field whose value picks the entity type; needs `[mapping.entity_types]` |
+| `[mapping.entity_types]` | empty | `record_value = "entity_type"` |
 | `timestamp_field` | none | Record field with the observation time |
 | `timestamp_format` | `rfc3339` | `rfc3339` (used as is), `epoch-millis` or `epoch-seconds` |
 | `lat_field`, `lon_field` | none | Record fields with WGS-84 degrees |
 | `alt_field` | none | Record field with altitude in metres |
 | `confidence_field` | none | Record field with a detection or track confidence |
 | `[mapping.attributes]` | empty | `record_field = "attribute_key"` |
+| `[mapping.values.<attribute_key>]` | none | `record_value = "attribute_value"`, for a mapped attribute |
 | `[mapping.metadata]` | empty | `record_field = "metadata_key"` |
 
 `default_hostility` (default none) adds a `hostility` attribute to every event.
@@ -88,10 +101,19 @@ ajar-generic ./generic.toml --profile   # print the profile to register, then ex
 
 The connector refuses to start when the mapping
 names an entity type the vendored ontology does not declare, an attribute key
-the entity type does not declare, or a `default_hostility` outside the
-`hostility` vocabulary. Core would reject such events or quarantine the fields.
+one of its entity types does not declare, or a `default_hostility` or table
+value outside the attribute's vocabulary. Core would reject such events or quarantine the fields.
 The log names each fault and the closest valid name. An `x:<vendor>:<type>`
 entity type skips the check and must be registered with Core first.
+
+### Value tables
+
+A `[mapping.values.<attribute_key>]` table turns a feed's own codes into the
+attribute's vocabulary, for example affiliation codes into `hostility` values.
+A record value missing from the table emits no attribute, and the record is
+still published. Map the same field into `[mapping.metadata]` as well to keep
+the native code on the event. Every value in a table is checked against the
+ontology at startup.
 
 ### Attribute or metadata
 
@@ -107,10 +129,9 @@ but it stays in the payload.
 
 ## Limits
 
-- Only top-level JSON keys; no nested paths.
 - No CSV quoting, header row detection or escaping.
-- No per-field transforms other than the epoch to RFC 3339 timestamp
-  conversion and the confidence percentage.
+- No unit conversion or arithmetic; value tables translate whole values only.
+- No selection of an array element by its content; a pointer names an index.
 - One record per frame.
 
 ## Conformance

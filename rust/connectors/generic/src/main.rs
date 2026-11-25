@@ -27,22 +27,15 @@ async fn main() -> anyhow::Result<()> {
     let mapping = Mapping::load(&path).with_context(|| format!("loading mapping from {path}"))?;
 
     // Refuse to start on a mapping whose events Core would reject or quarantine.
-    ajar_connector_common::ontology::enforce(&ajar_connector_common::ontology::Declared {
-        entity_type: mapping.entity_type.clone(),
-        // The ontology governs the Ajar keys, not the record field names.
-        attributes: mapping.attributes.values().cloned().collect(),
-        fixed_values: cfg
-            .default_hostility
-            .clone()
-            .map(|v| vec![("hostility".to_string(), v)])
-            .unwrap_or_default(),
-    })?;
+    for declared in mapping.declared(cfg.default_hostility.as_deref()) {
+        ajar_connector_common::ontology::enforce(&declared)?;
+    }
 
     // Print the profile the operator registers, before any transport opens.
     if ajar_connector_common::profile::requested(&args) {
         println!(
             "{}",
-            ajar_connector_common::profile::emit(&cfg, &[mapping.entity_type.as_str()])?
+            ajar_connector_common::profile::emit(&cfg, &mapping.entity_types())?
         );
         return Ok(());
     }

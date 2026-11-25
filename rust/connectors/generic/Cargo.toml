@@ -2,7 +2,7 @@
 [package]
 name = "ajar-generic"
 description = "Config-driven Ajar ingress connector: map JSON/CSV fields to events with no code."
-version = "0.6.7"
+version = "0.7.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -15,9 +15,10 @@ name = "ajar-generic"
 path = "src/main.rs"
 
 [features]
-# Inert unless a config sets kind = "dds"; --no-default-features drops it.
-default = ["dds"]
+# Inert unless a config sets their kind; --no-default-features drops them.
+default = ["dds", "rest-poll"]
 dds = ["ajar-connector-common/dds"]
+rest-poll = ["ajar-connector-common/rest-poll"]
 
 [dependencies]
 ajar-connector.workspace = true
