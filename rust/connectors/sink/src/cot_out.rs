@@ -103,6 +103,23 @@ fn dimension(event: &Event) -> &'static str {
     }
 }
 
+/// CoT type. MAVLink vehicles (by MAV_TYPE) and ST 0601 platforms are typed
+/// by uas-cot, so drones get UAS symbology; everything else is `a-{aff}-{dim}`.
+fn cot_type(event: &Event) -> String {
+    let aff = affiliation(event).chars().next().unwrap_or('u');
+    if let Some(t) = metadata(event, "mav_type") {
+        return uas_cot::mavlink::vehicle_type(t.parse().ok(), aff);
+    }
+    if metadata(event, "uas_ls_version").is_some() {
+        let opts = uas_cot::fmv::Options {
+            affiliation: aff,
+            ..Default::default()
+        };
+        return uas_cot::fmv::platform_type(&opts);
+    }
+    format!("a-{aff}-{}", dimension(event))
+}
+
 fn escape(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
@@ -133,15 +150,14 @@ fn render(event: &Event) -> Option<String> {
     Some(format!(
         concat!(
             r#"<?xml version="1.0" encoding="UTF-8"?>"#,
-            r#"<event version="2.0" uid="{uid}" type="a-{aff}-{dim}" "#,
+            r#"<event version="2.0" uid="{uid}" type="{ty}" "#,
             r#"time="{time}" start="{time}" stale="{stale}" how="m-g">"#,
             r#"<point lat="{lat}" lon="{lon}" hae="{hae}" ce="9999999" le="9999999"/>"#,
             r#"<detail><contact callsign="{callsign}"/></detail>"#,
             r#"</event>"#
         ),
         uid = escape(uid),
-        aff = affiliation(event),
-        dim = dimension(event),
+        ty = escape(&cot_type(event)),
         time = escape(start),
         stale = escape(&stale),
         lat = loc.latitude,
@@ -180,6 +196,27 @@ mod tests {
             .new_id()
             .timestamp("2026-06-10T08:00:00Z")
             .location(25.27, 51.52, 10600.0)
+    }
+
+    #[test]
+    fn mavlink_and_st0601_drones_render_as_uas() {
+        let quad = event("mim:aircraft")
+            .attribute("hostility", "Friend")
+            .metadata("mav_type", "2")
+            .build()
+            .unwrap();
+        assert!(render(&quad).unwrap().contains(r#"type="a-f-A-M-F-Q""#));
+        let rover = event("mim:aircraft")
+            .metadata("mav_type", "10")
+            .build()
+            .unwrap();
+        assert!(render(&rover).unwrap().contains(r#"type="a-u-G-E-V""#));
+        let fmv = event("mim:aircraft")
+            .attribute("hostility", "Hostile")
+            .metadata("uas_ls_version", "19")
+            .build()
+            .unwrap();
+        assert!(render(&fmv).unwrap().contains(r#"type="a-h-A-M-F-Q""#));
     }
 
     #[test]
